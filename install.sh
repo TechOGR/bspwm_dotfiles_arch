@@ -1,718 +1,1326 @@
 #!/usr/bin/env bash
-# ============================================================
-# TechOGR BSPWM Dotfiles
-# Professional Arch Linux Installer (Full gh0stzk Port)
-# ============================================================
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-# ------------------------------------------------------------
-# Colors & Visuals
-# ------------------------------------------------------------
-RESET="\033[0m"
-BOLD="\033[1m"
-RED="\033[31m"
-GREEN="\033[32m"
-YELLOW="\033[33m"
-BLUE="\033[34m"
-CYAN="\033[36m"
-MAGENTA="\033[35m"
-WHITE="\033[97m"
+readonly SCRIPT_NAME="TechOGR BSPWM Installer"
+readonly REPO_URL="https://github.com/TechOGR/bspwm_dotfiles_arch.git"
+readonly REPO_RAW_URL="https://raw.githubusercontent.com/TechOGR/bspwm_dotfiles_arch/main/install.sh"
 
-# ------------------------------------------------------------
-# Global Paths & Environment
-# ------------------------------------------------------------
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-HOME_DIR="$HOME"
-CONFIG_DIR="$HOME/.config"
-LOCAL_BIN="$HOME/.local/bin"
-LOCAL_SHARE="$HOME/.local/share"
-FONTS_DIR="$HOME/.local/share/fonts"
-STATE_DIR="$HOME/.local/state/techogr-bspwm"
-BACKUP_ROOT="$HOME/.RiceBackup"
-TIMESTAMP="$(date '+%Y-%m-%d_%H-%M-%S')"
+readonly INSTALL_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/techogr-bspwm"
+readonly BACKUP_ROOT="$INSTALL_ROOT/backups"
+readonly LOG_DIR="$INSTALL_ROOT/logs"
+readonly TIMESTAMP="$(date '+%Y-%m-%d_%H-%M-%S')"
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
+LOCAL_BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
+
+REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 BACKUP_DIR="$BACKUP_ROOT/$TIMESTAMP"
-LOG_FILE="$STATE_DIR/install.log"
+LOG_FILE="$LOG_DIR/install-$TIMESTAMP.log"
 
-export PATH="$LOCAL_BIN:$PATH"
-export XDG_CONFIG_HOME="$CONFIG_DIR"
+TEMP_DIR=""
+DRY_RUN=0
+SKIP_UPGRADE=0
+SKIP_AUR=0
+SKIP_SHELL=0
+ENABLE_NETWORK=0
+ENABLE_LIGHTDM=0
+AUR_HELPER=""
 
-mkdir -p "$STATE_DIR"
+mkdir -p "$LOG_DIR"
 
-# Logging System
 exec > >(tee -a "$LOG_FILE") 2>&1
-TEE_PID=$!
 
-# ------------------------------------------------------------
-# UI Helper Functions
-# ------------------------------------------------------------
-line() {
-    printf '%b\n' "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+# -----------------------------------------------------------------------------
+# Colors
+# -----------------------------------------------------------------------------
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+RESET='\033[0m'
+
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
+
+info() {
+    printf "${BLUE}[%s]${RESET} %s\n" "INFO" "$*"
 }
 
-title() {
-    clear 2>/dev/null || true
-    printf '\n'
-    printf '%b\n' "${MAGENTA}${BOLD}"
-    printf ' ████████╗███████╗ ██████╗██╗   ██╗ ██████╗  ██████╗ ██████╗ \n'
-    printf ' ╚══██╔══╝██╔════╝██╔════╝██║   ██║██╔═══██╗██╔════╝ ██╔══██╗\n'
-    printf '    ██║   █████╗  ██║     ███████║██║   ██║██║  ███╗██████╔╝\n'
-    printf '    ██║   ██╔══╝  ██║     ██╔══██║██║   ██║██║   ██║██╔══██╗\n'
-    printf '    ██║   ███████╗╚██████╗██║   ██║╚██████╔╝╚██████╔╝██║  ██║\n'
-    printf '    ╚═╝   ╚══════╝ ╚═════╝╚═╝   ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝\n'
-    printf '%b\n' "${RESET}"
-    printf '%b\n' "${WHITE}${BOLD}         BSPWM DOTFILES INSTALLER (TechOGR Edition)${RESET}"
-    printf '%b\n\n' "${BLUE}         Arch Linux Full Deployment - Official Stack${RESET}"
+ok() {
+    printf "${GREEN}[%s]${RESET} %s\n" "OK" "$*"
 }
 
-info()  { printf '%b\n' "${BLUE} [INFO]${RESET} $*"; }
-ok()    { printf '%b\n' "${GREEN} [ OK ]${RESET} $*"; }
-warn()  { printf '%b\n' "${YELLOW} [ WARN ]${RESET} $*"; }
-error() { printf '%b\n' "${RED} [ERROR ]${RESET} $*"; }
-step()  { printf '\n%b\n' "${CYAN}${BOLD} ➜ $*${RESET}"; }
+warn() {
+    printf "${YELLOW}[%s]${RESET} %s\n" "WARN" "$*"
+}
 
 die() {
-    error "$*"
-    printf '\n'
-    error "Instalación abortada."
-    error "Revisa el registro detallado en: $LOG_FILE"
+    printf "${RED}[%s]${RESET} %s\n" "ERROR" "$*" >&2
     exit 1
 }
 
-# ------------------------------------------------------------
-# Error Handling Trap
-# ------------------------------------------------------------
-trap 'error "Error detectado en la línea $LINENO. Comando: $BASH_COMMAND"' ERR
+step() {
+    printf "\n${CYAN}${BOLD}==> %s${RESET}\n" "$*"
+}
 
-# ------------------------------------------------------------
-# System Validation Checks
-# ------------------------------------------------------------
-check_environment() {
-    step "Validando entorno del sistema"
-    if [[ $EUID -eq 0 ]]; then
-        die "No ejecutes este instalador directamente con root o sudo. Ejecútalo como tu usuario normal."
+# -----------------------------------------------------------------------------
+# Cleanup / traps
+# -----------------------------------------------------------------------------
+
+cleanup() {
+    if [[ -n "${TEMP_DIR:-}" && -d "$TEMP_DIR" ]]; then
+        rm -rf -- "$TEMP_DIR"
+    fi
+}
+
+on_error() {
+    local code=$?
+
+    printf "\n${RED}${BOLD}Installer failed (exit %s).${RESET}\n" "$code" >&2
+    printf "Log: %s\n" "$LOG_FILE" >&2
+
+    exit "$code"
+}
+
+trap on_error ERR
+trap cleanup EXIT
+
+# -----------------------------------------------------------------------------
+# Usage
+# -----------------------------------------------------------------------------
+
+usage() {
+    cat <<'USAGE'
+Usage: ./install.sh [options]
+
+Install the TechOGR BSPWM dotfiles on Arch Linux and Arch-based distributions.
+
+Options:
+
+  --no-upgrade
+        Do not run a full pacman system upgrade.
+
+  --no-aur
+        Do not install missing AUR packages.
+
+  --no-shell
+        Do not change the login shell to zsh.
+
+  --enable-network
+        Enable NetworkManager when systemd is available.
+
+  --enable-lightdm
+        Install and enable LightDM only when no display manager is active.
+
+  --dry-run
+        Show actions without changing the system.
+
+  -h, --help
+        Show this help.
+
+Recommended usage:
+
+  git clone https://github.com/TechOGR/bspwm_dotfiles_arch.git
+  cd bspwm_dotfiles_arch
+  ./install.sh
+
+One-line installation:
+
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/TechOGR/bspwm_dotfiles_arch/main/install.sh)"
+USAGE
+}
+
+# -----------------------------------------------------------------------------
+# Generic command runner
+# -----------------------------------------------------------------------------
+
+run() {
+    if (( DRY_RUN )); then
+        printf "${YELLOW}[DRY-RUN]${RESET}"
+        printf " %q" "$@"
+        printf "\n"
+        return 0
     fi
 
-    if [[ ! -f /etc/os-release ]]; then
-        die "No se pudo verificar el archivo /etc/os-release."
+    command "$@"
+}
+
+run_as_root() {
+    if (( DRY_RUN )); then
+        printf "${YELLOW}[DRY-RUN]${RESET} sudo"
+        printf " %q" "$@"
+        printf "\n"
+        return 0
     fi
+
+    sudo "$@"
+}
+
+# -----------------------------------------------------------------------------
+# Environment detection
+# -----------------------------------------------------------------------------
+
+is_arch_family() {
+    [[ -r /etc/os-release ]] || return 1
 
     # shellcheck disable=SC1091
     source /etc/os-release
-    if [[ "${ID:-}" != "arch" ]] && [[ "${ID_LIKE:-}" != *"arch"* ]]; then
-        die "Este entorno está diseñado exclusivamente para Arch Linux o derivados directos."
+
+    [[ "${ID:-}" == "arch" ]] && return 0
+
+    [[ " ${ID_LIKE:-} " == *" arch "* ]] && return 0
+
+    return 1
+}
+
+confirm_user() {
+    [[ "$(id -u)" -ne 0 ]] || \
+        die "Run this installer as your normal user, not as root."
+
+    [[ -n "${HOME:-}" && -d "$HOME" ]] || \
+        die "HOME is not set correctly."
+
+    [[ -n "${USER:-}" ]] || \
+        die "USER is not set correctly."
+}
+
+require_commands() {
+    local missing=()
+    local cmd
+
+    for cmd in "$@"; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            missing+=("$cmd")
+        fi
+    done
+
+    if ((${#missing[@]})); then
+        die "Missing required command(s): ${missing[*]}"
     fi
-    ok "Sistema operativo validado: ${PRETTY_NAME:-Arch Linux}"
 }
 
-keep_sudo_alive() {
-    step "Verificando permisos de administración (sudo)"
-    sudo -v || die "Se requieren permisos de sudo para proceder."
-    ( while true; do sudo -n true; sleep 60; kill -0 "$$" 2>/dev/null || exit; done ) &
-    SUDO_KEEPALIVE_PID=$!
-    ok "Privilegios sudo confirmados y mantenidos"
-}
+prepare_sudo() {
+    command -v sudo >/dev/null 2>&1 || \
+        die "sudo is required. Install and configure sudo first."
 
-check_network() {
-    step "Comprobando conexión de red"
-    if ! curl -fsSI --max-time 10 https://archlinux.org >/dev/null 2>&1; then
-        die "Se necesita conexión a Internet para descargar los paquetes."
+    if (( ! DRY_RUN )); then
+        sudo -v
+
+        (
+            while sleep 45; do
+                sudo -n true 2>/dev/null || exit
+            done
+        ) &
+
+        SUDO_KEEPALIVE_PID=$!
+
+        trap 'kill "${SUDO_KEEPALIVE_PID:-0}" 2>/dev/null || true; cleanup' EXIT
     fi
-    ok "Conexión a Internet activa"
 }
 
-# ------------------------------------------------------------
-# Official & AUR Package Deployment Engine
-# ------------------------------------------------------------
-install_base_tools() {
-    step "Actualizando el sistema e instalando herramientas base"
-    sudo pacman -Syu --needed --noconfirm \
-        base-devel \
-        git \
-        curl \
-        wget \
-        rsync \
-        unzip \
-        p7zip \
-        jq \
-        xdg-utils \
-        xdg-user-dirs
-    ok "Herramientas de construcción y utilidades instaladas"
-}
+# -----------------------------------------------------------------------------
+# Repository handling
+# -----------------------------------------------------------------------------
 
-setup_aur_helper() {
-    step "Verificando Helper de AUR (paru/yay)"
-    if command -v paru >/dev/null 2>&1; then
-        AUR_HELPER="paru"
-        ok "AUR Helper detectado: paru"
-        return
-    elif command -v yay >/dev/null 2>&1; then
-        AUR_HELPER="yay"
-        ok "AUR Helper detectado: yay"
-        return
+ensure_repo() {
+    if [[ -d "$REPO_DIR/config" &&
+          -d "$REPO_DIR/home" &&
+          -d "$REPO_DIR/misc" ]]; then
+        return 0
     fi
 
-    info "No se detectó un Helper de AUR. Instalando 'paru' automáticamente..."
-    local tmp_dir
-    tmp_dir="$(mktemp -d)"
-    git clone https://aur.archlinux.org/paru-bin.git "$tmp_dir/paru-bin"
-    (cd "$tmp_dir/paru-bin" && makepkg -si --noconfirm)
-    rm -rf "$tmp_dir"
-    AUR_HELPER="paru"
-    ok "'paru' instalado e integrado correctamente"
+    step "Repository files not present; cloning TechOGR dotfiles"
+
+    require_commands git
+
+    TEMP_DIR="$(mktemp -d -t techogr-bspwm-XXXXXX)"
+
+    git clone \
+        --depth=1 \
+        "$REPO_URL" \
+        "$TEMP_DIR/repo"
+
+    REPO_DIR="$TEMP_DIR/repo"
+
+    [[ -d "$REPO_DIR/config" &&
+       -d "$REPO_DIR/home" &&
+       -d "$REPO_DIR/misc" ]] || \
+        die "Cloned repository is missing config/home/misc"
+}
+
+# -----------------------------------------------------------------------------
+# Pacman helpers
+# -----------------------------------------------------------------------------
+
+pacman_installed() {
+    pacman -Q "$1" >/dev/null 2>&1
+}
+
+pacman_has_package() {
+    pacman -Si "$1" >/dev/null 2>&1
 }
 
 install_official_packages() {
-    step "Instalando el stack gráfico completo (BSPWM, Polybar, Rofi, Jgmenu)"
-    
-    local pkgs=(
-        # Window Manager, Bar, Menus & Desktop UI
-        bspwm sxhkd polybar picom rofi jgmenu xbindkeys feh dunst xsettingsd
-        lxappearance lxsession polkit-gnome lightdm lightdm-gtk-greeter
-        
-        # X11 Core Suite & Input Tools
-        xorg-server xorg-xinit xorg-xrandr xorg-xsetroot xorg-xprop
-        xorg-xwininfo xorg-xdpyinfo xorg-xset xdotool wmctrl xclip xsel
-        
-        # Audio Engine (Pipewire)
-        pipewire pipewire-pulse pipewire-alsa wireplumber pavucontrol playerctl
-        
-        # Network Manager Applet
-        networkmanager network-manager-applet
-        
-        # File Managers, Thumbnails & Archive Support
-        thunar thunar-volman tumbler gvfs
-        
-        # Terminal, Shell & CLI Helpers
-        kitty zsh fzf eza bat htop btop imagemagick maim scrot bc
-        
-        # Fonts & Nerd Fonts Icons
-        noto-fonts noto-fonts-emoji ttf-dejavu
-        ttf-jetbrains-mono-nerd ttf-firacode-nerd ttf-nerd-fonts-symbols
-        
-        # GTK Engine, Themes & Icons
-        gtk3 gtk4 papirus-icon-theme
-        
-        # System Services
-        dbus dbus-broker polkit
-    )
+    local available=()
+    local missing=()
+    local pkg
 
-    info "Sincronizando paquetes del repositorio oficial de Arch..."
-    sudo pacman -S --needed --noconfirm "${pkgs[@]}"
-    ok "Stack gráfico e interfaz de usuario instalados"
-}
+    for pkg in "$@"; do
+        if pacman_installed "$pkg"; then
+            continue
+        fi
 
-# ------------------------------------------------------------
-# Backup Engine
-# ------------------------------------------------------------
-backup_path() {
-    local path="$1"
-    [[ -e "$path" || -L "$path" ]] || return 0
-
-    mkdir -p "$BACKUP_DIR"
-    local relative
-    if [[ "$path" == "$HOME_DIR/"* ]]; then
-        relative="${path#$HOME_DIR/}"
-    else
-        relative="$(basename "$path")"
-    fi
-
-    mkdir -p "$BACKUP_DIR/$(dirname "$relative")"
-    cp -a "$path" "$BACKUP_DIR/$relative"
-    info "Copia de respaldo guardada: $path"
-}
-
-create_backup() {
-    step "Creando respaldo de configuraciones en ~/.RiceBackup"
-    mkdir -p "$BACKUP_DIR"
-
-    local targets=(
-        "$HOME/.config/bspwm"
-        "$HOME/.config/sxhkd"
-        "$HOME/.config/polybar"
-        "$HOME/.config/picom"
-        "$HOME/.config/rofi"
-        "$HOME/.config/jgmenu"
-        "$HOME/.config/kitty"
-        "$HOME/.config/dunst"
-        "$HOME/.config/xsettingsd"
-        "$HOME/.config/gtk-3.0"
-        "$HOME/.config/gtk-4.0"
-        "$HOME/.xinitrc"
-        "$HOME/.xprofile"
-        "$HOME/.zshrc"
-    )
-
-    for target in "${targets[@]}"; do
-        backup_path "$target"
+        if pacman_has_package "$pkg"; then
+            available+=("$pkg")
+        else
+            missing+=("$pkg")
+        fi
     done
 
-    printf '%s\n' "$TIMESTAMP" > "$BACKUP_DIR/backup.info"
-    ok "Respaldo completado en: $BACKUP_DIR"
-}
+    if ((${#available[@]})); then
+        step "Installing official repository packages"
 
-# ------------------------------------------------------------
-# Directory System Prep
-# ------------------------------------------------------------
-prepare_directories() {
-    step "Creando la estructura de carpetas del usuario"
-    mkdir -p \
-        "$CONFIG_DIR" \
-        "$LOCAL_BIN" \
-        "$LOCAL_SHARE" \
-        "$FONTS_DIR" \
-        "$STATE_DIR" \
-        "$HOME/.local/share/applications" \
-        "$HOME/.cache"
-
-    xdg-user-dirs-update >/dev/null 2>&1 || true
-
-    local pictures_dir
-    pictures_dir="$(xdg-user-dir PICTURES 2>/dev/null || true)"
-    if [[ -z "$pictures_dir" || "$pictures_dir" == "$HOME" ]]; then
-        pictures_dir="$HOME/Pictures"
+        run_as_root \
+            pacman \
+            -S \
+            --needed \
+            --noconfirm \
+            "${available[@]}"
     fi
 
-    mkdir -p \
-        "$pictures_dir" \
-        "$pictures_dir/Wallpapers" \
-        "$pictures_dir/screenshots" \
-        "$HOME/Downloads" \
-        "$HOME/Documents" \
-        "$HOME/Videos" \
-        "$HOME/Music"
+    if ((${#missing[@]})); then
+        printf '%s\n' "${missing[@]}" \
+            > "$INSTALL_ROOT/missing-official-packages.txt"
 
-    ok "Estructura de directorios lista"
-}
+        warn "These packages were not found in the configured pacman repositories:"
+        printf '  - %s\n' "${missing[@]}"
 
-# ------------------------------------------------------------
-# Fonts Deployment Engine
-# ------------------------------------------------------------
-install_custom_fonts() {
-    step "Instalando fuentes personalizadas desde el repositorio"
-    local fonts_source="$SCRIPT_DIR/misc/fonts"
-
-    if [[ -d "$fonts_source" ]]; then
-        info "Copiando fuentes desde misc/fonts a $FONTS_DIR..."
-        mkdir -p "$FONTS_DIR"
-        find "$fonts_source" -type f \( -name "*.ttf" -o -name "*.otf" \) -exec cp -f {} "$FONTS_DIR/" \;
-        info "Actualizando la caché de tipografías del sistema..."
-        fc-cache -f "$FONTS_DIR" >/dev/null 2>&1 || true
-        ok "Fuentes del repositorio instaladas con éxito"
-    else
-        warn "No se encontró el directorio 'misc/fonts/'. Omitiendo copia de fuentes locales."
+        warn "They were not automatically guessed as AUR packages."
+        warn "Check your distribution repositories/package names."
     fi
 }
 
-# ------------------------------------------------------------
-# Dotfiles Deployment Engine
-# ------------------------------------------------------------
-copy_directory() {
-    local source="$1"
-    local destination="$2"
-    [[ -d "$source" ]] || return 0
-    mkdir -p "$destination"
-    rsync -a --delete "$source/" "$destination/"
+# -----------------------------------------------------------------------------
+# System upgrade
+# -----------------------------------------------------------------------------
+
+full_upgrade() {
+    if (( SKIP_UPGRADE )); then
+        warn "Skipping full system upgrade (--no-upgrade)."
+        return 0
+    fi
+
+    step "Synchronizing repositories and upgrading the system"
+
+    run_as_root pacman -Syu --noconfirm
 }
 
-copy_file() {
-    local source="$1"
-    local destination="$2"
-    [[ -f "$source" ]] || return 0
-    mkdir -p "$(dirname "$destination")"
-    install -m 0644 "$source" "$destination"
+# -----------------------------------------------------------------------------
+# AUR
+# -----------------------------------------------------------------------------
+
+ensure_aur_helper() {
+    if (( SKIP_AUR )); then
+        return 1
+    fi
+
+    if command -v paru >/dev/null 2>&1; then
+        AUR_HELPER="paru"
+        return 0
+    fi
+
+    if command -v yay >/dev/null 2>&1; then
+        AUR_HELPER="yay"
+        return 0
+    fi
+
+    step "Installing paru from the AUR"
+
+    require_commands git makepkg
+
+    local build_dir
+
+    build_dir="$(mktemp -d -t techogr-paru-XXXXXX)"
+
+    if ! git clone \
+        --depth=1 \
+        https://aur.archlinux.org/paru.git \
+        "$build_dir/paru"; then
+
+        rm -rf -- "$build_dir"
+
+        warn "Could not clone paru from the AUR."
+        return 1
+    fi
+
+    pushd "$build_dir/paru" >/dev/null
+
+    makepkg -si --noconfirm
+
+    popd >/dev/null
+
+    rm -rf -- "$build_dir"
+
+    command -v paru >/dev/null 2>&1 || \
+        die "paru installation failed."
+
+    AUR_HELPER="paru"
+}
+
+install_aur_packages() {
+    (( SKIP_AUR )) && return 0
+
+    local pkg
+
+    ensure_aur_helper || {
+        warn "AUR helper unavailable; could not install:"
+        printf '  - %s\n' "$@"
+        return 0
+    }
+
+    step "Installing AUR packages"
+
+    for pkg in "$@"; do
+        pacman_installed "$pkg" && continue
+
+        run \
+            "$AUR_HELPER" \
+            -S \
+            --needed \
+            --noconfirm \
+            "$pkg"
+    done
+}
+
+# -----------------------------------------------------------------------------
+# Backup helpers
+# -----------------------------------------------------------------------------
+
+backup_path() {
+    local target="$1"
+    local rel
+
+    rel="${target#$HOME/}"
+
+    printf '%s/%s' "$BACKUP_DIR" "$rel"
+}
+
+backup_existing() {
+    local target="$1"
+    local dest
+
+    [[ -e "$target" || -L "$target" ]] || return 0
+
+    dest="$(backup_path "$target")"
+
+    mkdir -p "$(dirname -- "$dest")"
+
+    run cp -a -- "$target" "$dest"
+}
+
+# -----------------------------------------------------------------------------
+# Dotfile deployment
+# -----------------------------------------------------------------------------
+
+deploy_directory() {
+    local src="$1"
+    local dest="$2"
+
+    [[ -d "$src" ]] || return 0
+
+    mkdir -p "$(dirname -- "$dest")"
+
+    backup_existing "$dest"
+
+    run mkdir -p "$dest"
+
+    run rsync \
+        -a \
+        --delete \
+        "$src/" \
+        "$dest/"
+}
+
+deploy_file() {
+    local src="$1"
+    local dest="$2"
+
+    [[ -f "$src" ]] || return 0
+
+    mkdir -p "$(dirname -- "$dest")"
+
+    backup_existing "$dest"
+
+    run install \
+        -m 0644 \
+        "$src" \
+        "$dest"
+}
+
+deploy_tree_without_delete() {
+    local src="$1"
+    local dest="$2"
+
+    [[ -d "$src" ]] || return 0
+
+    mkdir -p "$dest"
+
+    while IFS= read -r -d '' file; do
+        local rel
+        local target
+
+        rel="${file#$src/}"
+        target="$dest/$rel"
+
+        mkdir -p "$(dirname -- "$target")"
+
+        backup_existing "$target"
+
+        if [[ -L "$file" ]]; then
+            run rsync -a "$file" "$target"
+        else
+            run install -m 0644 "$file" "$target"
+        fi
+
+    done < <(find "$src" -type f -print0)
 }
 
 install_dotfiles() {
-    step "Copiando archivos de configuración (dotfiles)"
+    step "Creating backup"
 
-    # Subdirectorios en config
-    if [[ -d "$SCRIPT_DIR/config" ]]; then
-        info "Sincronizando configuraciones en ~/.config..."
-        while IFS= read -r -d '' source; do
-            local name
-            name="$(basename "$source")"
-            copy_directory "$source" "$CONFIG_DIR/$name"
-        done < <(find "$SCRIPT_DIR/config" -mindepth 1 -maxdepth 1 -type d -print0)
-    fi
+    mkdir -p "$BACKUP_DIR"
 
-    # Archivos ocultos en home
-    if [[ -d "$SCRIPT_DIR/home" ]]; then
-        info "Sincronizando archivos ocultos en $HOME..."
-        while IFS= read -r -d '' source; do
-            local name
-            name="$(basename "$source")"
-            copy_file "$source" "$HOME_DIR/$name"
-        done < <(find "$SCRIPT_DIR/home" -mindepth 1 -maxdepth 1 -type f -print0)
-    fi
+    info "Backup location:"
+    info "$BACKUP_DIR"
 
-    # Ejecutables locales
-    if [[ -d "$SCRIPT_DIR/misc/bin" ]]; then
-        info "Instalando binarios en ~/.local/bin..."
-        rsync -a "$SCRIPT_DIR/misc/bin/" "$LOCAL_BIN/"
-    fi
+    step "Deploying TechOGR configuration"
 
-    # Lanzadores desktop
-    if [[ -d "$SCRIPT_DIR/misc/applications" ]]; then
-        info "Instalando lanzadores .desktop..."
-        rsync -a "$SCRIPT_DIR/misc/applications/" "$HOME/.local/share/applications/"
-    fi
+    local src
+    local name
 
-    ok "Archivos de configuración sincronizados"
-}
+    shopt -s nullglob dotglob
 
-# ------------------------------------------------------------
-# Wallpaper & Theme Engine
-# ------------------------------------------------------------
-install_wallpapers() {
-    step "Desplegando la galería de wallpapers"
-    local wallpaper_source="$SCRIPT_DIR/Wallpapers"
+    # -------------------------------------------------------------------------
+    # ~/.config/*
+    # -------------------------------------------------------------------------
 
-    if [[ ! -d "$wallpaper_source" ]]; then
-        warn "No se encontró la carpeta 'Wallpapers' en el repositorio."
-        return
-    fi
+    for src in "$REPO_DIR/config"/*/; do
+        name="$(basename "$src")"
 
-    local pictures_dir
-    pictures_dir="$(xdg-user-dir PICTURES 2>/dev/null || true)"
-    if [[ -z "$pictures_dir" || "$pictures_dir" == "$HOME" ]]; then
-        pictures_dir="$HOME/Pictures"
-    fi
+        deploy_directory \
+            "$src" \
+            "$CONFIG_DIR/$name"
+    done
 
-    local wallpaper_dir="$pictures_dir/Wallpapers"
-    mkdir -p "$wallpaper_dir"
+    # -------------------------------------------------------------------------
+    # Home files
+    # -------------------------------------------------------------------------
 
-    rsync -av "$wallpaper_source/" "$wallpaper_dir/"
-    
-    mkdir -p "$HOME/.local/share/techogr-bspwm"
-    ln -sfn "$wallpaper_dir" "$HOME/.local/share/techogr-bspwm/Wallpapers"
+    for src in "$REPO_DIR/home"/.* "$REPO_DIR/home"/*; do
+        [[ -e "$src" || -L "$src" ]] || continue
 
-    local default_wp
-    default_wp="$(find "$wallpaper_dir" -type f \( -name "*.jpg" -o -name "*.png" -o -name "*.webp" \) | head -n 1 || true)"
-    if [[ -n "$default_wp" ]]; then
-        mkdir -p "$HOME/.config/techogr"
-        printf '%s\n' "$default_wp" > "$HOME/.config/techogr/default-wallpaper"
-        if [[ -n "${DISPLAY:-}" ]] && command -v feh >/dev/null 2>&1; then
-            feh --bg-fill "$default_wp" >/dev/null 2>&1 || true
+        name="$(basename "$src")"
+
+        [[ "$name" == "." || "$name" == ".." ]] && continue
+
+        if [[ -f "$src" ]]; then
+            deploy_file \
+                "$src" \
+                "$HOME/$name"
         fi
+    done
+
+    # -------------------------------------------------------------------------
+    # ~/.local/bin
+    # -------------------------------------------------------------------------
+
+    deploy_tree_without_delete \
+        "$REPO_DIR/misc/bin" \
+        "$LOCAL_BIN_DIR"
+
+    # -------------------------------------------------------------------------
+    # Desktop applications
+    # -------------------------------------------------------------------------
+
+    deploy_tree_without_delete \
+        "$REPO_DIR/misc/applications" \
+        "$HOME/.local/share/applications"
+
+    # -------------------------------------------------------------------------
+    # Wallpapers
+    # -------------------------------------------------------------------------
+
+    if [[ -d "$REPO_DIR/misc/wallpapers" ]]; then
+        deploy_tree_without_delete \
+            "$REPO_DIR/misc/wallpapers" \
+            "$HOME/Wallpapers"
+
+    elif [[ -d "$REPO_DIR/Wallpapers" ]]; then
+        deploy_tree_without_delete \
+            "$REPO_DIR/Wallpapers" \
+            "$HOME/Wallpapers"
     fi
 
-    ok "Wallpapers instalados correctamente"
+    # -------------------------------------------------------------------------
+    # Fonts
+    # -------------------------------------------------------------------------
+
+    if [[ -d "$REPO_DIR/misc/fonts" ]]; then
+        deploy_tree_without_delete \
+            "$REPO_DIR/misc/fonts" \
+            "$HOME/.local/share/fonts"
+    fi
+
+    shopt -u nullglob dotglob
 }
 
-# ------------------------------------------------------------
-# Jgmenu & Desktop Context Menu Engine
-# ------------------------------------------------------------
-configure_context_menu() {
-    step "Configurando el Menú Contextual del Escritorio (jgmenu)"
+# -----------------------------------------------------------------------------
+# Permissions
+# -----------------------------------------------------------------------------
 
-    mkdir -p "$CONFIG_DIR/jgmenu"
+set_permissions() {
+    if [[ -d "$CONFIG_DIR/bspwm/bin" ]]; then
+        run chmod +x \
+            "$CONFIG_DIR/bspwm/bin"/* \
+            2>/dev/null || true
+    fi
 
-    cat > "$CONFIG_DIR/jgmenu/jgmenurc" << 'EOF'
-verbosity = 0
-stay_alive = 1
-tint2_look = 0
-position_mode = fixed
-edge = left
-anchor = top
-margin_x = 10
-margin_y = 35
-menu_margin_x = 0
-menu_margin_y = 0
-menu_width = 220
-menu_padding_top = 8
-menu_padding_right = 8
-menu_padding_bottom = 8
-menu_padding_left = 8
-menu_radius = 8
-menu_border = 1
-item_height = 30
-item_padding_x = 10
-item_radius = 4
-font = JetBrainsMono Nerd Font 10
-icon_theme = Papirus-Dark
-color_menu_bg = #1e1e2e 100
-color_norm_fg = #cdd6f4 100
-color_sel_bg = #313244 100
-color_sel_fg = #cba6f7 100
-color_sep_fg = #45475a 100
-EOF
+    if [[ -d "$LOCAL_BIN_DIR" ]]; then
+        run find \
+            "$LOCAL_BIN_DIR" \
+            -type f \
+            -exec chmod +x {} +
+    fi
 
-    # Configuración de botones en bspwmrc para eventos del puntero
+    if [[ -d "$CONFIG_DIR/polybar" ]]; then
+        run find \
+            "$CONFIG_DIR/polybar" \
+            -type f \
+            -name '*.sh' \
+            -exec chmod +x {} + \
+            2>/dev/null || true
+    fi
+
     if [[ -f "$CONFIG_DIR/bspwm/bspwmrc" ]]; then
-        if ! grep -q "pointer_action" "$CONFIG_DIR/bspwm/bspwmrc"; then
-            cat >> "$CONFIG_DIR/bspwm/bspwmrc" << 'EOF'
-
-# Acciones del Puntero / Ratón
-bspc config pointer_modifier mod4
-bspc config pointer_action1 move
-bspc config pointer_action2 resize_side
-bspc config pointer_action3 resize_corner
-EOF
-        fi
+        run chmod +x \
+            "$CONFIG_DIR/bspwm/bspwmrc"
     fi
 
-    # Mapeo de clic derecho en SXHKD
-    if [[ -f "$CONFIG_DIR/sxhkd/sxhkdrc" ]]; then
-        if ! grep -q "jgmenu" "$CONFIG_DIR/sxhkd/sxhkdrc"; then
-            cat >> "$CONFIG_DIR/sxhkd/sxhkdrc" << 'EOF'
-
-# Clic Derecho en el escritorio para abrir el Menú
-~button3
-    jgmenu_run || rofi -show drun
-EOF
-        fi
+    if [[ -f "$CONFIG_DIR/bspwm/start-bspwm" ]]; then
+        run chmod +x \
+            "$CONFIG_DIR/bspwm/start-bspwm"
     fi
-
-    ok "Menú contextual de escritorio configurado"
 }
 
-# ------------------------------------------------------------
-# ZSH, Oh My Zsh & Themes Setup
-# ------------------------------------------------------------
-setup_zsh_environment() {
-    step "Configurando ZSH, Oh My Zsh y Powerlevel10k"
+# -----------------------------------------------------------------------------
+# Hardware-safe patch
+# -----------------------------------------------------------------------------
 
-    local zsh_path
-    zsh_path="$(command -v zsh || true)"
-    if [[ -z "$zsh_path" ]]; then
-        warn "Zsh no está instalado. Omitiendo configuración de shell."
-        return
+patch_bspwm_virtual_output() {
+    local file="$CONFIG_DIR/bspwm/bspwmrc"
+
+    [[ -f "$file" ]] || return 0
+
+    # Your repository currently contains:
+    #
+    # xrandr --output Virtual-1 --mode 1920x1080 --rate 60
+    #
+    # This can break BSPWM startup on real hardware because Virtual-1 may not
+    # exist. We preserve the behavior for VMs while making it harmless elsewhere.
+
+    if grep -Fq \
+        'xrandr --output Virtual-1 --mode 1920x1080 --rate 60' \
+        "$file"; then
+
+        backup_existing "$file"
+
+        if (( DRY_RUN )); then
+
+            printf \
+                "${YELLOW}[DRY-RUN]${RESET} patch Virtual-1 xrandr call in %s\n" \
+                "$file"
+
+        else
+
+            sed -i \
+                's@^[[:space:]]*xrandr --output Virtual-1 --mode 1920x1080 --rate 60$@if xrandr --query 2>/dev/null | grep -q "^Virtual-1 connected"; then xrandr --output Virtual-1 --mode 1920x1080 --rate 60; fi@' \
+                "$file"
+
+            ok "Made the Virtual-1 monitor command hardware-safe."
+        fi
     fi
-
-    if [[ "${SHELL:-}" != "$zsh_path" ]]; then
-        info "Configurando Zsh como la shell por defecto..."
-        sudo chsh -s "$zsh_path" "$USER" || warn "No se pudo cambiar la shell predeterminada."
-    fi
-
-    local omz_dir="$HOME/.oh-my-zsh"
-    if [[ ! -d "$omz_dir" ]]; then
-        info "Instalando Oh My Zsh de forma no interactiva..."
-        RUNZSH=no CHSH=no sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended >/dev/null 2>&1 || true
-    fi
-
-    local custom_plugins="${ZSH_CUSTOM:-$omz_dir/custom}/plugins"
-    mkdir -p "$custom_plugins"
-
-    if [[ ! -d "$custom_plugins/zsh-autosuggestions" ]]; then
-        info "Instalando plugin zsh-autosuggestions..."
-        git clone --depth=1 https://github.com/zsh-users/zsh-autosuggestions "$custom_plugins/zsh-autosuggestions" >/dev/null 2>&1 || true
-    fi
-
-    if [[ ! -d "$custom_plugins/zsh-syntax-highlighting" ]]; then
-        info "Instalando plugin zsh-syntax-highlighting..."
-        git clone --depth=1 https://github.com/zsh-users/zsh-syntax-highlighting.git "$custom_plugins/zsh-syntax-highlighting" >/dev/null 2>&1 || true
-    fi
-
-    local custom_themes="${ZSH_CUSTOM:-$omz_dir/custom}/themes"
-    mkdir -p "$custom_themes"
-    if [[ ! -d "$custom_themes/powerlevel10k" ]]; then
-        info "Instalando tema Powerlevel10k..."
-        git clone --depth=1 https://github.com/romkatv/powerlevel10k.git "$custom_themes/powerlevel10k" >/dev/null 2>&1 || true
-    fi
-
-    ok "Entorno ZSH configurado"
 }
 
-# ------------------------------------------------------------
-# GTK Preferences Setup
-# ------------------------------------------------------------
-configure_gtk_settings() {
-    step "Sincronizando preferencias del tema GTK"
+# -----------------------------------------------------------------------------
+# ZSH fzf-tab compatibility
+# -----------------------------------------------------------------------------
 
-    if command -v gsettings >/dev/null 2>&1; then
-        info "Aplicando esquema mediante gsettings..."
-        gsettings set org.gnome.desktop.interface gtk-theme "Dark" 2>/dev/null || true
-        gsettings set org.gnome.desktop.interface icon-theme "Papirus-Dark" 2>/dev/null || true
-        gsettings set org.gnome.desktop.interface font-name "JetBrainsMono Nerd Font 10" 2>/dev/null || true
-        gsettings set org.gnome.desktop.interface cursor-theme "Adwaita" 2>/dev/null || true
-        ok "Esquema GTK configurado"
+fix_fzf_tab_path() {
+    local expected="/usr/share/zsh/plugins/fzf-tab/fzf-tab.zsh"
+
+    [[ -e "$expected" ]] && return 0
+
+    local found=""
+
+    found="$(
+        find \
+            /usr/share/zsh \
+            /usr/share \
+            -type f \
+            -name 'fzf-tab.zsh' \
+            2>/dev/null |
+            head -n1 || true
+    )"
+
+    if [[ -n "$found" ]]; then
+        run_as_root mkdir -p \
+            "$(dirname -- "$expected")"
+
+        run_as_root ln -sfn \
+            "$found" \
+            "$expected"
+
+        ok "Linked fzf-tab to the path expected by your .zshrc."
+
     else
-        warn "gsettings no disponible. Se utilizarán los archivos en ~/.config/gtk-3.0/."
+        warn "fzf-tab.zsh was not found."
+        warn "Your .zshrc may report an error until fzf-tab is installed."
     fi
 }
 
-# ------------------------------------------------------------
-# Launchers & Display Manager Registration
-# ------------------------------------------------------------
-install_launchers_and_helpers() {
-    step "Registrando la sesión BSPWM en el gestor de inicio"
+# -----------------------------------------------------------------------------
+# X session
+# -----------------------------------------------------------------------------
 
+setup_session_files() {
+    step "Preparing X11/BSPWM session integration"
+
+    # -------------------------------------------------------------------------
     # .xinitrc
-    cat > "$HOME/.xinitrc" <<'EOF'
-#!/bin/sh
-export XDG_CURRENT_DESKTOP="BSPWM"
-export XDG_SESSION_DESKTOP="bspwm"
-export XDG_SESSION_TYPE="x11"
-export DESKTOP_SESSION="bspwm"
-export PATH="$HOME/.local/bin:$PATH"
+    # -------------------------------------------------------------------------
 
-if command -v dbus-update-activation-environment >/dev/null 2>&1; then
-    dbus-update-activation-environment --systemd \
-        DISPLAY XAUTHORITY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP \
-        XDG_SESSION_TYPE DBUS_SESSION_BUS_ADDRESS \
-        >/dev/null 2>&1 || true
-fi
+    if [[ ! -e "$HOME/.xinitrc" ]]; then
+
+        if (( DRY_RUN )); then
+            printf \
+                "${YELLOW}[DRY-RUN]${RESET} create ~/.xinitrc\n"
+
+        else
+            cat > "$HOME/.xinitrc" <<'EOF_XINITRC'
+#!/bin/sh
+
+export XDG_CURRENT_DESKTOP=bspwm
 
 exec bspwm
-EOF
-    chmod +x "$HOME/.xinitrc"
+EOF_XINITRC
 
+            chmod +x "$HOME/.xinitrc"
+        fi
+    fi
+
+    # -------------------------------------------------------------------------
     # .xprofile
-    cat > "$HOME/.xprofile" <<'EOF'
-#!/bin/sh
-export XDG_CURRENT_DESKTOP="BSPWM"
-export XDG_SESSION_DESKTOP="bspwm"
-export XDG_SESSION_TYPE="x11"
-export PATH="$HOME/.local/bin:$PATH"
-export GTK_USE_PORTAL=0
-export XCURSOR_SIZE="${XCURSOR_SIZE:-24}"
-EOF
-    chmod +x "$HOME/.xprofile"
+    # -------------------------------------------------------------------------
 
-    # Display Manager .desktop Session
-    local session_dir="/usr/share/xsessions"
-    sudo mkdir -p "$session_dir"
-    sudo tee "$session_dir/bspwm.desktop" >/dev/null <<'EOF'
+    if [[ ! -e "$HOME/.xprofile" ]]; then
+
+        if (( DRY_RUN )); then
+            printf \
+                "${YELLOW}[DRY-RUN]${RESET} create ~/.xprofile\n"
+
+        else
+            cat > "$HOME/.xprofile" <<'EOF_XPROFILE'
+#!/bin/sh
+
+export XDG_CURRENT_DESKTOP=bspwm
+export XDG_SESSION_DESKTOP=bspwm
+EOF_XPROFILE
+        fi
+    fi
+
+    # -------------------------------------------------------------------------
+    # BSPWM desktop entry
+    # -------------------------------------------------------------------------
+
+    local session_file="/usr/share/xsessions/bspwm.desktop"
+
+    if [[ ! -e "$session_file" ]]; then
+
+        if (( DRY_RUN )); then
+
+            printf \
+                "${YELLOW}[DRY-RUN]${RESET} create %s\n" \
+                "$session_file"
+
+        else
+
+            run_as_root mkdir -p \
+                /usr/share/xsessions
+
+            local tmp_session
+
+            tmp_session="$(mktemp)"
+
+            cat > "$tmp_session" <<'EOF_DESKTOP'
 [Desktop Entry]
 Name=BSPWM
-Comment=Binary Space Partitioning Window Manager
+Comment=Binary space partitioning window manager
 Exec=bspwm
 TryExec=bspwm
 Type=Application
-DesktopNames=BSPWM
-X-GDM-SessionRegisters=true
-EOF
+DesktopNames=bspwm
+EOF_DESKTOP
 
-    # Helper de inicio
-    cat > "$LOCAL_BIN/start-bspwm" <<'EOF'
-#!/bin/sh
-export XDG_CURRENT_DESKTOP="BSPWM"
-export XDG_SESSION_DESKTOP="bspwm"
-export XDG_SESSION_TYPE="x11"
-export PATH="$HOME/.local/bin:$PATH"
-exec bspwm
-EOF
-    chmod +x "$LOCAL_BIN/start-bspwm"
+            run_as_root install \
+                -m 0644 \
+                "$tmp_session" \
+                "$session_file"
 
-    ok "Lanzadores y sesión /usr/share/xsessions/bspwm.desktop creados"
-}
-
-enable_system_services() {
-    step "Habilitando servicios del sistema (NetworkManager y LightDM)"
-
-    sudo systemctl enable --now NetworkManager.service || warn "No se pudo habilitar NetworkManager."
-
-    if command -v lightdm >/dev/null 2>&1; then
-        sudo systemctl enable lightdm.service || warn "No se pudo activar LightDM."
-    fi
-
-    ok "Servicios activados"
-}
-
-# ------------------------------------------------------------
-# Execution Permissions Engine
-# ------------------------------------------------------------
-fix_permissions() {
-    step "Otorgando permisos de ejecución a la infraestructura de scripts"
-
-    if [[ -f "$CONFIG_DIR/bspwm/bspwmrc" ]]; then
-        chmod +x "$CONFIG_DIR/bspwm/bspwmrc"
-    fi
-
-    # Hace ejecutables TODOS los scripts de controlador en ~/.config/bspwm/
-    if [[ -d "$CONFIG_DIR/bspwm" ]]; then
-        find "$CONFIG_DIR/bspwm" -type f -exec chmod +x {} \; 2>/dev/null || true
-    fi
-
-    # Otorga permisos en módulos de Polybar, Rofi, SXHKD y Jgmenu
-    for directory in "$CONFIG_DIR/polybar" "$CONFIG_DIR/rofi" "$CONFIG_DIR/sxhkd" "$CONFIG_DIR/jgmenu"; do
-        if [[ -d "$directory" ]]; then
-            find "$directory" -type f -exec chmod +x {} \; 2>/dev/null || true
+            rm -f -- "$tmp_session"
         fi
-    done
-
-    # Permisos en binarios locales
-    if [[ -d "$LOCAL_BIN" ]]; then
-        find "$LOCAL_BIN" -type f -exec chmod +x {} \; 2>/dev/null || true
     fi
-
-    ok "Permisos de ejecución verificados y corregidos en todos los módulos"
 }
 
-# ------------------------------------------------------------
-# Diagnostics & Integrity Check
-# ------------------------------------------------------------
-check_bspwm_files() {
-    step "Validando presencia de archivos principales"
-    local missing=0
-    local required=(
+# -----------------------------------------------------------------------------
+# Optional services
+# -----------------------------------------------------------------------------
+
+setup_services() {
+    # -------------------------------------------------------------------------
+    # NetworkManager
+    # -------------------------------------------------------------------------
+
+    if (( ENABLE_NETWORK )); then
+
+        step "Configuring NetworkManager"
+
+        if command -v systemctl >/dev/null 2>&1; then
+
+            if systemctl list-unit-files \
+                NetworkManager.service \
+                >/dev/null 2>&1; then
+
+                run_as_root \
+                    systemctl \
+                    enable \
+                    --now \
+                    NetworkManager.service
+
+                ok "NetworkManager enabled."
+
+            else
+                warn "NetworkManager service unit was not found."
+            fi
+
+        else
+            warn "systemctl not found."
+            warn "NetworkManager was installed but not enabled."
+        fi
+    fi
+
+    # -------------------------------------------------------------------------
+    # LightDM
+    # -------------------------------------------------------------------------
+
+    if (( ENABLE_LIGHTDM )); then
+
+        step "Configuring LightDM"
+
+        if ! pacman_installed lightdm; then
+            install_official_packages lightdm
+        fi
+
+        if command -v systemctl >/dev/null 2>&1; then
+
+            if systemctl is-enabled \
+                display-manager.service \
+                >/dev/null 2>&1 ||
+               systemctl is-active \
+                display-manager.service \
+                >/dev/null 2>&1; then
+
+                warn "A display manager is already enabled/active."
+                warn "Leaving it untouched."
+
+            else
+
+                run_as_root \
+                    systemctl \
+                    enable \
+                    lightdm.service
+
+                ok "LightDM enabled."
+            fi
+
+        else
+            warn "systemctl not found."
+            warn "LightDM was installed but not enabled."
+        fi
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# ZSH shell
+# -----------------------------------------------------------------------------
+
+change_shell() {
+    if (( SKIP_SHELL )); then
+        warn "Skipping shell change (--no-shell)."
+        return 0
+    fi
+
+    command -v zsh >/dev/null 2>&1 || {
+        warn "zsh is not installed."
+        return 0
+    }
+
+    local current_shell
+    local zsh_path
+
+    current_shell="$(
+        getent passwd "$USER" |
+        awk -F: '{print $7}'
+    )"
+
+    zsh_path="$(command -v zsh)"
+
+    [[ "$current_shell" == "$zsh_path" ]] && return 0
+
+    if command -v chsh >/dev/null 2>&1; then
+
+        step "Setting zsh as the login shell"
+
+        if (( DRY_RUN )); then
+
+            printf \
+                "${YELLOW}[DRY-RUN]${RESET} chsh -s %s %s\n" \
+                "$zsh_path" \
+                "$USER"
+
+        else
+
+            if chsh -s "$zsh_path" "$USER"; then
+
+                ok "Login shell changed to zsh."
+
+            else
+
+                warn "Could not change the login shell automatically."
+                warn "Run manually:"
+                warn "chsh -s $zsh_path"
+            fi
+        fi
+
+    else
+        warn "chsh is unavailable; skipping shell change."
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Font cache
+# -----------------------------------------------------------------------------
+
+refresh_fonts() {
+    if command -v fc-cache >/dev/null 2>&1; then
+
+        step "Refreshing font cache"
+
+        run fc-cache -f
+
+    else
+        warn "fc-cache not found; font cache was not refreshed."
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Validation
+# -----------------------------------------------------------------------------
+
+validate_install() {
+    step "Validating installation"
+
+    local required_files=(
         "$CONFIG_DIR/bspwm/bspwmrc"
-        "$CONFIG_DIR/sxhkd/sxhkdrc"
+        "$CONFIG_DIR/bspwm/config/sxhkdrc"
+        "$CONFIG_DIR/polybar"
+        "$HOME/.zshrc"
     )
 
-    for file in "${required[@]}"; do
-        if [[ -f "$file" ]]; then
-            ok "Archivo presente: $(basename "$file")"
+    local file
+    local failed=0
+
+    # -------------------------------------------------------------------------
+    # Files
+    # -------------------------------------------------------------------------
+
+    for file in "${required_files[@]}"; do
+
+        if [[ -e "$file" ]]; then
+            ok "Present: $file"
         else
-            warn "Falta el archivo: $file"
-            missing=1
+            warn "Missing: $file"
+            failed=1
         fi
     done
 
-    if [[ "$missing" -eq 1 ]]; then
-        warn "Atención: Verifica que la carpeta config/ del repositorio contenga los archivos fuente."
+    # -------------------------------------------------------------------------
+    # Commands
+    # -------------------------------------------------------------------------
+
+    local commands=(
+        bspwm
+        sxhkd
+        polybar
+        rofi
+        jgmenu
+        dunst
+        picom
+        kitty
+        zsh
+        nvim
+        thunar
+        eww
+        clipcatd
+        lxpolkit
+    )
+
+    local cmd
+
+    for cmd in "${commands[@]}"; do
+
+        if command -v "$cmd" >/dev/null 2>&1; then
+            ok "Command available: $cmd"
+        else
+            warn "Command missing: $cmd"
+            failed=1
+        fi
+    done
+
+    if (( failed )); then
+
+        warn "Some components are missing."
+        warn "Check the log:"
+        warn "$LOG_FILE"
+
     else
-        ok "Comprobación finalizada: Todo listo para iniciar el entorno gráfico."
+
+        ok "Core BSPWM configuration validated successfully."
     fi
 }
 
-# ------------------------------------------------------------
-# Summary Output
-# ------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Summary
+# -----------------------------------------------------------------------------
+
 print_summary() {
-    printf '\n'
-    line
-    printf '%b\n' "${GREEN}${BOLD} Instalación completada con éxito${RESET}"
-    line
-    printf '%b\n' " Copia de seguridad guardada en: ${BACKUP_DIR}"
-    printf '%b\n' " Registro detallado en:          ${LOG_FILE}"
-    printf '\n'
-    printf '%b\n' " Entorno listo. Reinicia tu equipo o cierra la sesión actual."
-    printf '%b\n' " En el gestor de entrada (LightDM), selecciona la sesión ${BOLD}BSPWM${RESET}."
-    printf '\n'
+    cat <<EOF_SUMMARY
+
+${GREEN}${BOLD}╔════════════════════════════════════════════════════╗
+║             INSTALLATION COMPLETE                  ║
+╚════════════════════════════════════════════════════╝${RESET}
+
+${BOLD}TechOGR BSPWM${RESET}
+
+Config directory:
+  $CONFIG_DIR
+
+Backup:
+  $BACKUP_DIR
+
+Log:
+  $LOG_FILE
+
+Repository:
+  $REPO_DIR
+
+Next step:
+
+  Log out and select ${BOLD}BSPWM${RESET} from your display manager.
+
+  Or, when using startx:
+
+  ${BOLD}startx${RESET}
+
+Important:
+
+  The installer does not forcibly replace an existing display manager.
+
+  To explicitly configure LightDM:
+      ./install.sh --enable-lightdm
+
+  To explicitly enable NetworkManager:
+      ./install.sh --enable-network
+
+  To skip the system upgrade:
+      ./install.sh --no-upgrade
+
+  To skip AUR packages:
+      ./install.sh --no-aur
+
+  To avoid changing your shell:
+      ./install.sh --no-shell
+
+EOF_SUMMARY
 }
 
-# ------------------------------------------------------------
-# Main Orchestrator
-# ------------------------------------------------------------
-main() {
-    title
-    check_environment
-    keep_sudo_alive
-    check_network
-    install_base_tools
-    setup_aur_helper
-    install_official_packages
-    create_backup
-    prepare_directories
-    install_custom_fonts
-    install_dotfiles
-    install_wallpapers
-    configure_context_menu
-    setup_zsh_environment
-    configure_gtk_settings
-    install_launchers_and_helpers
-    enable_system_services
-    fix_permissions
-    check_bspwm_files
-    print_summary
+# -----------------------------------------------------------------------------
+# Main
+# -----------------------------------------------------------------------------
 
-    if [[ -n "${SUDO_KEEPALIVE_PID:-}" ]]; then
-        kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
-    fi
+main() {
+
+    while (($#)); do
+
+        case "$1" in
+
+            --no-upgrade)
+                SKIP_UPGRADE=1
+                ;;
+
+            --no-aur)
+                SKIP_AUR=1
+                ;;
+
+            --no-shell)
+                SKIP_SHELL=1
+                ;;
+
+            --enable-network)
+                ENABLE_NETWORK=1
+                ;;
+
+            --enable-lightdm)
+                ENABLE_LIGHTDM=1
+                ;;
+
+            --dry-run)
+                DRY_RUN=1
+                ;;
+
+            -h|--help)
+                usage
+                exit 0
+                ;;
+
+            *)
+                die "Unknown option: $1"
+                ;;
+        esac
+
+        shift
+    done
+
+    # -------------------------------------------------------------------------
+    # Banner
+    # -------------------------------------------------------------------------
+
+    printf "${CYAN}${BOLD}"
+    printf '╔════════════════════════════════════════════════════╗\n'
+    printf '║         TechOGR BSPWM Dotfiles Installer          ║\n'
+    printf '╚════════════════════════════════════════════════════╝\n'
+    printf "${RESET}\n"
+
+    # -------------------------------------------------------------------------
+    # Environment
+    # -------------------------------------------------------------------------
+
+    confirm_user
+
+    is_arch_family || \
+        die "This installer supports Arch Linux and Arch-based distributions using pacman."
+
+    require_commands \
+        pacman \
+        awk \
+        sed \
+        grep \
+        find \
+        rsync \
+        install
+
+    prepare_sudo
+
+    ensure_repo
+
+    mkdir -p \
+        "$INSTALL_ROOT" \
+        "$LOG_DIR"
+
+    # -------------------------------------------------------------------------
+    # Upgrade
+    # -------------------------------------------------------------------------
+
+    full_upgrade
+
+    # -------------------------------------------------------------------------
+    # Core packages
+    # -------------------------------------------------------------------------
+
+    step "Installing TechOGR BSPWM dependencies"
+
+    install_official_packages \
+        base-devel \
+        git \
+        curl \
+        rsync \
+        unzip \
+        7zip \
+        jq \
+        bc \
+        rust \
+        \
+        zsh \
+        zsh-autosuggestions \
+        zsh-syntax-highlighting \
+        zsh-history-substring-search \
+        fzf \
+        fzf-tab-git \
+        \
+        bspwm \
+        sxhkd \
+        polybar \
+        picom \
+        rofi \
+        jgmenu \
+        dunst \
+        feh \
+        xsettingsd \
+        \
+        xorg-server \
+        xorg-xinit \
+        xorg-xrandr \
+        xorg-xsetroot \
+        xorg-xprop \
+        xorg-xwininfo \
+        xorg-xdpyinfo \
+        xorg-xset \
+        xdotool \
+        wmctrl \
+        xclip \
+        xsel \
+        \
+        dbus \
+        dbus-broker \
+        polkit \
+        lxsession \
+        gtk3 \
+        gtk4 \
+        lxappearance \
+        papirus-icon-theme \
+        \
+        kitty \
+        geany \
+        firefox \
+        thunar \
+        thunar-volman \
+        tumbler \
+        gvfs \
+        viewnior \
+        mpv \
+        yazi \
+        imagemagick \
+        maim \
+        scrot \
+        ueberzugpp \
+        \
+        pipewire \
+        pipewire-pulse \
+        pipewire-alsa \
+        wireplumber \
+        pavucontrol \
+        playerctl \
+        clipcat \
+        \
+        networkmanager \
+        network-manager-applet \
+        brightnessctl \
+        libnotify \
+        xdg-utils \
+        xdg-user-dirs \
+        \
+        python-pywal \
+        mpd \
+        ncmpcpp \
+        \
+        noto-fonts \
+        noto-fonts-emoji \
+        ttf-dejavu \
+        ttf-jetbrains-mono-nerd \
+        ttf-firacode-nerd \
+        ttf-nerd-fonts-symbols
+
+    # -------------------------------------------------------------------------
+    # AUR components
+    # -------------------------------------------------------------------------
+
+    # eww is used directly by bspwmrc.
+    install_aur_packages \
+        eww
+
+    # -------------------------------------------------------------------------
+    # Install configuration
+    # -------------------------------------------------------------------------
+
+    install_dotfiles
+
+    # -------------------------------------------------------------------------
+    # Make hardware-specific parts safe
+    # -------------------------------------------------------------------------
+
+    patch_bspwm_virtual_output
+
+    # -------------------------------------------------------------------------
+    # Executable permissions
+    # -------------------------------------------------------------------------
+
+    set_permissions
+
+    # -------------------------------------------------------------------------
+    # ZSH plugin compatibility
+    # -------------------------------------------------------------------------
+
+    fix_fzf_tab_path
+
+    # -------------------------------------------------------------------------
+    # X session
+    # -------------------------------------------------------------------------
+
+    setup_session_files
+
+    # -------------------------------------------------------------------------
+    # Optional services
+    # -------------------------------------------------------------------------
+
+    setup_services
+
+    # -------------------------------------------------------------------------
+    # Shell
+    # -------------------------------------------------------------------------
+
+    change_shell
+
+    # -------------------------------------------------------------------------
+    # Fonts
+    # -------------------------------------------------------------------------
+
+    refresh_fonts
+
+    # -------------------------------------------------------------------------
+    # Final validation
+    # -------------------------------------------------------------------------
+
+    validate_install
+
+    # -------------------------------------------------------------------------
+    # Summary
+    # -------------------------------------------------------------------------
+
+    print_summary
 }
 
 main "$@"
-
-wait "$TEE_PID" 2>/dev/null || true
