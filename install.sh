@@ -10,8 +10,7 @@
 #   - Safe package installation with conflict handling
 #   - Never install rust and rustup in the same pacman transaction
 #   - Build Eww v0.6.0 with its upstream Rust toolchain (1.76.0)
-#   - Never use cargo tree for dependency detection
-#   - Never modify Cargo.lock to guess/fix dependency versions
+#   - Never run cargo tree or mutate Cargo.lock
 #   - Automatic backups before replacing dotfiles
 #   - Hardware-safe BSPWM monitor setup
 #   - Recoverable failures and detailed logs
@@ -20,13 +19,12 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-readonly SCRIPT_VERSION="5.0.0"
+readonly SCRIPT_VERSION="6.0.0"
 readonly REPO_URL="https://github.com/TechOGR/bspwm_dotfiles_arch.git"
 readonly EWW_REPO="https://github.com/elkowar/eww"
 readonly EWW_VERSION="v0.6.0"
 readonly EWW_TARBALL="https://github.com/elkowar/eww/archive/refs/tags/${EWW_VERSION}.tar.gz"
 readonly EWW_RUST_VERSION="1.76.0"
-readonly RUSTUP_BASE_URL="https://static.rust-lang.org/rustup/dist"
 
 readonly HOME_DIR="$HOME"
 readonly CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
@@ -44,12 +42,8 @@ readonly EWW_ERROR_FILE="$STATE_DIR/eww-build-$TIMESTAMP.log"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_DIR="$SCRIPT_DIR"
 
-# A private Rust toolchain is used only when the system does not already have
-# rustup. This avoids making pacman install rustup beside Arch's rust package.
-RUST_STATE_DIR="$STATE_DIR/rust"
-RUSTUP_HOME_LOCAL="$RUST_STATE_DIR/rustup"
-CARGO_HOME_LOCAL="$RUST_STATE_DIR/cargo"
-RUSTUP_BIN_LOCAL="$CARGO_HOME_LOCAL/bin/rustup"
+# Rust for Eww is installed directly from the official standalone Rust archive.
+# The system Rust package is never modified.
 
 SUDO_KEEPALIVE_PID=""
 TEMP_DIR=""
@@ -508,9 +502,9 @@ install_dependencies() {
 
     # IMPORTANT:
     # - rust is intentionally NOT here
-    # - rustup is intentionally NOT here
+    # - no Rust package is required here
     # Eww gets a dedicated isolated Rust toolchain below.
-    # This makes the installer immune to rust/rustup pacman conflicts.
+    # Eww gets its own standalone compiler below.
 
     pacman_install_safe \
         base-devel \
@@ -653,112 +647,126 @@ install_fzf_tab() {
 }
 
 # -----------------------------------------------------------------------------
-# Rust / Eww toolchain
+# Private Rust toolchain / Eww
 # -----------------------------------------------------------------------------
 
-rustup_target_triple() {
-    local arch
-    arch="$(uname -m)"
+# Eww v0.6.0 was released with Rust 1.76.0. We install that exact standalone
+# Standalone Rust distribution isolated under the user state directory.
+# No rustup is used and the system Rust installation is never modified.
 
-    case "$arch" in
-        x86_64) printf '%s\n' 'x86_64-unknown-linux-gnu' ;;
-        aarch64) printf '%s\n' 'aarch64-unknown-linux-gnu' ;;
-        armv7l|armv7) printf '%s\n' 'armv7-unknown-linux-gnueabihf' ;;
-        i686) printf '%s\n' 'i686-unknown-linux-gnu' ;;
-        *) return 1 ;;
+rust_target_triple() {
+    case "$(uname -m)" in
+        x86_64)
+            printf '%s\n' 'x86_64-unknown-linux-gnu'
+            ;;
+        aarch64)
+            printf '%s\n' 'aarch64-unknown-linux-gnu'
+            ;;
+        i686)
+            printf '%s\n' 'i686-unknown-linux-gnu'
+            ;;
+        armv7l|armv7)
+            printf '%s\n' 'armv7-unknown-linux-gnueabihf'
+            ;;
+        *)
+            return 1
+            ;;
     esac
 }
 
-ensure_rustup_local() {
-    mkdir -p "$RUSTUP_HOME_LOCAL" "$CARGO_HOME_LOCAL/bin" "$RUST_STATE_DIR"
+install_private_rust() {
+    local target
+    local rust_root="$STATE_DIR/rust-$EWW_RUST_VERSION"
+    local prefix="$rust_root/toolchain"
+    local archive="$rust_root/rust-$EWW_RUST_VERSION.tar.xz"
+    local extracted="$rust_root/source"
+    local tar_root
 
-    if [[ -x "$RUSTUP_BIN_LOCAL" ]]; then
-        printf '%s\n' "$RUSTUP_BIN_LOCAL"
+    if [[ -x "$prefix/bin/cargo" && -x "$prefix/bin/rustc" ]]; then
+        export EWW_CARGO="$prefix/bin/cargo"
+        export EWW_RUSTC="$prefix/bin/rustc"
+        ok "Rust privado $EWW_RUST_VERSION ya está instalado"
         return 0
     fi
 
-    local target
-    target="$(rustup_target_triple)" || {
-        fatal "Arquitectura $(uname -m) no soportada por el bootstrap automático de rustup."
+    target="$(rust_target_triple)" || {
+        fatal "Arquitectura $(uname -m) no está soportada para Rust $EWW_RUST_VERSION."
     }
 
-    local installer="$RUST_STATE_DIR/rustup-init"
+    step "Instalando Rust $EWW_RUST_VERSION aislado para Eww"
 
-    step "Preparando Rust aislado para Eww"
+    rm -rf -- "$rust_root"
+    mkdir -p "$extracted"
 
-    info "No se instalará rustup mediante pacman."
-    info "El toolchain de Eww se mantendrá separado del Rust del sistema."
+    local url="https://static.rust-lang.org/dist/rust-${EWW_RUST_VERSION}-${target}.tar.xz"
 
-    if ! curl -fL --retry 3 --retry-delay 2 \
-        "$RUSTUP_BASE_URL/$target/rustup-init" \
-        -o "$installer"; then
-        fatal "No se pudo descargar rustup-init."
+    info "Descargando: $url"
+
+    if ! curl -fL --retry 5 --retry-delay 2 \
+        --connect-timeout 15 \
+        --max-time 1200 \
+        "$url" \
+        -o "$archive"; then
+        fatal "No se pudo descargar Rust $EWW_RUST_VERSION para $target."
     fi
 
-    chmod +x "$installer"
+    [[ -s "$archive" ]] || fatal "El archivo de Rust descargado está vacío."
 
-    RUSTUP_HOME="$RUSTUP_HOME_LOCAL" \
-    CARGO_HOME="$CARGO_HOME_LOCAL" \
-    "$installer" \
-        -y \
-        --profile minimal \
-        --default-toolchain none \
-        --no-modify-path
+    step "Extrayendo Rust $EWW_RUST_VERSION"
 
-    rm -f -- "$installer"
+    tar -xJf "$archive" -C "$extracted"
 
-    [[ -x "$RUSTUP_BIN_LOCAL" ]] || fatal "rustup local no quedó instalado correctamente."
+    tar_root="$(find "$extracted" -mindepth 1 -maxdepth 1 -type d -name 'rust-*' -print -quit)"
 
-    printf '%s\n' "$RUSTUP_BIN_LOCAL"
-}
+    [[ -n "$tar_root" && -d "$tar_root" ]] || {
+        fatal "No se pudo localizar el árbol de Rust $EWW_RUST_VERSION después de extraerlo."
+    }
 
-ensure_eww_rust() {
-    step "Preparando toolchain Rust para Eww $EWW_VERSION"
+    [[ -x "$tar_root/install.sh" ]] || {
+        fatal "El paquete de Rust no contiene su instalador oficial."
+    }
 
-    local rustup_bin=""
-    local rustup_home=""
-    local cargo_home=""
+    step "Instalando Rust en $prefix"
 
-    if command_exists rustup; then
-        rustup_bin="$(command -v rustup)"
-        rustup_home="${RUSTUP_HOME:-$HOME/.rustup}"
-        cargo_home="${CARGO_HOME:-$HOME/.cargo}"
-        ok "Se utilizará el rustup existente: $rustup_bin"
-    else
-        rustup_bin="$(ensure_rustup_local)"
-        rustup_home="$RUSTUP_HOME_LOCAL"
-        cargo_home="$CARGO_HOME_LOCAL"
-        ok "Se utilizará rustup aislado: $rustup_bin"
+    # The official standalone installer supports a user-owned prefix and does
+    # The system Rust installation is not modified.
+    if ! (cd "$tar_root" && ./install.sh \
+        --prefix="$prefix" \
+        --disable-ldconfig \
+        --without=rust-docs); then
+        fatal "No se pudo instalar el toolchain privado Rust $EWW_RUST_VERSION."
     fi
 
-    if ! RUSTUP_HOME="$rustup_home" CARGO_HOME="$cargo_home" \
-        "$rustup_bin" toolchain install "$EWW_RUST_VERSION" \
-        --profile minimal \
-        --component rust-src; then
-        fatal "No se pudo instalar el toolchain Rust $EWW_RUST_VERSION para Eww."
-    fi
+    rm -f -- "$archive"
 
-    export TECHOGR_RUSTUP="$rustup_bin"
-    export TECHOGR_RUSTUP_HOME="$rustup_home"
-    export TECHOGR_CARGO_HOME="$cargo_home"
+    [[ -x "$prefix/bin/cargo" ]] || fatal "No se encontró cargo tras instalar Rust $EWW_RUST_VERSION."
+    [[ -x "$prefix/bin/rustc" ]] || fatal "No se encontró rustc tras instalar Rust $EWW_RUST_VERSION."
 
-    ok "Rust $EWW_RUST_VERSION preparado"
+    export EWW_CARGO="$prefix/bin/cargo"
+    export EWW_RUSTC="$prefix/bin/rustc"
+
+    ok "Rust $EWW_RUST_VERSION instalado sin rustup"
 }
 
-rust_cargo() {
-    RUSTUP_HOME="$TECHOGR_RUSTUP_HOME" \
-    CARGO_HOME="$TECHOGR_CARGO_HOME" \
-    "$TECHOGR_RUSTUP" run "$EWW_RUST_VERSION" cargo "$@"
-}
+prepare_eww_rust() {
+    step "Preparando toolchain para Eww"
 
-rustc_version() {
-    RUSTUP_HOME="$TECHOGR_RUSTUP_HOME" \
-    CARGO_HOME="$TECHOGR_CARGO_HOME" \
-    "$TECHOGR_RUSTUP" run "$EWW_RUST_VERSION" rustc --version
+    # Do not use the system Rust. The standalone toolchain is isolated and
+    # selected only for this Eww build.
+    install_private_rust
+
+    local actual
+    actual="$($EWW_RUSTC --version 2>/dev/null || true)"
+
+    [[ "$actual" == rustc\ $EWW_RUST_VERSION* ]] || {
+        fatal "El rustc privado no corresponde a Rust $EWW_RUST_VERSION: ${actual:-desconocido}"
+    }
+
+    ok "Toolchain Eww: $actual"
 }
 
 # -----------------------------------------------------------------------------
-# Eww
+# Eww source
 # -----------------------------------------------------------------------------
 
 prepare_eww_source() {
@@ -767,37 +775,45 @@ prepare_eww_source() {
     local extract_root="$BUILD_DIR/eww-source"
 
     rm -rf -- "$source_root" "$extract_root"
-    mkdir -p "$BUILD_DIR"
+    mkdir -p "$BUILD_DIR" "$extract_root"
 
     step "Descargando Eww $EWW_VERSION"
 
-    if ! curl -fL --retry 3 --retry-delay 2 "$EWW_TARBALL" -o "$archive"; then
+    if ! curl -fL --retry 5 --retry-delay 2 \
+        --connect-timeout 15 \
+        --max-time 1200 \
+        "$EWW_TARBALL" \
+        -o "$archive"; then
         fatal "No se pudo descargar Eww $EWW_VERSION."
     fi
 
-    mkdir -p "$extract_root"
+    [[ -s "$archive" ]] || fatal "El archivo de Eww descargado está vacío."
 
     tar -xzf "$archive" -C "$extract_root"
 
     local extracted
     extracted="$(find "$extract_root" -mindepth 1 -maxdepth 1 -type d -print -quit)"
 
-    [[ -n "$extracted" && -d "$extracted" ]] || fatal "No se pudo extraer Eww $EWW_VERSION."
+    [[ -n "$extracted" && -d "$extracted" ]] || {
+        fatal "No se pudo extraer Eww $EWW_VERSION."
+    }
 
     mv -- "$extracted" "$source_root"
-
     rm -f -- "$archive"
 
-    [[ -f "$source_root/Cargo.lock" ]] || fatal "El release de Eww no contiene Cargo.lock."
-    [[ -f "$source_root/rust-toolchain.toml" ]] || fatal "El release de Eww no contiene rust-toolchain.toml."
+    [[ -f "$source_root/Cargo.lock" ]] || fatal "Eww $EWW_VERSION no contiene Cargo.lock."
+    [[ -f "$source_root/rust-toolchain.toml" ]] || fatal "Eww $EWW_VERSION no contiene rust-toolchain.toml."
+    [[ -f "$source_root/Cargo.toml" ]] || fatal "Eww $EWW_VERSION no contiene Cargo.toml."
 
-    ok "Fuente de Eww preparada"
+    ok "Fuente Eww $EWW_VERSION preparada"
 }
 
 build_eww() {
     local source_root="$BUILD_DIR/eww"
 
     [[ -d "$source_root" ]] || fatal "No existe el árbol fuente de Eww."
+    [[ -x "${EWW_CARGO:-}" ]] || fatal "Cargo privado de Eww no está disponible."
+    [[ -x "${EWW_RUSTC:-}" ]] || fatal "Rustc privado de Eww no está disponible."
 
     step "Compilando Eww $EWW_VERSION para X11"
 
@@ -805,38 +821,46 @@ build_eww() {
 
     pushd "$source_root" >/dev/null
 
-    info "Toolchain esperado por upstream: Rust $EWW_RUST_VERSION"
-    info "Toolchain efectivo: $(rustc_version)"
-    info "Se utilizará Cargo.lock oficial."
-    info "No se ejecutará cargo tree."
-    info "No se actualizarán ni sustituirán crates automáticamente."
+    info "Rust: $($EWW_RUSTC --version)"
+    info "Cargo: $($EWW_CARGO --version)"
+    info "Cargo.lock oficial: sí"
+    info "Modo locked: sí"
+    info "Backend: x11"
 
-    # Eww's release explicitly contains rust-toolchain.toml with 1.76.0.
-    # We nevertheless invoke the exact toolchain through rustup so the build
-    # does not depend on the user's global Rust version.
-    if rust_cargo build \
+    # Completely isolate Cargo/Rust from the user's global toolchain.
+    export PATH="$(dirname "$EWW_CARGO"):$PATH"
+    export RUSTC="$EWW_RUSTC"
+    export CARGO="$EWW_CARGO"
+
+    # Keep Cargo's cache in the installer state directory. This makes the
+    # installer resumable without polluting ~/.cargo with the legacy toolchain.
+    export CARGO_HOME="$STATE_DIR/cargo"
+    mkdir -p "$CARGO_HOME"
+
+    # Eww v0.6.0 already ships a tested lockfile. Never update it here.
+    if "$EWW_CARGO" build \
         --release \
         --locked \
         --no-default-features \
         --features x11 \
         >"$EWW_ERROR_FILE" 2>&1; then
         popd >/dev/null
+        ok "Eww compilado correctamente"
         return 0
     fi
 
     popd >/dev/null
 
-    warn "La primera compilación de Eww falló."
-    warn "Log completo: $EWW_ERROR_FILE"
+    warn "La compilación de Eww falló."
+    warn "Log: $EWW_ERROR_FILE"
 
-    # Known historical issue: Eww 0.6.0 and the time crate can fail with a
-    # modern system compiler. We already use upstream's pinned 1.76.0, so we
-    # DO NOT mutate Cargo.lock or run cargo tree as a guess.
-    if grep -Eiq 'time|rust-version|requires.*rustc|MSRV|edition[[:space:]]+2021|error\[E0' "$EWW_ERROR_FILE"; then
-        warn "El log contiene un error de Rust/dependencias. Se conserva intacto para diagnóstico."
-    fi
+    # No speculative cargo-tree/cargo-update logic. Print the useful tail so the
+    # actual compiler failure is visible immediately, while keeping the full log.
+    printf '\n%b\n' "${YELLOW}----- Últimas líneas del error de Eww -----${RESET}"
+    tail -n 80 "$EWW_ERROR_FILE" || true
+    printf '%b\n\n' "${YELLOW}-------------------------------------------${RESET}"
 
-    fatal "Eww $EWW_VERSION no pudo compilarse con el toolchain oficial $EWW_RUST_VERSION. Revisa $EWW_ERROR_FILE"
+    fatal "No se pudo compilar Eww $EWW_VERSION con Rust $EWW_RUST_VERSION."
 }
 
 install_eww() {
@@ -848,25 +872,28 @@ install_eww() {
     step "Instalando Eww $EWW_VERSION"
 
     if command_exists eww; then
-        local version
-        version="$(eww --version 2>/dev/null || true)"
-        ok "Eww ya está instalado: ${version:-desconocido}"
+        local existing
+        existing="$(eww --version 2>/dev/null || true)"
+        ok "Eww ya está instalado: ${existing:-desconocido}"
         return 0
     fi
 
-    ensure_eww_rust
+    prepare_eww_rust
     prepare_eww_source
     build_eww
 
     local binary="$BUILD_DIR/eww/target/release/eww"
 
-    [[ -x "$binary" ]] || fatal "Cargo terminó sin generar el binario Eww."
+    [[ -x "$binary" ]] || fatal "La compilación finalizó sin generar Eww."
 
     root_run install -Dm755 "$binary" /usr/local/bin/eww
 
     command_exists eww || fatal "Eww no aparece en PATH después de la instalación."
 
-    ok "Eww instalado: $(eww --version 2>/dev/null || echo "$EWW_VERSION")"
+    local installed_version
+    installed_version="$(eww --version 2>/dev/null || true)"
+
+    ok "Eww instalado: ${installed_version:-$EWW_VERSION}"
 }
 
 # -----------------------------------------------------------------------------
