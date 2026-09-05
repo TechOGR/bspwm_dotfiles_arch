@@ -1,0 +1,20 @@
+2026-09-05 08:52:16.571 [info] Agent Host process started successfully
+2026-09-05 08:52:16.571 [info] AgentService initialized
+2026-09-05 08:52:16.571 [info] Registering agent provider: copilotcli
+2026-09-05 08:52:16.571 [info] [Copilot] BYOK bridge changed; refreshing models
+2026-09-05 08:52:16.571 [info] [Copilot] BYOK bridge changed; refreshing models
+2026-09-05 08:52:16.615 [info] [WebSocketProtocol] Server listening on socket /tmp/vscode-ah-873a77a7e9a5/VyvPCIhq04BERyazDmt95Q.sock
+2026-09-05 08:52:16.636 [info] [Copilot] BYOK bridge changed; refreshing models
+2026-09-05 08:52:16.678 [info] [ProtocolServer] Initialize: clientId=6b8701cb-100c-41a9-86eb-fa6cfdf53181, protocolVersions=[1.0.0, 0.9.0, 0.8.0, 0.7.0, 0.6.0, 0.5.2, 0.5.1]
+2026-09-05 08:52:16.692 [info] [CommandAutoApprover] Tree-sitter initialized (bash=available, powershell=available)
+2026-09-05 08:52:18.039 [info] [AgentService] pruned 0 stale external session row(s) older than 30 days
+2026-09-05 08:52:18.040 [info] [Copilot] Listing discoverable chats...
+2026-09-05 08:52:18.041 [info] [Copilot] Starting CopilotClient...
+2026-09-05 08:52:18.041 [info] [Copilot] Set CLI env: GITHUB_COPILOT_INTEGRATION_ID=code-oss
+2026-09-05 08:52:18.048 [info] [Copilot] Resolved CLI path: /usr/lib/code/node_modules.asar.unpacked/@github/copilot-linux-x64/index.js
+2026-09-05 08:52:18.209 [info] [ProtocolServer] Client disconnected: 6b8701cb-100c-41a9-86eb-fa6cfdf53181, subscriptions=1
+2026-09-05 08:52:18.210 [info] [Copilot] BYOK bridge changed; refreshing models
+2026-09-05 08:52:18.211 [info] [Copilot] BYOK bridge changed; refreshing models
+2026-09-05 08:52:18.213 [info] AgentService: shutting down all providers...
+2026-09-05 08:52:18.213 [info] [Copilot] Shutting down...
+2026-09-05 08:52:19.292 [info] [Copilot] Client unavailable while listing discoverable chats: Canceled

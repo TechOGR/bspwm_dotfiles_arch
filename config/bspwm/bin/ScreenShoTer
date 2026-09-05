@@ -1,0 +1,110 @@
+#!/bin/sh
+# =============================================================
+# Author:  gh0stzk
+# Repo:    https://github.com/gh0stzk/dotfiles
+# Date:    29.01.2025
+#
+# ScreenShoTer - A versatile screenshot script
+# Features:
+#   - Supports single and multi-monitor setups
+#   - By default captures only the monitor where cursor is located
+#   - Special option to capture all monitors at once
+#   - Multiple capture modes:
+#     	* Full screenshot of current monitor
+#     	* Custom area selection or active window capture
+#     	* Timed captures (3 seconds)
+#   - System notifications when taking screenshots
+#   - Automatic clipboard copy
+#   - Only works on BSPWM enviroments
+#
+# Dependencies: maim, rofi, xclip, dunst
+#
+# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+# Screenshot general options
+timestamp=$(date +%Y-%m-%d-%H%M%S)
+dir="$(xdg-user-dir PICTURES)/ScreenShots"
+filename="$dir/Shot-${timestamp}.png"
+
+# Create dir if not exists
+[ -d "$dir" ] || mkdir -p "$dir"
+
+# Rofi options
+s_full=""
+s_select=""
+s_in3="󰔝"
+s_all="󰍹"
+
+# Function to get current monitor geometry based on mouse position
+get_current_monitor() {
+    bspc query -T -m pointed | jq -r '.rectangle | "\(.width)x\(.height)+\(.x)+\(.y)"'
+}
+
+rofi_cmd() {
+    rofi -dmenu \
+        -p Screenshot \
+        -mesg "Directory :: $dir" \
+        -markup-rows \
+        -theme "$HOME"/.config/bspwm/config/rofi-themes/Screenshot.rasi
+}
+
+run_rofi() {
+    printf "%s\n%s\n%s\n%s\n" "$s_full" "$s_select" "$s_in3" "$s_all" | rofi_cmd
+}
+
+show_notification() {
+    if [ -e "$filename" ]; then
+        dunstify -r 699 -i "$filename" "Screenshot" "Screenshot saved and copied to clipboard"
+    else
+        dunstify -r 699 -i user-trash "Screenshot" "Screenshot Canceled"
+    fi
+}
+
+copy_screenshot() {
+    xclip -selection clipboard -t image/png -i "$filename"
+}
+
+take_screenshot() {
+    local mode="$1" all_monitors="$2" geometry=""
+
+    set -- -u -d 1
+
+    case "$mode" in
+        full)
+            if [ "$all_monitors" != "true" ]; then
+                geometry=$(get_current_monitor)
+                [ -n "$geometry" ] && set -- "$@" -g "$geometry"
+            fi
+            ;;
+        select)
+            set -- "$@" -s -o -c 0.467,0.239,0.863,0.15 -l
+            ;;
+    esac
+
+    if maim "$@" "$filename"; then
+        paplay /usr/share/sounds/freedesktop/stereo/screen-capture.oga >/dev/null 2>&1
+        copy_screenshot
+    fi
+
+    show_notification
+}
+
+countdown() {
+    local sec="$1"
+
+    while [ "$sec" -ge 1 ]; do
+        dunstify -r 345 -t 1100 -i "$HOME/.config/bspwm/config/assets/screenshot.png" "Taking shot in : $sec"
+        sleep 1
+        sec=$((sec - 1))
+    done
+}
+
+select_option="$(run_rofi)"
+case "$select_option" in
+    "$s_full")   take_screenshot full false ;;
+    "$s_select") take_screenshot select false ;;
+    "$s_in3")    countdown 3 && take_screenshot full false ;;
+    "$s_all")    take_screenshot full true ;;
+esac

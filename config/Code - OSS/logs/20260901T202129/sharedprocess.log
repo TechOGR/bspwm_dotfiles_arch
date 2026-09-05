@@ -1,0 +1,3 @@
+2026-09-01 20:21:32.369 [info] Started initializing default profile extensions in extensions installation folder. file:///home/onelcrack/.vscode-oss/extensions
+2026-09-01 20:21:32.509 [warning] Failed to create default profile extensions manifest in extensions installation folder. file:///home/onelcrack/.vscode-oss/extensions Unable to create file 'vscode-userdata:/home/onelcrack/.vscode-oss/extensions/extensions.json' that already exists when overwrite flag is not set
+2026-09-01 20:21:32.512 [info] Completed initializing default profile extensions in extensions installation folder. file:///home/onelcrack/.vscode-oss/extensions

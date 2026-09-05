@@ -1,0 +1,45 @@
+2026-09-05 09:16:56.581 [info] To enable debug logging, run "GitLens: Enable Debug Logging" or "Developer: Set Log Level..." from the Command Palette
+2026-09-05 09:16:56.581 [info]    [            1] GitLens v19.1.0  activating in Code - OSS (1.136.1) on the desktop; mode=production,language='en', logLevel='info', defaultDateLocale='null' (code-oss|someValue.machineId|someValue.sessionId)
+2026-09-05 09:16:56.581 [info]    [   84 →    87] GlCliGitProvider.onDidOpenRepository(e=file:///home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch, source=scm) repository=<unknown>; deferring to getOrAddRepository
+2026-09-05 09:16:56.581 [info]    GitLens first-time install; window.focused=true
+2026-09-05 09:16:56.581 [info]    [            1] GitLens v19.1.0 activated [220ms]
+2026-09-05 09:16:56.602 [info]    [IPC          ] CLI capability published on http://127.0.0.1:36357
+2026-09-05 09:16:56.602 [info]    [   83 →    84] GlCliGitProvider.findGit Git (2.55.0) found in /usr/bin/git [169ms]
+2026-09-05 09:16:56.605 [info]    [   83 →    b6] GlCliGitProvider.repositorySearch(/home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch) searching (depth=1)...
+2026-09-05 09:16:56.643 [info]    WebviewsController.resolveWebviewView(gitlens.views.graph|e93166bb-6af5-468d-a4f9-3d4ae639addf): hasRestoreState=false, parentVisible=true
+2026-09-05 09:16:56.718 [info]    WebviewsController.resolveWebviewView(gitlens.views.welcome|ac4e9a62-ee95-47c8-8937-0c441a00e01c): hasRestoreState=false, parentVisible=true
+2026-09-05 09:16:56.726 [info]    [GIT     120ms] [/home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch] git rev-parse --show-toplevel --git-dir --git-common-dir --show-superproject-working-tree [120ms]
+2026-09-05 09:16:56.728 [info]    [   83 →    b6] GlCliGitProvider.repositorySearch(/home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch) found root repository in '/home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch'
+2026-09-05 09:16:56.799 [info]    [GIT      29ms] [/home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch] git for-each-ref --format=%1E%(HEAD)%1D%(refname)%1D%(objectname)%1D%(*objectname)%1D%(upstream)%1D%(upstream:track)%1D%(committerdate:iso8601)%1D%(creatordate:iso8601)%1D%(authordate:iso8601)%1D%(subject)%1D%(worktreepath)%1D refs/heads/ refs/remotes/ refs/tags/ refs/replace/ [29ms]
+2026-09-05 09:16:56.801 [error]   [CLI   b1 → f5] undefined ai hook list-sessions --status active,ended --json CLI is not installed [0ms]
+2026-09-05 09:16:56.802 [info]    [GIT      36ms] [/home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch] git worktree list --porcelain [36ms]
+2026-09-05 09:16:56.802 [info]    [GIT      57ms] [/home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch] git remote -v [57ms]
+2026-09-05 09:16:56.804 [info]    WebviewController(gitlens.views.welcome|ac4e9a62-ee95-47c8-8937-0c441a00e01c): webview.html set (reason=show:loading, length=2425)
+2026-09-05 09:16:56.827 [info]    [GIT      22ms] [/home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch] git config --get-regex ^branch\..*\.gk- [22ms]
+2026-09-05 09:16:56.839 [info]    [GIT      11ms] [/home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch] git config --get-regex -f /home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch/.git/gk/config . [11ms]
+2026-09-05 09:16:56.906 [info]    [GIT      60ms] [/home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch] git config --local --get-regex ^(extensions\.partialclone|remote\..*\.promisor)$ [60ms]
+2026-09-05 09:16:56.906 [info]    [GIT      61ms] [/home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch] git config --global --get-all maintenance.repo [61ms]
+2026-09-05 09:16:56.911 [info]    [GIT      67ms] [/home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch] git config --get-regex ^(core\.fsmonitor|core\.untrackedcache|core\.commitgraph|core\.multipackindex|core\.sparsecheckout|core\.sparsecheckoutcone|core\.splitindex|extensions\.refstorage|feature\.manyfiles|index\.sparse|maintenance\.incremental-repack\.auto)$ [67ms]
+2026-09-05 09:16:56.918 [error]   [GIT          ] [/home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch] git rev-parse --abbrev-ref --symbolic-full-name @ @{u} -- · bad revision '@' [71ms]
+2026-09-05 09:16:56.929 [info]    [GIT      22ms] [/home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch] git worktree list --porcelain [22ms]
+2026-09-05 09:16:56.960 [info]    [GIT      41ms] [/home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch] git symbolic-ref --short HEAD [41ms]
+2026-09-05 09:16:56.980 [info]    [GIT      38ms] [/home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch] git config --local --get-regex ^(extensions\.partialclone|remote\..*\.promisor)$ [38ms]
+2026-09-05 09:16:56.981 [info]    [GIT      38ms] [/home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch] git config --get-regex ^(core\.fsmonitor|core\.untrackedcache|core\.commitgraph|core\.multipackindex|core\.sparsecheckout|core\.sparsecheckoutcone|core\.splitindex|extensions\.refstorage|feature\.manyfiles|index\.sparse|maintenance\.incremental-repack\.auto)$ [38ms]
+2026-09-05 09:16:56.981 [info]    [GIT      46ms] [/home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch] git config --type=bool --get core.commitGraph [46ms]
+2026-09-05 09:16:57.003 [info]    [GIT      21ms] [/home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch] git config --local --get-regex ^(extensions\.partialclone|remote\..*\.promisor)$ [21ms]
+2026-09-05 09:16:57.019 [info]    [GIT      58ms] [/home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch] git log -n1 --format=%ct -- [58ms]
+2026-09-05 09:16:57.021 [info]    WebviewController(gitlens.views.welcome|ac4e9a62-ee95-47c8-8937-0c441a00e01c): webview.connect #1 (clientId=wv-afnd6xu7, clientLoadedAt=1788610616893, sinceLastHtmlSet=217ms, wasAlreadyReady=false, parentVisible=true)
+2026-09-05 09:16:57.022 [info]    [GIT      18ms] [/home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch] git commit-graph write --reachable --split --changed-paths --max-new-filters=512 [18ms]
+2026-09-05 09:16:57.051 [info]    [GIT      27ms] [/home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch] git config --get-regex ^(core\.fsmonitor|core\.untrackedcache|core\.commitgraph|core\.multipackindex|core\.sparsecheckout|core\.sparsecheckoutcone|core\.splitindex|extensions\.refstorage|feature\.manyfiles|index\.sparse|maintenance\.incremental-repack\.auto)$ [27ms]
+2026-09-05 09:16:57.052 [info]    [GIT      28ms] [/home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch] git config --local --get-regex ^(extensions\.partialclone|remote\..*\.promisor)$ [28ms]
+2026-09-05 09:16:57.097 [info]    WebviewController(gitlens.views.graph|e93166bb-6af5-468d-a4f9-3d4ae639addf): webview.html set (reason=show:loading, length=3507)
+2026-09-05 09:16:57.186 [info]    [GIT      18ms] [/home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch] git config --get-regex -f /home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch/.git/gk/config . [18ms]
+2026-09-05 09:16:57.397 [info]    WebviewController(gitlens.views.graph|e93166bb-6af5-468d-a4f9-3d4ae639addf): webview.connect #1 (clientId=wv-jweepb2i, clientLoadedAt=1788610617243, sinceLastHtmlSet=300ms, wasAlreadyReady=false, parentVisible=true)
+2026-09-05 09:16:57.435 [error]   [CLI       158] undefined agents list --json CLI is not installed [0ms]
+2026-09-05 09:16:57.435 [error] Error: CLI is not installed   Failed to get agent list from CLI
+2026-09-05 09:16:59.486 [info]    [  165 →   167] CliBinaryInstaller.install Starting CLI installation (attempt 1/5)
+2026-09-05 09:17:03.351 [info]    [  165 →   167] CliBinaryInstaller.install CLI installed (version: 3.1.70, path: /home/onelcrack/.config/Code - OSS/User/globalStorage/eamodio.gitlens)
+2026-09-05 09:17:03.357 [warning] [  165 →   167] CliBinaryInstaller.install(e=true, t=gk-cli-integration, i=false) returned {"cliVersion":"3.1.70","cliPath":"/home/onelcrack/.config/Code - OSS/User/globalStorage/eamodio.gitlens","status":"completed","changed":true} [*3890ms] (slow)
+2026-09-05 09:17:03.357 [warning] [   96 →   165] CliBinaryInstaller.ensureUpdateOrInstall completed [*3892ms] (slow)
+2026-09-05 09:17:31.767 [info]    [GIT      12ms] [/home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch] git rev-list --max-parents=0 HEAD -- [12ms]
+2026-09-05 09:17:31.772 [info]    [  183 →   184] LocalSharedGkStorageLocationProvider.load Using shared GK path: /home/onelcrack/.local/share/gk

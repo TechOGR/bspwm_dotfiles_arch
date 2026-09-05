@@ -1,0 +1,6 @@
+2026-09-05 09:16:52.949 [info] Getting Manifest... eamodio.gitlens
+2026-09-05 09:16:53.205 [info] Installing extension: eamodio.gitlens {"isMachineScoped":false,"installPreReleaseVersion":false,"pinned":false,"profileLocation":{"$mid":1,"external":"vscode-userdata:/home/onelcrack/.vscode-oss/extensions/extensions.json","path":"/home/onelcrack/.vscode-oss/extensions/extensions.json","scheme":"vscode-userdata"},"isBuiltin":false,"isApplicationScoped":false,"productVersion":{"version":"1.136.1","date":"2026-09-03T05:06:41Z"}}
+2026-09-05 09:16:54.734 [info] Extension signature verification result for eamodio.gitlens: Success. Executed: true. Duration: 182ms.
+2026-09-05 09:16:55.331 [info] Extracted extension to file:///home/onelcrack/.vscode-oss/extensions/eamodio.gitlens-19.1.0-universal: eamodio.gitlens
+2026-09-05 09:16:55.385 [info] Renamed to /home/onelcrack/.vscode-oss/extensions/eamodio.gitlens-19.1.0-universal
+2026-09-05 09:16:55.436 [info] Extension installed successfully: eamodio.gitlens vscode-userdata:/home/onelcrack/.vscode-oss/extensions/extensions.json

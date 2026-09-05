@@ -1,0 +1,35 @@
+2026-09-05 09:14:44.698 [info] [main] Log level: Info
+2026-09-05 09:14:44.698 [info] [main] Validating found git in: "git"
+2026-09-05 09:14:44.698 [info] [main] Using git "2.55.0" from "git"
+2026-09-05 09:14:44.698 [info] [Model][doInitialScan] Initial repository scan started
+2026-09-05 09:14:44.698 [info] > git rev-parse --show-toplevel [4ms]
+2026-09-05 09:14:44.700 [info] > git rev-parse --git-dir --git-common-dir --show-superproject-working-tree [4ms]
+2026-09-05 09:14:44.749 [info] [Model][openRepository] Opened repository (path): /home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch
+2026-09-05 09:14:44.749 [info] [Model][openRepository] Opened repository (real path): /home/onelcrack/Documentos/Repos/bspwm_dotfiles_arch
+2026-09-05 09:14:44.749 [info] [Model][openRepository] Opened repository (kind): repository
+2026-09-05 09:14:44.755 [info] [Model][doInitialScan] Initial repository scan completed - repositories (1), closed repositories (0), parent repositories (0), unsafe repositories (0)
+2026-09-05 09:14:44.778 [info] > git config --get commit.template [16ms]
+2026-09-05 09:14:44.779 [info] > git config --get --local core.virtualfilesystem [24ms]
+2026-09-05 09:14:44.779 [warning] [Git][config] git config failed: Failed to execute git
+2026-09-05 09:14:44.789 [info] > git for-each-ref --format=%(refname)%00%(upstream:short)%00%(objectname)%00%(upstream:track)%00%(upstream:remotename)%00%(upstream:remoteref) refs/heads/main refs/remotes/main [4ms]
+2026-09-05 09:14:44.789 [warning] [Git][getBranch] No such branch: main
+2026-09-05 09:14:44.804 [info] > git for-each-ref --sort -committerdate --format %(refname)%00%(objectname)%00%(*objectname) [2ms]
+2026-09-05 09:14:44.812 [info] > git status -z -uall [17ms]
+2026-09-05 09:14:44.831 [info] > git for-each-ref --format=%(refname)%00%(upstream:short)%00%(objectname)%00%(upstream:track)%00%(upstream:remotename)%00%(upstream:remoteref) refs/heads/main refs/remotes/main [12ms]
+2026-09-05 09:14:44.832 [warning] [Git][getBranch] No such branch: main
+2026-09-05 09:14:44.832 [error] [GitHistoryProvider][resolveHEADMergeBase] Failed to resolve merge base for main: Error: No such branch: main.
+2026-09-05 09:14:44.834 [info] > git config --get commit.template [3ms]
+2026-09-05 09:14:44.845 [info] > git for-each-ref --format=%(refname)%00%(upstream:short)%00%(objectname)%00%(upstream:track)%00%(upstream:remotename)%00%(upstream:remoteref) refs/heads/main refs/remotes/main [4ms]
+2026-09-05 09:14:44.845 [warning] [Git][getBranch] No such branch: main
+2026-09-05 09:14:44.854 [info] > git status -z -uall [5ms]
+2026-09-05 09:14:44.856 [info] > git for-each-ref --sort -committerdate --format %(refname)%00%(objectname)%00%(*objectname) [3ms]
+2026-09-05 09:16:16.536 [info] > git config --get commit.template [3ms]
+2026-09-05 09:16:16.580 [info] > git for-each-ref --format=%(refname)%00%(upstream:short)%00%(objectname)%00%(upstream:track)%00%(upstream:remotename)%00%(upstream:remoteref) refs/heads/main refs/remotes/main [6ms]
+2026-09-05 09:16:16.580 [warning] [Git][getBranch] No such branch: main
+2026-09-05 09:16:16.622 [info] > git status -z -uall [25ms]
+2026-09-05 09:16:16.622 [info] > git for-each-ref --sort -committerdate --format %(refname)%00%(objectname)%00%(*objectname) [10ms]
+2026-09-05 09:16:57.926 [info] > git config --get commit.template [7ms]
+2026-09-05 09:16:57.926 [info] > git for-each-ref --format=%(refname)%00%(upstream:short)%00%(objectname)%00%(upstream:track)%00%(upstream:remotename)%00%(upstream:remoteref) refs/heads/main refs/remotes/main [1ms]
+2026-09-05 09:16:57.926 [warning] [Git][getBranch] No such branch: main
+2026-09-05 09:16:57.949 [info] > git status -z -uall [13ms]
+2026-09-05 09:16:57.950 [info] > git for-each-ref --sort -committerdate --format %(refname)%00%(objectname)%00%(*objectname) [2ms]

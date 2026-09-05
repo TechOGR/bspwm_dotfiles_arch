@@ -1,0 +1,11 @@
+2026-09-05 08:52:12.943 [info] StorageMainService: creating application shared storage
+2026-09-05 08:52:13.221 [info] [shared storage] Creating shared storage database at '/home/onelcrack/.vscode-oss-shared/sharedStorage/state.vscdb' (wasCreated: false)
+2026-09-05 08:52:13.225 [info] [shared storage] Initializing fallback application storage (path: /home/onelcrack/.config/Code - OSS/User/globalStorage/state.vscdb)
+2026-09-05 08:52:13.252 [info] [shared storage] Fallback application storage initialized with 58 items
+2026-09-05 08:52:13.269 [info] update#setState disabled
+2026-09-05 08:52:13.269 [info] update#ctor - updates are disabled as there is no update URL
+2026-09-05 08:52:15.409 [info] AgentHostProcessManager: agent host started
+2026-09-05 08:52:16.578 [error] [AgentHost:stderr] (node:12937) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `exe --trace-deprecation ...` to show where the warning was created)
+
+2026-09-05 08:52:17.995 [info] Extension host with pid 12998 exited with code: 0, signal: unknown.

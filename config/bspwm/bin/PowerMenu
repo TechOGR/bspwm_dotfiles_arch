@@ -1,0 +1,39 @@
+#!/bin/sh
+# =============================================================
+# Author: gh0stzk
+# Repo: https://github.com/gh0stzk/dotfiles
+# Date: 2024-02-22
+#
+# Script Name: PowerMenu
+# Description: Minimalist system power control menu for bspwm
+#
+# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+_options="󰍁|Lock
+|Suspend
+󰗽|Logout
+󰜉|Reboot
+󰐥|Poweroff"
+
+rofi_cmd() {
+	rofi -dmenu \
+		-p "Goodbye ${USER}" \
+		-mesg "Uptime: $(uptime -p | sed -e 's/up //g')" \
+		-theme "$HOME"/.config/bspwm/config/rofi-themes/PowerMenu.rasi
+}
+
+selected=$(printf '%s\n' "$_options" | cut -d'|' -f1 | rofi_cmd)
+
+if [ -n "$selected" ]; then
+    chosen=$(printf '%s\n' "$_options" | awk -F'|' -v sel="$selected" '$1 == sel {print $2}')
+
+    case $chosen in
+        "Lock") ScreenLocker ;;
+        "Suspend") systemctl suspend ;;
+        "Logout") bspc quit ;;
+        "Reboot") systemctl reboot ;;
+        "Poweroff") systemctl poweroff ;;
+    esac
+fi

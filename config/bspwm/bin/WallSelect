@@ -1,0 +1,126 @@
+#!/bin/sh
+# =============================================================
+# Author:  gh0stzk
+# Repo:    https://github.com/gh0stzk/dotfiles
+# Date:    27.06.2025 11:43:32
+
+# WallSelect - Dynamic wallpaper selector with intelligent caching system
+# Features:
+#   ✔ Auto-updating menu (add/delete wallpapers without restart)
+#   ✔ Parallel image processing (optimized CPU usage)
+#   ✔ mtime+size fast-path, XXHash64 verification only on real change
+#   ✔ Orphaned cache detection and cleanup
+#   ✔ Single-instance lockfile (flock) for safe concurrent runs
+#   ✔ Rofi integration with theme support
+#
+# Dependencies:
+#   → Core: bspwm, rofi, xxhsum (xxhash)
+#   → Media: feh, imagemagick
+#   → GNU: findutils, coreutils
+#
+# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+# Set some variables
+read -r current_rice <"$HOME"/.config/bspwm/.rice
+wall_dir="$HOME/.config/bspwm/rices/$current_rice/walls"
+cacheDir="$HOME/.cache/$USER/$current_rice"
+
+# Create cache dir if not exists
+[ -d "$cacheDir" ] || mkdir -p "$cacheDir"
+
+rofi_command="rofi -dmenu -theme $HOME/.config/bspwm/config/rofi-themes/WallSelect.rasi"
+
+# Single-instance lock.
+exec 8>"${cacheDir}/.wallselect.lock"
+flock 8
+
+# Detect number of cores and set a sensible number of jobs
+# (override with WALLSELECT_JOBS=N if you want to tune it manually)
+get_optimal_jobs() {
+    cores=$(nproc)
+    if [ "$cores" -le 2 ]; then
+        echo 2
+    elif [ "$cores" -gt 4 ]; then
+        echo 4
+    else
+        echo $((cores - 1))
+    fi
+}
+
+PARALLEL_JOBS=${WALLSELECT_JOBS:-$(get_optimal_jobs)}
+
+# (POSIX sh can't export functions across exec, so we export the
+# definition as a string instead).
+process_func_def='process_image() {
+    imagen="$1"
+    nombre_archivo="${imagen##*/}"
+    cache_file="${cacheDir}/${nombre_archivo}"
+    meta_file="${cacheDir}/.${nombre_archivo}.meta"
+
+    stat_info=$(stat -c "%Y %s" "$imagen") || return 0
+    cur_mtime=${stat_info%% *}
+    cur_size=${stat_info#* }
+
+    saved_mtime=""
+    saved_size=""
+    saved_hash=""
+    if [ -f "$cache_file" ] && [ -f "$meta_file" ]; then
+        read -r saved_mtime saved_size saved_hash < "$meta_file"
+    fi
+
+    if [ "$cur_mtime" = "$saved_mtime" ] && [ "$cur_size" = "$saved_size" ]; then
+        return 0
+    fi
+
+    current_hash=$(xxh64sum "$imagen")
+    current_hash=${current_hash%% *}
+
+    if [ "$current_hash" = "$saved_hash" ] && [ -f "$cache_file" ]; then
+        printf "%s %s %s\n" "$cur_mtime" "$cur_size" "$current_hash" > "$meta_file"
+        return 0
+    fi
+
+    magick "$imagen" -strip -define jpeg:size=600x600 -thumbnail 300x300^ \
+        -gravity center -extent 300x300 "$cache_file" \
+        && printf "%s %s %s\n" "$cur_mtime" "$cur_size" "$current_hash" > "$meta_file"
+}'
+
+export process_func_def cacheDir
+
+# Walk wall_dir ONCE and reuse the list both for processing and for
+# building the rofi menu, instead of running find twice.
+file_list=$(mktemp)
+trap 'rm -f "$file_list"' EXIT
+
+find "$wall_dir" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.webp" \) -print0 > "$file_list"
+
+# Process files in parallel.
+xargs -0 -P "$PARALLEL_JOBS" -I {} sh -c "$process_func_def
+process_image \"\$1\"" _ {} < "$file_list"
+
+# Clean orphaned cache files
+for cached in "$cacheDir"/*; do
+    [ -f "$cached" ] || continue
+    nombre_archivo="${cached##*/}"
+    original="${wall_dir}/${nombre_archivo}"
+    if [ ! -f "$original" ]; then
+        rm -f "$cached" "${cacheDir}/.${nombre_archivo}.meta"
+    fi
+done
+
+# Launch rofi (reusing the file list gathered above, no second find)
+wall_selection=$(xargs -0 basename -a < "$file_list" |
+    LC_ALL=C sort |
+    while IFS= read -r A; do
+        printf '%s\000icon\037%s/%s\n' "$A" "$cacheDir" "$A"
+    done | $rofi_command)
+
+# Set wallpaper
+[ -n "$wall_selection" ] && \
+    sed -i "$HOME/.config/bspwm/rices/$current_rice/theme-config.bash" \
+        -e 's/^ENGINE=.*/ENGINE="Default"/' \
+        -e "s|^DEFAULT_WALL=.*|DEFAULT_WALL=\"$wall_dir/$wall_selection\"|" && \
+    feh --bg-fill "${wall_dir}/${wall_selection}" && \
+    WallSync &

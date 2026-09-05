@@ -1,0 +1,85 @@
+2026-09-05 09:16:15.889 [info] [GitExtensionServiceImpl] Initializing Git extension service.
+2026-09-05 09:16:15.889 [info] [GitExtensionServiceImpl] Successfully activated the vscode.git extension.
+2026-09-05 09:16:15.890 [info] [GitExtensionServiceImpl] Enablement state of the vscode.git extension: true.
+2026-09-05 09:16:15.890 [info] [GitExtensionServiceImpl] Successfully registered Git commit message provider.
+2026-09-05 09:16:15.890 [info] ConversationFeature: Waiting for copilot token or BYOK model to activate conversation feature
+2026-09-05 09:16:15.890 [warning] [LanguageModelAccess] LanguageModel/Embeddings are not available without a Copilot token source
+2026-09-05 09:16:15.890 [info] [CopilotCLIModels] Skipping model fetch since there is no Copilot token source
+2026-09-05 09:16:15.890 [info] BYOK: registered 9 provider(s): ollama, anthropic, gemini, xai, openai, openrouter, azure, customoai, customendpoint
+2026-09-05 09:16:15.890 [info] BYOK: fetching known models list
+2026-09-05 09:16:15.890 [info] Using the Electron fetcher.
+2026-09-05 09:16:15.890 [info] activationBlocker from 'languageModelAccess' took for 92ms
+2026-09-05 09:16:15.890 [error] [CopilotCLISession] Failed to load @github/copilot/sdk: Error: Cannot find module './@github/copilot/sdk'
+Require stack:
+- /usr/lib/code/node_modules.asar/x.js
+2026-09-05 09:16:15.890 [error] [CopilotCLISDK] Failed to initialize logger: Error: Cannot find module './@github/copilot/sdk'
+Require stack:
+- /usr/lib/code/node_modules.asar/x.js
+2026-09-05 09:16:15.890 [error] [CopilotCLISession] Failed to load @github/copilot/sdk: Error: Cannot find module './@github/copilot/sdk'
+Require stack:
+- /usr/lib/code/node_modules.asar/x.js
+2026-09-05 09:16:15.890 [error] Failed to initialize Copilot CLI Session Manager: Error: Cannot find module './@github/copilot/sdk'
+Require stack:
+- /usr/lib/code/node_modules.asar/x.js
+2026-09-05 09:16:15.890 [error] Failed to get all sessions: Error: Cannot find module './@github/copilot/sdk'
+Require stack:
+- /usr/lib/code/node_modules.asar/x.js
+2026-09-05 09:16:15.890 [warning] [LanguageModelAccess] LanguageModel/Embeddings are not available without a Copilot token source
+2026-09-05 09:16:15.890 [warning] [LanguageModelAccess] LanguageModel/Embeddings are not available without a Copilot token source
+2026-09-05 09:16:15.890 [info] BYOK: Copilot Chat known models list fetched successfully.
+2026-09-05 09:16:15.890 [info] [CopilotCLI] MCP server started. Lock file: /home/onelcrack/.copilot/ide/829b819c-1f48-4246-90ed-cd39049f60da.lock
+2026-09-05 09:16:15.890 [info] [CopilotCLI] Server URI: unix:/tmp/mcp-vFIDBC/mcp.sock#%2Fmcp
+2026-09-05 09:16:15.932 [info] ConversationFeature: BYOK models available
+2026-09-05 09:16:15.932 [info] ConversationFeature: Activating contributions
+2026-09-05 09:16:15.932 [info] GitHub.vscode-pull-request-github extension is not yet activated.
+2026-09-05 09:16:15.951 [warning] Unable to fetch remote agents because user is not signed in.
+2026-09-05 09:16:15.951 [info] activationBlocker from 'conversationFeature' took for 385ms
+2026-09-05 09:16:15.993 [error] Failed to get all sessions: Error: Cannot find module './@github/copilot/sdk'
+Require stack:
+- /usr/lib/code/node_modules.asar/x.js
+2026-09-05 09:16:15.994 [warning] [LanguageModelAccess] LanguageModel/Embeddings are not available without a Copilot token source
+2026-09-05 09:16:16.009 [warning] [LanguageModelAccess] LanguageModel/Embeddings are not available without a Copilot token source
+2026-09-05 09:16:16.013 [info] Logged in as TechOGR
+2026-09-05 09:16:16.138 [error] Failed to get all sessions: Error: Cannot find module './@github/copilot/sdk'
+Require stack:
+- /usr/lib/code/node_modules.asar/x.js
+2026-09-05 09:16:16.436 [info] Got Copilot token for TechOGR
+2026-09-05 09:16:16.436 [info] Copilot Chat: 0.64.1, VS Code: 1.136.1
+2026-09-05 09:16:16.495 [info] copilot token sku: free_limited_copilot
+2026-09-05 09:16:16.499 [info] copilot token sku: free_limited_copilot
+2026-09-05 09:16:16.499 [info] [code-referencing] Public code references are enabled.
+2026-09-05 09:16:16.499 [info] copilot token sku: free_limited_copilot
+2026-09-05 09:16:16.499 [info] [code-referencing] Public code references are enabled.
+2026-09-05 09:16:16.499 [info] copilot token sku: free_limited_copilot
+2026-09-05 09:16:16.499 [info] [code-referencing] Public code references are enabled.
+2026-09-05 09:16:16.505 [info] [context keys] Setting context key: github.copilot-chat.activated
+2026-09-05 09:16:16.511 [info] AuthenticationService: firing onDidAuthenticationChange from handleAuthChangeEvent identity change. Has token: true
+2026-09-05 09:16:16.511 [info] copilot token sku: free_limited_copilot
+2026-09-05 09:16:16.514 [info] Registering default platform agent...
+2026-09-05 09:16:16.518 [info] GithubAvailableEmbeddingTypesManager: Got embeddings. Primary: metis-1024-I16-Binary. Deprecated: 
+2026-09-05 09:16:16.521 [info] WorkspaceChunkSearchService: using embedding type metis-1024-I16-Binary
+2026-09-05 09:16:16.523 [error] [CopilotCLISession] Failed to load @github/copilot/sdk: Error: Cannot find module './@github/copilot/sdk'
+Require stack:
+- /usr/lib/code/node_modules.asar/x.js
+2026-09-05 09:16:16.523 [error] [CopilotCLISession] Failed to load @github/copilot/sdk: Error: Cannot find module './@github/copilot/sdk'
+Require stack:
+- /usr/lib/code/node_modules.asar/x.js
+2026-09-05 09:16:16.523 [error] [CopilotCLIModels] Failed to fetch available models: Error: Cannot find module './@github/copilot/sdk'
+Require stack:
+- /usr/lib/code/node_modules.asar/x.js
+2026-09-05 09:16:16.902 [error] Failed to get all sessions: Error: Cannot find module './@github/copilot/sdk'
+Require stack:
+- /usr/lib/code/node_modules.asar/x.js
+2026-09-05 09:16:17.016 [error] Failed to create database. Falling back to in-memory db: Error: unable to open database file
+2026-09-05 09:16:17.084 [info] Fetched model metadata in 1473ms 7f9ac199-ba9f-46b2-867c-bb375ff710c1
+2026-09-05 09:16:17.358 [info] Latest entry: ccreq:latest.copilotmd
+2026-09-05 09:16:17.360 [info] ccreq:6e55051a.copilotmd | markdown
+2026-09-05 09:16:21.967 [error] Failed to get all sessions: Error: Cannot find module './@github/copilot/sdk'
+Require stack:
+- /usr/lib/code/node_modules.asar/x.js
+2026-09-05 09:16:25.213 [error] Failed to get all sessions: Error: Cannot find module './@github/copilot/sdk'
+Require stack:
+- /usr/lib/code/node_modules.asar/x.js
+2026-09-05 09:16:31.556 [error] Failed to get all sessions: Error: Cannot find module './@github/copilot/sdk'
+Require stack:
+- /usr/lib/code/node_modules.asar/x.js

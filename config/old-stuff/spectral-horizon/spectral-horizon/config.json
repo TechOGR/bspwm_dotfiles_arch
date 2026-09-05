@@ -1,0 +1,246 @@
+{
+    "appearance": {
+        "extraBackgroundTint": true,
+        "fakeScreenRounding": 1,
+        "palette": {
+            "type": "scheme-rainbow"
+        },
+        "transparency": {
+            "automatic": false,
+            "backgroundTransparency": 0.11,
+            "contentTransparency": 0.57,
+            "enable": false
+        },
+        "wallpaperTheming": {
+            "enableAppsAndShell": true,
+            "enableQtApps": true,
+            "enableTerminal": true
+        }
+    },
+    "apps": {
+        "bluetooth": "kcmshell6 kcm_bluetooth",
+        "network": "kitty -1 fish -c nmtui",
+        "networkEthernet": "kcmshell6 kcm_networkmanagement",
+        "taskManager": "plasma-systemmonitor --page-name Processes",
+        "terminal": "kitty -1"
+    },
+    "audio": {
+        "protection": {
+            "enable": true,
+            "maxAllowed": 99,
+            "maxAllowedIncrease": 10
+        }
+    },
+    "background": {
+        "clockX": -500,
+        "clockY": -500,
+        "fixedClockPosition": false,
+        "hideWhenFullscreen": true,
+        "parallax": {
+            "enableSidebar": true,
+            "enableWorkspace": true,
+            "vertical": true,
+            "workspaceZoom": 1
+        },
+        "quote": "",
+        "showClock": false,
+        "thumbnailPath": "",
+        "wallpaperPath": "/home/aditya/Pictures/Wallpapers/117497448_p0.jpg"
+    },
+    "bar": {
+        "autoHide": {
+            "enable": false,
+            "pushWindows": false,
+            "showWhenPressingSuper": {
+                "delay": 140,
+                "enable": true
+            }
+        },
+        "borderless": false,
+        "bottom": false,
+        "cornerStyle": 0,
+        "resources": {
+            "alwaysShowCpu": false,
+            "alwaysShowSwap": true,
+            "cpuWarningThreshold": 90,
+            "memoryWarningThreshold": 95,
+            "swapWarningThreshold": 85
+        },
+        "screenList": [
+        ],
+        "showBackground": true,
+        "topLeftIcon": "spark",
+        "tray": {
+            "invertPinnedItems": false,
+            "monochromeIcons": true,
+            "pinnedItems": [
+                "Fcitx"
+            ]
+        },
+        "utilButtons": {
+            "showColorPicker": true,
+            "showDarkModeToggle": true,
+            "showKeyboardToggle": false,
+            "showMicToggle": true,
+            "showPerformanceProfileToggle": false,
+            "showScreenSnip": true
+        },
+        "verbose": true,
+        "vertical": false,
+        "weather": {
+            "city": "",
+            "enable": false,
+            "enableGPS": true,
+            "fetchInterval": 10,
+            "useUSCS": false
+        },
+        "workspaces": {
+            "alwaysShowNumbers": false,
+            "monochromeIcons": true,
+            "numberMap": [
+                "1",
+                "2"
+            ],
+            "showAppIcons": true,
+            "showNumberDelay": 300,
+            "shown": 10,
+            "useNerdFont": false
+        }
+    },
+    "battery": {
+        "automaticSuspend": true,
+        "critical": 5,
+        "low": 20,
+        "suspend": 3
+    },
+    "conflictKiller": {
+        "autoKillNotificationDaemons": false,
+        "autoKillTrays": false
+    },
+    "dock": {
+        "enable": true,
+        "height": 60,
+        "hoverRegionHeight": 2,
+        "hoverToReveal": true,
+        "ignoredAppRegexes": [
+        ],
+        "monochromeIcons": true,
+        "pinnedApps": [
+            "org.kde.dolphin",
+            "kitty"
+        ],
+        "pinnedOnStartup": false
+    },
+    "hacks": {
+        "arbitraryRaceConditionDelay": 20
+    },
+    "interactions": {
+        "scrolling": {
+            "fasterTouchpadScroll": false,
+            "mouseScrollDeltaThreshold": 120,
+            "mouseScrollFactor": 120,
+            "touchpadScrollFactor": 450
+        }
+    },
+    "language": {
+        "translator": {
+            "engine": "auto",
+            "sourceLanguage": "auto",
+            "targetLanguage": "auto"
+        },
+        "ui": "auto"
+    },
+    "light": {
+        "night": {
+            "automatic": true,
+            "colorTemperature": 5000,
+            "from": "19:00",
+            "to": "06:30"
+        }
+    },
+    "media": {
+        "filterDuplicatePlayers": true
+    },
+    "networking": {
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+    },
+    "osd": {
+        "timeout": 1000
+    },
+    "osk": {
+        "layout": "qwerty_full",
+        "pinnedOnStartup": false
+    },
+    "overview": {
+        "columns": 5,
+        "enable": false,
+        "rows": 2,
+        "scale": 0.18
+    },
+    "policies": {
+        "ai": 0,
+        "weeb": 0
+    },
+    "resources": {
+        "updateInterval": 3000
+    },
+    "screenshotTool": {
+        "showContentRegions": true
+    },
+    "search": {
+        "engineBaseUrl": "https://www.google.com/search?q=",
+        "excludedSites": [
+            "quora.com"
+        ],
+        "nonAppResultDelay": 30,
+        "prefix": {
+            "action": "/",
+            "clipboard": ";",
+            "emojis": ":",
+            "math": "=",
+            "shellCommand": "$",
+            "showDefaultActionsWithoutPrefix": true,
+            "webSearch": "?"
+        },
+        "sloppy": false
+    },
+    "sidebar": {
+        "booru": {
+            "allowNsfw": false,
+            "defaultProvider": "yandere",
+            "limit": 20,
+            "zerochan": {
+                "username": "[unset]"
+            }
+        },
+        "cornerOpen": {
+            "bottom": false,
+            "clickless": true,
+            "cornerRegionHeight": 2,
+            "cornerRegionWidth": 60,
+            "enable": true,
+            "valueScroll": true,
+            "visualize": false
+        },
+        "keepRightSidebarLoaded": true,
+        "translator": {
+            "delay": 300
+        }
+    },
+    "time": {
+        "dateFormat": "ddd, dd/MM",
+        "format": "h:mm AP",
+        "pomodoro": {
+            "alertSound": "",
+            "breakTime": 300,
+            "cyclesBeforeLongBreak": 4,
+            "focus": 1500,
+            "longBreak": 900
+        },
+        "shortDateFormat": "dd/MM"
+    },
+    "windows": {
+        "centerTitle": true,
+        "showTitlebar": true
+    }
+}

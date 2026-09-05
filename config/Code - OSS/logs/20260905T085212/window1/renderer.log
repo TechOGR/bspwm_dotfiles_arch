@@ -1,0 +1,60 @@
+2026-09-05 08:52:15.384 [info] [AgentHost:renderer] Acquiring MessagePort to agent host...
+2026-09-05 08:52:15.411 [warning] Creation of workbench contribution 'workbench.contrib.agentHostPrewarm' took 21ms.
+2026-09-05 08:52:15.713 [info] [ChatModelSelection] event=no-model-at-toolbar-build surface="workbench" sessionKey=undefined conversationKey=undefined modelTarget=undefined storageKey="chat.currentLanguageModel.panel" widgetViewKind="view"
+2026-09-05 08:52:16.206 [info] [ChatModelSelection] event=no-model-at-toolbar-build surface="workbench" sessionKey="local" conversationKey="vscode-chat-session://local/ZGNmYTg0MjItOTk3Ni00OWNlLThiNTQtMTE1ZGM3NzE4ODky" modelTarget=undefined storageKey="chat.currentLanguageModel.panel" widgetViewKind="view"
+2026-09-05 08:52:16.234 [info] [AgentHost:renderer] MessagePort acquired, creating client...
+2026-09-05 08:52:16.424 [info] Started local extension host with pid 12998.
+2026-09-05 08:52:16.715 [info] [AgentHost:renderer] Protocol connection established; clientId=6b8701cb-100c-41a9-86eb-fa6cfdf53181
+2026-09-05 08:52:17.996 [error] Canceled: Canceled
+    at Gw (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:411:1620)
+    at vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:5641:47553
+    at Array.forEach (<anonymous>)
+    at s.dispose (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:5641:47461)
+    at tq.dispose (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:5641:60801)
+    at kbo.dispose (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:5648:10621)
+    at Cbo.stopAllInReverse (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:5648:9761)
+    at async NLt._doStopExtensionHosts (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:5647:22956)
+2026-09-05 08:52:17.996 [error] Canceled: Canceled
+    at Gw (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:411:1620)
+    at vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:5641:47553
+    at Array.forEach (<anonymous>)
+    at s.dispose (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:5641:47461)
+    at tq.dispose (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:5641:60801)
+    at kbo.dispose (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:5648:10621)
+    at Cbo.stopAllInReverse (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:5648:9761)
+    at async NLt._doStopExtensionHosts (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:5647:22956)
+2026-09-05 08:52:17.996 [error] Canceled: Canceled
+    at Gw (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:411:1620)
+    at vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:5641:47553
+    at Array.forEach (<anonymous>)
+    at s.dispose (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:5641:47461)
+    at tq.dispose (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:5641:60801)
+    at kbo.dispose (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:5648:10621)
+    at Cbo.stopAllInReverse (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:5648:9761)
+    at async NLt._doStopExtensionHosts (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:5647:22956)
+2026-09-05 08:52:17.996 [warning] [DefaultAccount] Attempt 1 to get sessions failed: Canceled
+2026-09-05 08:52:17.997 [error] Canceled: Canceled
+    at new rwi (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:5641:45881)
+    at s._remoteCall (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:5641:51999)
+    at n.<computed>.r.charCodeAt.n.<computed> (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:5641:48744)
+    at FQt.getSessions (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:1221:87025)
+    at ght.getSessions (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:1221:76900)
+    at ght.getAccounts (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:1221:76134)
+    at mht._addExtensionsToCache (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:1221:68555)
+    at Object.factory (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:1221:67608)
+    at fv.consume (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:434:77668)
+    at fv.consumed (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:434:77877)
+    at vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:434:77710
+2026-09-05 08:52:17.997 [error] Canceled: Canceled
+    at new rwi (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:5641:45881)
+    at s._remoteCall (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:5641:51999)
+    at n.<computed>.r.charCodeAt.n.<computed> (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:5641:48744)
+    at FQt.getSessions (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:1221:87025)
+    at ght.getSessions (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:1221:76900)
+    at ght.getAccounts (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:1221:76134)
+    at Tht._addToCache (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:1222:45474)
+    at Object.factory (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:1222:44561)
+    at fv.consume (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:434:77668)
+    at fv.consumed (vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:434:77877)
+    at vscode-file://vscode-app/usr/lib/code/out/vs/workbench/workbench.desktop.main.js:434:77710
+2026-09-05 08:52:17.999 [info] [AccountPolicyGate] apply: state=inactive, reason=undefined, isRestricted=false
