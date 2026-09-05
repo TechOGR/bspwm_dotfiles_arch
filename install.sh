@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # TechOGR BSPWM Dotfiles Installer
-# v3.0.0
+# v4.0.0
 # https://github.com/TechOGR/bspwm_dotfiles_arch
 #
 # Arch Linux / Arch-based distributions
@@ -10,23 +10,27 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-SCRIPT_VERSION="3.1.0"
+SCRIPT_VERSION="4.0.0"
 REPO_URL="https://github.com/TechOGR/bspwm_dotfiles_arch.git"
 EWW_REPO_URL="https://github.com/elkowar/eww.git"
 EWW_REF="v0.6.0"
+EWW_TIME_VERSION="0.3.34"
 
 HOME_DIR="$HOME"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
 LOCAL_BIN="${XDG_BIN_HOME:-$HOME/.local/bin}"
+LOCAL_SHARE="${XDG_DATA_HOME:-$HOME/.local/share}"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/techogr-bspwm"
 BACKUP_ROOT="$HOME/.RiceBackup"
 TIMESTAMP="$(date '+%Y-%m-%d_%H-%M-%S')"
 BACKUP_DIR="$BACKUP_ROOT/$TIMESTAMP"
 LOG_FILE="$STATE_DIR/install-$TIMESTAMP.log"
+BUILD_DIR="$STATE_DIR/build"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_DIR="$SCRIPT_DIR"
-BUILD_DIR="$STATE_DIR/build"
+TEMP_ROOT=""
+SUDO_KEEPALIVE_PID=""
 
 DRY_RUN=0
 NO_UPGRADE=0
@@ -35,12 +39,6 @@ NO_EWW=0
 ENABLE_NETWORK=0
 ENABLE_LIGHTDM=0
 
-TEMP_DIR=""
-SUDO_KEEPALIVE_PID=""
-
-# ----------------------------------------------------------------------------
-# Colors
-# ----------------------------------------------------------------------------
 RESET='\033[0m'
 BOLD='\033[1m'
 RED='\033[31m'
@@ -54,9 +52,6 @@ WHITE='\033[97m'
 mkdir -p "$STATE_DIR"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
-# ----------------------------------------------------------------------------
-# Logging
-# ----------------------------------------------------------------------------
 info()  { printf '%b\n' "${BLUE}[INFO]${RESET} $*"; }
 ok()    { printf '%b\n' "${GREEN}[ OK ]${RESET} $*"; }
 warn()  { printf '%b\n' "${YELLOW}[WARN]${RESET} $*"; }
@@ -80,14 +75,15 @@ on_error() {
 trap on_error ERR
 
 cleanup() {
-    [[ -n "$SUDO_KEEPALIVE_PID" ]] && kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
-    [[ -n "$TEMP_DIR" && -d "$TEMP_DIR" ]] && rm -rf -- "$TEMP_DIR"
+    if [[ -n "$SUDO_KEEPALIVE_PID" ]]; then
+        kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
+    fi
+    if [[ -n "$TEMP_ROOT" && -d "$TEMP_ROOT" ]]; then
+        rm -rf -- "$TEMP_ROOT"
+    fi
 }
 trap cleanup EXIT
 
-# ----------------------------------------------------------------------------
-# UI / usage
-# ----------------------------------------------------------------------------
 print_banner() {
     printf '%b\n' "${MAGENTA}${BOLD}"
     printf '╔══════════════════════════════════════════════════════════════╗\n'
@@ -110,12 +106,6 @@ Opciones:
   --enable-lightdm    Instalar/activar LightDM solo si no hay DM activo.
   --dry-run           Mostrar acciones sin modificar el sistema.
   -h, --help          Mostrar esta ayuda.
-
-Ejemplos:
-  ./install.sh
-  ./install.sh --no-upgrade
-  ./install.sh --no-upgrade --no-shell
-  ./install.sh --enable-network
 USAGE
 }
 
@@ -141,14 +131,19 @@ root_run() {
     fi
 }
 
-# ----------------------------------------------------------------------------
+pkg_installed() { pacman -Q "$1" >/dev/null 2>&1; }
+pkg_available() { pacman -Si "$1" >/dev/null 2>&1; }
+
+# =============================================================================
 # Environment
-# ----------------------------------------------------------------------------
+# =============================================================================
 check_environment() {
     step "Validando entorno"
 
     (( EUID != 0 )) || fatal "Ejecuta el instalador como usuario normal, no como root."
     [[ -r /etc/os-release ]] || fatal "No existe /etc/os-release."
+    command_exists pacman || fatal "pacman no está instalado."
+    command_exists sudo || fatal "sudo no está instalado."
 
     # shellcheck disable=SC1091
     source /etc/os-release
@@ -156,12 +151,8 @@ check_environment() {
     local arch_family=0
     [[ "${ID:-}" == "arch" ]] && arch_family=1
     [[ " ${ID_LIKE:-} " == *" arch "* ]] && arch_family=1
-    (( arch_family )) || fatal "Se requiere Arch Linux o un derivado basado en Arch/pacman. Detectado: ${PRETTY_NAME:-desconocido}"
 
-    command_exists pacman || fatal "pacman no está instalado."
-    command_exists sudo || fatal "sudo no está instalado."
-    command_exists git || fatal "git no está instalado."
-    command_exists rsync || fatal "rsync no está instalado."
+    (( arch_family )) || fatal "Se requiere Arch Linux o un derivado basado en Arch/pacman. Detectado: ${PRETTY_NAME:-desconocido}"
 
     ok "Sistema: ${PRETTY_NAME:-Arch Linux}"
     ok "Usuario: $USER"
@@ -181,15 +172,36 @@ prepare_sudo() {
     fi
 }
 
-check_network() {
-    step "Comprobando conectividad"
-    if command_exists curl; then
-        curl -fsS --max-time 10 https://archlinux.org/ >/dev/null || fatal "No hay conectividad con archlinux.org."
-    else
-        warn "curl aún no está instalado; se comprobará durante las descargas."
+bootstrap_packages() {
+    step "Preparando herramientas básicas"
+
+    # These are the only tools the installer itself must have before proceeding.
+    local wanted=()
+    local pkg
+
+    for pkg in git curl rsync; do
+        pkg_installed "$pkg" || wanted+=("$pkg")
+    done
+
+    if ((${#wanted[@]})); then
+        root_run pacman -S --needed --noconfirm "${wanted[@]}"
     fi
+
+    command_exists git || fatal "git no está disponible."
+    command_exists curl || fatal "curl no está disponible."
+    command_exists rsync || fatal "rsync no está disponible."
 }
 
+check_network() {
+    step "Comprobando conectividad"
+    curl -fsS --max-time 10 https://archlinux.org/ >/dev/null || \
+        fatal "No hay conectividad con archlinux.org."
+    ok "Conectividad disponible"
+}
+
+# =============================================================================
+# Repository
+# =============================================================================
 validate_repo() {
     step "Validando repositorio"
 
@@ -200,96 +212,94 @@ validate_repo() {
     ok "Estructura del rice válida"
 }
 
-# ----------------------------------------------------------------------------
-# Package helpers
-# ----------------------------------------------------------------------------
-pkg_installed() { pacman -Q "$1" >/dev/null 2>&1; }
-pkg_available() { pacman -Si "$1" >/dev/null 2>&1; }
+# =============================================================================
+# General conflict handling
+# =============================================================================
+extract_conflict_pairs() {
+    local output="$1"
+    local line left right
 
-# Detecta alternativas conflictivas antes de llamar a pacman.
-# Esto evita el problema rust <-> rustup que ocurrió en la versión anterior.
-choose_rust_provider() {
-    local rust_installed=0
-    local rustup_installed=0
-
-    pkg_installed rust && rust_installed=1
-    pkg_installed rustup && rustup_installed=1
-
-    # Si solo una está instalada, la usamos.
-    if (( rust_installed && !rustup_installed )); then
-        echo "rust"
-        return
-    fi
-
-    if (( rustup_installed && !rust_installed )); then
-        echo "rustup"
-        return
-    fi
-
-    # Si ninguna está instalada, usamos rust (el toolchain empaquetado por Arch)
-    # para compilar proyectos modernos. Eww 0.6.0 trae Cargo.lock y no necesita
-    # rustup como requisito de instalación.
-    if (( !rust_installed && !rustup_installed )); then
-        echo "rust"
-        return
-    fi
-
-    # Ambos instalados: no tocar nada automáticamente.
-    echo "both"
+    while IFS= read -r line; do
+        if [[ "$line" =~ ([A-Za-z0-9@._+:-]+)[[:space:]]+and[[:space:]]+([A-Za-z0-9@._+:-]+)[[:space:]]+are[[:space:]]+in[[:space:]]+conflict ]]; then
+            left="${BASH_REMATCH[1]}"
+            right="${BASH_REMATCH[2]}"
+            printf '%s:%s\n' "$left" "$right"
+        elif [[ "$line" =~ ([A-Za-z0-9@._+:-]+)[[:space:]]+conflicts[[:space:]]+with[[:space:]]+([A-Za-z0-9@._+:-]+) ]]; then
+            left="${BASH_REMATCH[1]}"
+            right="${BASH_REMATCH[2]}"
+            printf '%s:%s\n' "$left" "$right"
+        fi
+    done <<< "$output"
 }
 
-resolve_rust_conflict() {
-    local provider
-    provider="$(choose_rust_provider)"
+choose_conflict_action() {
+    local left="$1"
+    local right="$2"
 
-    if [[ "$provider" != "both" ]]; then
-        return 0
+    local left_installed=0
+    local right_installed=0
+
+    pkg_installed "$left" && left_installed=1
+    pkg_installed "$right" && right_installed=1
+
+    printf '\n'
+    printf '%b\n' "${YELLOW}${BOLD}╔══════════════════════════════════════════════════════╗${RESET}"
+    printf '%b\n' "${YELLOW}${BOLD}║                 CONFLICTO DETECTADO                 ║${RESET}"
+    printf '%b\n' "${YELLOW}${BOLD}╚══════════════════════════════════════════════════════╝${RESET}"
+    printf '\n'
+    printf 'Los paquetes en conflicto son:\n\n'
+    printf '  1) %s%s\n' "$left" "$( (( left_installed )) && printf '  [INSTALADO]' || true )"
+    printf '  2) %s%s\n' "$right" "$( (( right_installed )) && printf '  [INSTALADO]' || true )"
+    printf '\n'
+
+    # Explicit recommendation for rust/rustup.
+    if [[ ("$left" == rust && "$right" == rustup) || ("$left" == rustup && "$right" == rust) ]]; then
+        printf '%b\n' "${CYAN}${BOLD}Recomendación: conservar 'rust' y eliminar 'rustup'.${RESET}"
+        printf 'El instalador compilará Eww con el toolchain de Rust disponible en el sistema.\n'
+    elif (( left_installed && !right_installed )); then
+        printf '%b\n' "${CYAN}Recomendación: conservar %s porque ya está instalado.${RESET}" "$left"
+    elif (( right_installed && !left_installed )); then
+        printf '%b\n' "${CYAN}Recomendación: conservar %s porque ya está instalado.${RESET}" "$right"
+    else
+        printf '%b\n' "${CYAN}Recomendación: no elimines un paquete que ya uses para otra parte del sistema. Si no sabes cuál conservar, cancela.${RESET}"
     fi
 
-    step "Detectado conflicto entre rust y rustup"
-
-    printf '\n'
-    printf '%b\n' "${YELLOW}${BOLD}En este equipo están instalados ambos:${RESET}"
-    printf '  1) rust   - toolchain gestionado por pacman\n'
-    printf '  2) rustup  - gestor de toolchains de Rust\n'
-    printf '\n'
-    printf '%b\n' "${CYAN}Recomendación para este rice: conservar rust y eliminar rustup.${RESET}"
-    printf '%b\n' "${WHITE}Motivo: el instalador usa el toolchain de Arch y así evita mantener dos gestores de Rust.${RESET}"
     printf '\n'
 
     while true; do
-        read -r -p "¿Qué deseas eliminar? [1=rust, 2=rustup, 3=no eliminar/salir]: " choice
+        printf '  [1] Eliminar %s y conservar/instalar %s\n' "$left" "$right"
+        printf '  [2] Eliminar %s y conservar/instalar %s\n' "$right" "$left"
+        printf '  [3] Cancelar instalación\n\n'
+        read -r -p 'Selecciona [1/2/3]: ' choice
 
         case "$choice" in
             1)
-                root_run pacman -Rns --noconfirm rust || fatal "No se pudo eliminar rust."
-                ok "rust eliminado; se conservará rustup."
+                if pkg_installed "$left"; then
+                    root_run pacman -Rns --noconfirm "$left"
+                fi
                 return 0
                 ;;
             2)
-                root_run pacman -Rns --noconfirm rustup || fatal "No se pudo eliminar rustup."
-                ok "rustup eliminado; se conservará rust."
+                if pkg_installed "$right"; then
+                    root_run pacman -Rns --noconfirm "$right"
+                fi
                 return 0
                 ;;
             3)
-                fatal "No se resolvió el conflicto rust/rustup."
+                fatal "Instalación cancelada por el usuario."
                 ;;
             *)
-                warn "Opción inválida. Elige 1, 2 o 3."
+                warn "Opción inválida."
                 ;;
         esac
     done
 }
 
-# Instala paquetes oficiales de forma segura.
-# Para los casos conocidos de alternativas/conflictos, pregunta al usuario.
-# Si pacman devuelve un conflicto, se captura el mensaje y se intenta
-# identificar el par conflictivo antes de abortar.
 install_official_packages() {
     local requested=("$@")
     local available=()
     local missing=()
-    local pkg
+    local pkg output pairs pair left right
 
     for pkg in "${requested[@]}"; do
         pkg_installed "$pkg" && continue
@@ -300,214 +310,81 @@ install_official_packages() {
         fi
     done
 
-    ((${#missing[@]})) && {
-        warn "Paquetes no encontrados en los repositorios configurados:"
+    if ((${#missing[@]})); then
+        warn "No encontrados en los repositorios configurados:"
         printf '  - %s\n' "${missing[@]}"
-    }
+        printf '%s\n' "${missing[@]}" > "$STATE_DIR/missing-packages.txt"
+    fi
 
     ((${#available[@]})) || return 0
 
-    # Primero resuelve alternativas conocidas.
-    local filtered=()
+    # Never put rust and rustup in the same pacman transaction.
+    local transaction=()
     for pkg in "${available[@]}"; do
         case "$pkg" in
-            rust|rustup)
-                # Se maneja por resolve_rust_conflict / ensure_rust.
-                ;;
-            *)
-                filtered+=("$pkg")
-                ;;
+            rust|rustup) ;;
+            *) transaction+=("$pkg") ;;
         esac
     done
 
-    if ((${#filtered[@]})); then
-        local pacman_output=""
+    if ((${#transaction[@]})); then
+        output=""
+        if ! output="$(sudo pacman -S --needed --noconfirm "${transaction[@]}" 2>&1)"; then
+            printf '%s\n' "$output"
+            printf '%s\n' "$output" > "$STATE_DIR/pacman-error-$TIMESTAMP.txt"
 
-        if pacman_output="$(sudo pacman -S --needed --noconfirm "${filtered[@]}" 2>&1)"; then
-            printf '%s\n' "$pacman_output"
-            return 0
+            pairs="$(extract_conflict_pairs "$output" || true)"
+            if [[ -n "$pairs" ]]; then
+                while IFS= read -r pair; do
+                    [[ -n "$pair" ]] || continue
+                    left="${pair%%:*}"
+                    right="${pair#*:}"
+                    choose_conflict_action "$left" "$right"
+                done <<< "$pairs"
+            else
+                warn "No pude interpretar automáticamente el conflicto."
+                warn "No se eliminará ningún paquete a ciegas."
+                fatal "pacman no pudo completar la transacción. Revisa $STATE_DIR/pacman-error-$TIMESTAMP.txt"
+            fi
+        else
+            printf '%s\n' "$output"
         fi
-
-        printf '%s\n' "$pacman_output"
-        printf '%s\n' "$pacman_output" > "$STATE_DIR/pacman-conflict-$TIMESTAMP.txt"
-
-        warn "pacman rechazó la transacción."
-        resolve_conflict_from_output "$pacman_output" "${filtered[@]}"
     fi
 }
 
-# ----------------------------------------------------------------------------
-# Generic conflict resolver
-# ----------------------------------------------------------------------------
-resolve_conflict_from_output() {
-    local output="$1"
-    shift
-    local requested=("$@")
+# =============================================================================
+# Rust selection
+# =============================================================================
+get_rust_provider() {
+    local has_rust=0
+    local has_rustup=0
 
-    local pairs=()
-    local line
-    local left
-    local right
+    pkg_installed rust && has_rust=1
+    pkg_installed rustup && has_rustup=1
 
-    # Detecta patrones típicos de pacman:
-    #   foo and bar are in conflict
-    #   foo conflicts with bar
-    while IFS= read -r line; do
-        if [[ "$line" =~ ([A-Za-z0-9@._+:-]+)[[:space:]]+and[[:space:]]+([A-Za-z0-9@._+:-]+)[[:space:]]+are[[:space:]]+in[[:space:]]+conflict ]]; then
-            left="${BASH_REMATCH[1]}"
-            right="${BASH_REMATCH[2]}"
-            pairs+=("$left:$right")
-        elif [[ "$line" =~ ([A-Za-z0-9@._+:-]+)[[:space:]]+conflicts[[:space:]]+with[[:space:]]+([A-Za-z0-9@._+:-]+) ]]; then
-            left="${BASH_REMATCH[1]}"
-            right="${BASH_REMATCH[2]}"
-            pairs+=("$left:$right")
-        fi
-    done <<< "$output"
-
-    # Conflicto conocido: rust/rustup.
-    for pair in "${pairs[@]}"; do
-        if [[ "$pair" == "rust:rustup" || "$pair" == "rustup:rust" ]]; then
-            resolve_rust_conflict
-            return 0
-        fi
-    done
-
-    # Si no conseguimos parsear la salida, inspeccionamos metadatos de los
-    # paquetes pedidos. Esto cubre cambios de formato de pacman.
-    local pkg relation
-    for pkg in "${requested[@]}"; do
-        while IFS= read -r relation; do
-            [[ -n "$relation" ]] || continue
-            if [[ "$relation" == *"rust"* && "$relation" == *"rustup"* ]]; then
-                resolve_rust_conflict
-                return 0
-            fi
-        done < <(pacman -Si "$pkg" 2>/dev/null | awk -F': ' '/^Conflicts With/ {print $2}')
-    done
-
-    # Para cualquier par detectado, si uno o ambos paquetes están presentes,
-    # ofrecemos una decisión explícita. Nunca eliminamos software a ciegas.
-    if ((${#pairs[@]})); then
-        local pair
-        for pair in "${pairs[@]}"; do
-            left="${pair%%:*}"
-            right="${pair#*:}"
-
-            local left_installed=0
-            local right_installed=0
-            pkg_installed "$left" && left_installed=1
-            pkg_installed "$right" && right_installed=1
-
-            printf '\n%b\n' "${YELLOW}${BOLD}Conflicto detectado: $left <-> $right${RESET}"
-
-            if (( left_installed && right_installed )); then
-                printf '  1) Eliminar %s y conservar %s\n' "$left" "$right"
-                printf '  2) Eliminar %s y conservar %s\n' "$right" "$left"
-                printf '  3) Cancelar instalación\n'
-            elif (( left_installed )); then
-                printf '  1) Eliminar %s y continuar con %s\n' "$left" "$right"
-                printf '  2) Cancelar instalación\n'
-            elif (( right_installed )); then
-                printf '  1) Eliminar %s y continuar con %s\n' "$right" "$left"
-                printf '  2) Cancelar instalación\n'
-            else
-                printf '  1) Intentar conservar %s\n' "$left"
-                printf '  2) Intentar conservar %s\n' "$right"
-                printf '  3) Cancelar instalación\n'
-            fi
-
-            # Recomendación conservadora: si el paquete solicitado está en la
-            # transacción, conservar el solicitado y eliminar la alternativa
-            # ya instalada. Para rust/rustup existe una recomendación explícita.
-            if [[ "$left" == "rustup" || "$right" == "rustup" ]]; then
-                warn "Para este rice recomiendo conservar 'rust' cuando sea posible y eliminar 'rustup'."
-            else
-                warn "Recomendación: conserva el paquete que ya utiliza tu sistema y elimina solo la alternativa que la nueva instalación necesita reemplazar."
-            fi
-
-            while true; do
-                read -r -p "Selecciona una opción: " choice
-                case "$choice" in
-                    1)
-                        if (( left_installed && right_installed )); then
-                            root_run pacman -Rns --noconfirm "$left"
-                        elif (( left_installed )); then
-                            root_run pacman -Rns --noconfirm "$left"
-                        elif (( right_installed )); then
-                            root_run pacman -Rns --noconfirm "$right"
-                        else
-                            warn "Ninguno de los dos está instalado; no se elimina nada."
-                            return 0
-                        fi
-                        return 0
-                        ;;
-                    2)
-                        if (( left_installed && right_installed )); then
-                            root_run pacman -Rns --noconfirm "$right"
-                            return 0
-                        elif (( left_installed || right_installed )); then
-                            fatal "Instalación cancelada por el usuario."
-                        else
-                            if [[ "$left" == "rustup" || "$right" == "rustup" ]]; then
-                                if [[ "$left" == "rust" ]]; then
-                                    warn "Se conservará rust."
-                                else
-                                    warn "Se conservará rustup."
-                                fi
-                                return 0
-                            fi
-                            return 0
-                        fi
-                        ;;
-                    3)
-                        fatal "Instalación cancelada por el usuario."
-                        ;;
-                    *)
-                        warn "Opción inválida."
-                        ;;
-                esac
-            done
-        done
+    if (( has_rust && has_rustup )); then
+        printf 'both\n'
+    elif (( has_rust )); then
+        printf 'rust\n'
+    elif (( has_rustup )); then
+        printf 'rustup\n'
+    else
+        printf 'none\n'
     fi
-
-    fatal "No se pudo resolver automáticamente el conflicto de pacman. Revisa $STATE_DIR/pacman-conflict-$TIMESTAMP.txt"
 }
 
-ensure_rust() {
-    step "Preparando toolchain Rust"
-
-    resolve_rust_conflict
-
+resolve_rust_conflict() {
     local provider
-    provider="$(choose_rust_provider)"
+    provider="$(get_rust_provider)"
 
-    case "$provider" in
-        rust)
-            if ! pkg_installed rust; then
-                install_official_packages rust
-            fi
-            ;;
-        rustup)
-            if ! pkg_installed rustup; then
-                install_official_packages rustup
-            fi
-            ;;
-        both)
-            fatal "No se pudo resolver rust/rustup."
-            ;;
-    esac
+    [[ "$provider" == both ]] || return 0
 
-    # Verificación final de herramientas.
-    command_exists rustc || fatal "rustc no está disponible después de instalar Rust."
-    command_exists cargo || fatal "cargo no está disponible después de instalar Rust."
-
-    ok "Rust disponible: $(rustc --version)"
-    ok "Cargo disponible: $(cargo --version)"
+    choose_conflict_action rust rustup
 }
 
-# ----------------------------------------------------------------------------
+# =============================================================================
 # System upgrade
-# ----------------------------------------------------------------------------
+# =============================================================================
 full_upgrade() {
     (( NO_UPGRADE )) && {
         warn "Actualización completa omitida (--no-upgrade)."
@@ -518,13 +395,14 @@ full_upgrade() {
     root_run pacman -Syu --noconfirm
 }
 
-# ----------------------------------------------------------------------------
+# =============================================================================
 # Dependencies
-# ----------------------------------------------------------------------------
+# =============================================================================
 install_dependencies() {
     step "Instalando dependencias del rice"
 
-    # IMPORTANTE: NO añadimos rust y rustup al mismo array.
+    # Rust/rustup are intentionally NOT included here. They are resolved in
+    # ensure_eww_toolchain so conflicting alternatives never enter the same pacman transaction.
     install_official_packages \
         base-devel \
         git \
@@ -620,15 +498,14 @@ install_dependencies() {
         ttf-firacode-nerd \
         ttf-nerd-fonts-symbols
 
-    ensure_rust
-    ok "Dependencias instaladas"
+    ok "Dependencias principales instaladas"
 }
 
-# ----------------------------------------------------------------------------
+# =============================================================================
 # fzf-tab
-# ----------------------------------------------------------------------------
+# =============================================================================
 install_fzf_tab() {
-    step "Instalando fzf-tab"
+    step "Instalando fzf-tab desde upstream"
 
     local target="/usr/share/zsh/plugins/fzf-tab"
 
@@ -638,10 +515,12 @@ install_fzf_tab() {
     fi
 
     local src="$BUILD_DIR/fzf-tab"
-    rm -rf -- "$src"
+
     mkdir -p "$BUILD_DIR"
+    rm -rf -- "$src"
 
     git clone --depth=1 https://github.com/Aloxaf/fzf-tab.git "$src"
+
     root_run mkdir -p "$target"
     root_run cp -a "$src/." "$target/"
 
@@ -649,49 +528,241 @@ install_fzf_tab() {
     ok "fzf-tab instalado"
 }
 
-# ----------------------------------------------------------------------------
+# =============================================================================
 # Eww
-# ----------------------------------------------------------------------------
+# =============================================================================
+ensure_eww_toolchain() {
+    step "Preparando toolchain para Eww"
+
+    local has_rust=0
+    local has_rustup=0
+
+    pkg_installed rust && has_rust=1
+    pkg_installed rustup && has_rustup=1
+
+    if (( has_rust && has_rustup )); then
+        printf '\n'
+        printf '%b\n' "${YELLOW}${BOLD}Rust y rustup están instalados al mismo tiempo.${RESET}"
+        printf 'Eww 0.6.0 incluye oficialmente rust-toolchain.toml y fija Rust 1.76.0.\n'
+        printf '%b\n' "${CYAN}${BOLD}Recomendación: conservar rustup y eliminar rust.${RESET}"
+        printf '\n'
+
+        while true; do
+            printf '  [1] Eliminar rust y conservar rustup  (RECOMENDADO)\n'
+            printf '  [2] Eliminar rustup y conservar rust\n'
+            printf '  [3] Cancelar instalación\n\n'
+            read -r -p 'Selecciona [1/2/3]: ' choice
+            case "$choice" in
+                1)
+                    root_run pacman -Rns --noconfirm rust
+                    has_rust=0
+                    break
+                    ;;
+                2)
+                    root_run pacman -Rns --noconfirm rustup
+                    has_rustup=0
+                    break
+                    ;;
+                3)
+                    fatal "Instalación cancelada por el usuario."
+                    ;;
+                *)
+                    warn "Opción inválida."
+                    ;;
+            esac
+        done
+    fi
+
+    if (( !has_rust && !has_rustup )); then
+        printf '\n'
+        printf '%b\n' "${CYAN}${BOLD}No se detectó Rust.${RESET}"
+        printf 'Para Eww 0.6.0 recomiendo rustup porque el release trae\n'
+        printf 'rust-toolchain.toml con Rust 1.76.0 fijado por upstream.\n\n'
+        printf '  [1] Instalar rustup (RECOMENDADO)\n'
+        printf '  [2] Instalar rust del sistema\n'
+        printf '  [3] Cancelar instalación\n\n'
+
+        while true; do
+            read -r -p 'Selecciona [1/2/3]: ' choice
+            case "$choice" in
+                1)
+                    install_official_packages rustup
+                    has_rustup=1
+                    break
+                    ;;
+                2)
+                    install_official_packages rust
+                    has_rust=1
+                    break
+                    ;;
+                3)
+                    fatal "Instalación cancelada por el usuario."
+                    ;;
+                *)
+                    warn "Opción inválida."
+                    ;;
+            esac
+        done
+    fi
+
+    if (( has_rustup )); then
+        command_exists rustup || fatal "rustup se instaló pero no está disponible en PATH."
+        command_exists cargo || fatal "cargo no está disponible."
+
+        ok "Usando rustup para Eww; upstream fija Rust 1.76.0 en rust-toolchain.toml."
+        return 0
+    fi
+
+    if (( has_rust )); then
+        command_exists rustc || fatal "rustc no está disponible."
+        command_exists cargo || fatal "cargo no está disponible."
+        warn "Usando Rust del sistema. Si Eww falla por compatibilidad del toolchain, el instalador ofrecerá cambiar a rustup."
+        return 0
+    fi
+
+    fatal "No se pudo preparar un toolchain Rust."
+}
+
+get_active_rust_version() {
+    if command_exists rustup && [[ -f "rust-toolchain.toml" ]]; then
+        rustup show active-toolchain 2>/dev/null | awk '{print $1}' || true
+        return 0
+    fi
+
+    rustc --version 2>/dev/null || true
+}
+
+build_eww() {
+    local src="$1"
+    local build_log="$STATE_DIR/eww-build-$TIMESTAMP.log"
+
+    pushd "$src" >/dev/null
+
+    : > "$build_log"
+
+    info "Toolchain activo: $(get_active_rust_version)"
+    info "Cargo.lock oficial será respetado."
+    info "No se ejecutará cargo tree ni se hará detección heurística del crate time."
+
+    # Eww v0.6.0 ships rust-toolchain.toml with Rust 1.76.0.
+    # When rustup is available, cargo automatically follows that file.
+    if command_exists rustup && [[ -f rust-toolchain.toml ]]; then
+        info "rust-toolchain.toml detectado; sincronizando el toolchain fijado por Eww."
+        if ! rustup toolchain install 1.76.0 --component rust-src >/dev/null 2>&1; then
+            warn "No se pudo instalar Rust 1.76.0 automáticamente."
+        fi
+    fi
+
+    if cargo build --release --locked --no-default-features --features x11 >"$build_log" 2>&1; then
+        popd >/dev/null
+        return 0
+    fi
+
+    warn "La compilación de Eww falló."
+    warn "Log: $build_log"
+
+    # Do not inspect with cargo tree. Instead, look only at Cargo's actual error
+    # output. If it is a Rust/MSRV/time problem and rustup is available, retry
+    # explicitly with the toolchain fixed by upstream.
+    if grep -Eiq 'time([[:space:]`]|-[[:digit:]]|[[:alnum:]_]|$)|requires.*rustc|rust-version|MSRV' "$build_log"; then
+        warn "El error parece relacionado con Rust/MSRV o el crate time."
+    fi
+
+    if command_exists rustup && [[ -f rust-toolchain.toml ]]; then
+        step "Reintentando Eww con el toolchain oficial 1.76.0"
+
+        rustup toolchain install 1.76.0 --component rust-src >>"$build_log" 2>&1 || true
+
+        if cargo +1.76.0 build --release --locked --no-default-features --features x11 >>"$build_log" 2>&1; then
+            popd >/dev/null
+            return 0
+        fi
+    else
+        # If the user chose system Rust and the old release needs its pinned
+        # toolchain, ask before installing rustup and replacing rust.
+        if pkg_installed rust && !pkg_installed rustup; then
+            popd >/dev/null
+
+            printf '\n'
+            printf '%b\n' "${YELLOW}${BOLD}Eww no pudo compilarse con el Rust del sistema.${RESET}"
+            printf 'El release v0.6.0 de Eww incluye rust-toolchain.toml con Rust 1.76.0.\n'
+            printf '%b\n' "${CYAN}${BOLD}Recomendación: cambiar de rust a rustup para usar exactamente el toolchain de Eww.${RESET}"
+            printf '\n'
+
+            while true; do
+                printf '  [1] Eliminar rust, instalar rustup y reintentar (RECOMENDADO)\n'
+                printf '  [2] Mantener rust y abortar\n\n'
+                read -r -p 'Selecciona [1/2]: ' choice
+                case "$choice" in
+                    1)
+                        root_run pacman -Rns --noconfirm rust
+                        install_official_packages rustup
+                        command_exists rustup || fatal "rustup no quedó disponible."
+                        pushd "$src" >/dev/null
+                        rustup toolchain install 1.76.0 --component rust-src
+                        if cargo +1.76.0 build --release --locked --no-default-features --features x11 >>"$build_log" 2>&1; then
+                            popd >/dev/null
+                            return 0
+                        fi
+                        popd >/dev/null
+                        fatal "Eww sigue sin compilar con Rust 1.76.0. Revisa $build_log"
+                        ;;
+                    2)
+                        fatal "Instalación cancelada porque Eww no compila con el Rust del sistema."
+                        ;;
+                    *)
+                        warn "Opción inválida."
+                        ;;
+                esac
+            done
+        fi
+    fi
+
+    popd >/dev/null
+    return 1
+}
+
 install_eww() {
     (( NO_EWW )) && {
         warn "Eww omitido (--no-eww)."
         return 0
     }
 
-    step "Instalando Eww 0.6.0 desde upstream"
+    step "Instalando Eww $EWW_REF para X11"
 
     if command_exists eww; then
         ok "Eww ya está instalado: $(eww --version 2>/dev/null || echo instalado)"
         return 0
     fi
 
-    ensure_rust
+    ensure_eww_toolchain
 
     local src="$BUILD_DIR/eww"
-    rm -rf -- "$src"
     mkdir -p "$BUILD_DIR"
+    rm -rf -- "$src"
 
     git clone --depth=1 --branch "$EWW_REF" "$EWW_REPO_URL" "$src"
 
-    pushd "$src" >/dev/null
+    [[ -f "$src/Cargo.lock" ]] || fatal "Eww $EWW_REF no contiene Cargo.lock."
+    [[ -f "$src/rust-toolchain.toml" ]] || warn "No se encontró rust-toolchain.toml en el release."
 
-    # Eww 0.6.0 fue publicado en abril de 2024 y su documentación permite
-    # compilar explícitamente con backend X11. Usamos el Cargo.lock del release.
-    cargo build --release --locked --no-default-features --features x11
+    info "Cargo.lock oficial detectado."
 
-    [[ -x target/release/eww ]] || fatal "Cargo terminó sin generar target/release/eww."
+    if ! build_eww "$src"; then
+        fatal "No se pudo compilar Eww $EWW_REF. Revisa: $STATE_DIR/eww-build-$TIMESTAMP.log"
+    fi
 
-    root_run install -Dm755 target/release/eww /usr/local/bin/eww
+    [[ -x "$src/target/release/eww" ]] || fatal "Cargo terminó sin generar target/release/eww."
 
-    popd >/dev/null
+    root_run install -Dm755 "$src/target/release/eww" /usr/local/bin/eww
 
     command_exists eww || fatal "Eww no aparece en PATH después de la instalación."
-    ok "Eww instalado: $(eww --version 2>/dev/null || echo 0.6.0)"
+    ok "Eww instalado: $(eww --version 2>/dev/null || echo "$EWW_REF")"
 }
 
-# ----------------------------------------------------------------------------
+# =============================================================================
 # Backup
-# ----------------------------------------------------------------------------
+# =============================================================================
 backup_one() {
     local target="$1"
     [[ -e "$target" || -L "$target" ]] || return 0
@@ -709,6 +780,7 @@ backup_one() {
 
 create_backup() {
     step "Creando backup"
+
     mkdir -p "$BACKUP_DIR"
 
     local targets=(
@@ -746,9 +818,9 @@ INFO
     ok "Backup creado en $BACKUP_DIR"
 }
 
-# ----------------------------------------------------------------------------
+# =============================================================================
 # Deploy
-# ----------------------------------------------------------------------------
+# =============================================================================
 deploy_directory() {
     local src="$1"
     local dest="$2"
@@ -763,7 +835,7 @@ deploy_directory() {
 deploy_file() {
     local src="$1"
     local dest="$2"
-    [[ -f "$src" ]] || return 0
+    [[ -f "$src" || -L "$src" ]] || return 0
 
     mkdir -p "$(dirname -- "$dest")"
     backup_one "$dest"
@@ -789,11 +861,16 @@ deploy_merge() {
 install_dotfiles() {
     step "Instalando configuraciones de TechOGR"
 
-    mkdir -p "$CONFIG_DIR" "$LOCAL_BIN" "$HOME/.local/share/applications" "$HOME/.local/share/fonts"
+    mkdir -p \
+        "$CONFIG_DIR" \
+        "$LOCAL_BIN" \
+        "$LOCAL_SHARE/applications" \
+        "$LOCAL_SHARE/fonts"
 
     shopt -s nullglob dotglob
 
     local src name
+
     for src in "$REPO_DIR/config"/*; do
         [[ -d "$src" ]] || continue
         name="$(basename -- "$src")"
@@ -804,12 +881,12 @@ install_dotfiles() {
         [[ -e "$src" || -L "$src" ]] || continue
         name="$(basename -- "$src")"
         [[ "$name" == "." || "$name" == ".." ]] && continue
-        [[ -f "$src" || -L "$src" ]] && deploy_file "$src" "$HOME/$name"
+        deploy_file "$src" "$HOME/$name"
     done
 
     deploy_merge "$REPO_DIR/misc/bin" "$LOCAL_BIN"
-    deploy_merge "$REPO_DIR/misc/applications" "$HOME/.local/share/applications"
-    deploy_merge "$REPO_DIR/misc/fonts" "$HOME/.local/share/fonts"
+    deploy_merge "$REPO_DIR/misc/applications" "$LOCAL_SHARE/applications"
+    deploy_merge "$REPO_DIR/misc/fonts" "$LOCAL_SHARE/fonts"
 
     if [[ -d "$REPO_DIR/misc/wallpapers" ]]; then
         deploy_merge "$REPO_DIR/misc/wallpapers" "$HOME/Wallpapers"
@@ -821,9 +898,9 @@ install_dotfiles() {
     ok "Configuraciones instaladas"
 }
 
-# ----------------------------------------------------------------------------
+# =============================================================================
 # Permissions / hardware safety
-# ----------------------------------------------------------------------------
+# =============================================================================
 fix_permissions() {
     step "Aplicando permisos"
 
@@ -850,9 +927,9 @@ patch_virtual_monitor() {
     fi
 }
 
-# ----------------------------------------------------------------------------
+# =============================================================================
 # X session
-# ----------------------------------------------------------------------------
+# =============================================================================
 setup_x_session() {
     step "Configurando sesión X11/BSPWM"
 
@@ -877,6 +954,7 @@ EOF_XPROFILE
     fi
 
     local desktop_file="/usr/share/xsessions/bspwm.desktop"
+
     if [[ ! -e "$desktop_file" ]]; then
         local tmp
         tmp="$(mktemp)"
@@ -896,9 +974,9 @@ EOF_DESKTOP
     ok "Sesión BSPWM preparada"
 }
 
-# ----------------------------------------------------------------------------
+# =============================================================================
 # Services / shell
-# ----------------------------------------------------------------------------
+# =============================================================================
 setup_services() {
     if (( ENABLE_NETWORK )); then
         step "Habilitando NetworkManager"
@@ -915,8 +993,9 @@ setup_services() {
         install_official_packages lightdm lightdm-gtk-greeter
 
         if command_exists systemctl; then
-            local active="$(systemctl is-active display-manager.service 2>/dev/null || true)"
-            local enabled="$(systemctl is-enabled display-manager.service 2>/dev/null || true)"
+            local active enabled
+            active="$(systemctl is-active display-manager.service 2>/dev/null || true)"
+            enabled="$(systemctl is-enabled display-manager.service 2>/dev/null || true)"
 
             if [[ "$active" == "active" || "$enabled" == "enabled" ]]; then
                 warn "Ya existe un display manager activo/habilitado. No se reemplaza."
@@ -936,8 +1015,9 @@ setup_zsh() {
 
     command_exists zsh || return 0
 
-    local zsh_path="$(command -v zsh)"
-    local current="$(getent passwd "$USER" | awk -F: '{print $7}')"
+    local zsh_path current
+    zsh_path="$(command -v zsh)"
+    current="$(getent passwd "$USER" | awk -F: '{print $7}')"
 
     if [[ "$current" == "$zsh_path" ]]; then
         ok "zsh ya es el shell de login"
@@ -971,9 +1051,9 @@ refresh_fonts() {
     ok "Caché de fuentes actualizado"
 }
 
-# ----------------------------------------------------------------------------
+# =============================================================================
 # Validation
-# ----------------------------------------------------------------------------
+# =============================================================================
 validate_installation() {
     step "Validando instalación"
 
@@ -982,11 +1062,13 @@ validate_installation() {
         "$CONFIG_DIR/bspwm/config/sxhkdrc"
         "$CONFIG_DIR/polybar"
         "$CONFIG_DIR/rofi"
-        "$CONFIG_DIR/eww"
         "$HOME/.zshrc"
     )
 
+    (( NO_EWW == 0 )) && files+=("$CONFIG_DIR/eww")
+
     local failed=0 item
+
     for item in "${files[@]}"; do
         if [[ -e "$item" ]]; then
             ok "Existe: $item"
@@ -996,7 +1078,21 @@ validate_installation() {
         fi
     done
 
-    local commands=(bspwm sxhkd polybar picom rofi jgmenu dunst kitty zsh nvim thunar)
+    local commands=(
+        bspwm
+        sxhkd
+        polybar
+        picom
+        rofi
+        jgmenu
+        dunst
+        kitty
+        zsh
+        nvim
+        thunar
+        clipcatd
+    )
+
     (( NO_EWW == 0 )) && commands+=(eww)
 
     local cmd
@@ -1009,12 +1105,13 @@ validate_installation() {
         fi
     done
 
-    (( failed == 0 )) && ok "Validación completada" || warn "La instalación terminó con avisos. Revisa $LOG_FILE"
+    if (( failed == 0 )); then
+        ok "Validación completada"
+    else
+        warn "La instalación terminó con avisos. Revisa $LOG_FILE"
+    fi
 }
 
-# ----------------------------------------------------------------------------
-# Final
-# ----------------------------------------------------------------------------
 print_summary() {
     printf '\n%b\n' "${GREEN}${BOLD}╔══════════════════════════════════════════════════════════════╗${RESET}"
     printf '%b\n' "${GREEN}${BOLD}║                  INSTALACIÓN COMPLETADA                     ║${RESET}"
@@ -1030,9 +1127,6 @@ print_summary() {
     printf '  O utiliza: startx\n'
 }
 
-# ----------------------------------------------------------------------------
-# Main
-# ----------------------------------------------------------------------------
 main() {
     while (($#)); do
         case "$1" in
@@ -1042,11 +1136,7 @@ main() {
             --enable-network) ENABLE_NETWORK=1 ;;
             --enable-lightdm) ENABLE_LIGHTDM=1 ;;
             --dry-run) DRY_RUN=1 ;;
-            -h|--help)
-                usage
-                trap - ERR
-                exit 0
-                ;;
+            -h|--help) usage; exit 0 ;;
             *) fatal "Opción desconocida: $1" ;;
         esac
         shift
@@ -1055,9 +1145,9 @@ main() {
     print_banner
     check_environment
     prepare_sudo
-    mkdir -p "$STATE_DIR" "$BUILD_DIR" "$BACKUP_ROOT" "$CONFIG_DIR" "$LOCAL_BIN"
-    validate_repo
+    bootstrap_packages
     check_network
+    validate_repo
     full_upgrade
     install_dependencies
     install_fzf_tab
