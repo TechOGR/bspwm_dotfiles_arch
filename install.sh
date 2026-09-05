@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 # TechOGR BSPWM Dotfiles
-# Professional Arch Linux Installer (corregido)
+# Professional Arch Linux Installer
 # ============================================================
 set -Eeuo pipefail
 IFS=$'\n\t'
@@ -37,9 +37,6 @@ mkdir -p "$STATE_DIR"
 
 # ------------------------------------------------------------
 # Logging
-# FIX: usamos `tee` con pipe simple y esperamos a que el pipe
-# termine con `wait` al final del script, en vez de un process
-# substitution "silencioso" que podía perder las últimas líneas.
 # ------------------------------------------------------------
 exec > >(tee -a "$LOG_FILE") 2>&1
 TEE_PID=$!
@@ -55,12 +52,12 @@ title() {
     clear 2>/dev/null || true
     printf '\n'
     printf '%b\n' "${MAGENTA}${BOLD}"
-    printf ' ████████╗███████╗ ██████╗██╗  ██╗ ██████╗  ██████╗ ██████╗ \n'
-    printf ' ╚══██╔══╝██╔════╝██╔════╝██║  ██║██╔═══██╗██╔════╝ ██╔══██╗\n'
+    printf ' ████████╗███████╗ ██████╗██╗   ██╗ ██████╗  ██████╗ ██████╗ \n'
+    printf ' ╚══██╔══╝██╔════╝██╔════╝██║   ██║██╔═══██╗██╔════╝ ██╔══██╗\n'
     printf '    ██║   █████╗  ██║     ███████║██║   ██║██║  ███╗██████╔╝\n'
     printf '    ██║   ██╔══╝  ██║     ██╔══██║██║   ██║██║   ██║██╔══██╗\n'
-    printf '    ██║   ███████╗╚██████╗██║  ██║╚██████╔╝╚██████╔╝██║  ██║\n'
-    printf '    ╚═╝   ╚══════╝ ╚═════╝╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝\n'
+    printf '    ██║   ███████╗╚██████╗██║   ██║╚██████╔╝╚██████╔╝██║  ██║\n'
+    printf '    ╚═╝   ╚══════╝ ╚═════╝╚═╝   ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝\n'
     printf '%b\n' "${RESET}"
     printf '%b\n' "${WHITE}${BOLD}        BSPWM DOTFILES INSTALLER${RESET}"
     printf '%b\n\n' "${BLUE}        Arch Linux Edition${RESET}"
@@ -94,9 +91,6 @@ fi
 
 # ------------------------------------------------------------
 # Sudo keep-alive
-# FIX: pedimos la contraseña una sola vez al inicio y la
-# mantenemos viva en segundo plano, para que no te la pida
-# a mitad de una compilación larga (makepkg, pacman -Syu, etc.)
 # ------------------------------------------------------------
 keep_sudo_alive() {
     step "Solicitando permisos de administrador"
@@ -152,41 +146,10 @@ install_base_tools() {
 }
 
 # ------------------------------------------------------------
-# PARU (único ayudante de AUR necesario)
-# FIX: se elimina install_yay(), que compilaba yay-bin sin
-# usarlo nunca en el resto del script (perdía tiempo y era
-# una fuente extra de posibles fallos de compilación).
-# ------------------------------------------------------------
-install_paru() {
-    step "Comprobando paru"
-    if command -v paru >/dev/null 2>&1; then
-        ok "paru ya está instalado"
-        return
-    fi
-
-    info "Instalando paru..."
-    local tmp_dir
-    tmp_dir="$(mktemp -d)"
-    (
-        cd "$tmp_dir"
-        git clone --depth=1 https://aur.archlinux.org/paru-bin.git
-        cd paru-bin
-        makepkg -si --noconfirm
-    )
-    rm -rf "$tmp_dir"
-
-    if command -v paru >/dev/null 2>&1; then
-        ok "paru instalado correctamente"
-    else
-        die "No se pudo instalar paru."
-    fi
-}
-
-# ------------------------------------------------------------
 # Official packages
 # ------------------------------------------------------------
 install_packages() {
-    step "Instalando stack BSPWM"
+    step "Instalando stack BSPWM (repositorios oficiales)"
     local official_packages=(
         # X11
         xorg-server xorg-xinit xorg-xrandr xorg-xsetroot
@@ -209,41 +172,21 @@ install_packages() {
         xclip xsel maim scrot
         # CLI
         bc jq unzip wget curl git rsync htop btop
-        # Fonts (incluye Nerd Fonts desde repos oficiales, sin AUR)
+        # Fonts
         noto-fonts noto-fonts-emoji ttf-dejavu
         ttf-jetbrains-mono-nerd ttf-firacode-nerd ttf-nerd-fonts-symbols
         # GTK / themes
         gtk3 gtk4 papirus-icon-theme
         # System
         dbus dbus-broker polkit
-        # Display manager (para poder elegir la sesión BSPWM al iniciar)
+        # Display manager
         lightdm lightdm-gtk-greeter
-        # Utilidades usadas por los scripts
+        # Utilidades extra usadas por los scripts
         imagemagick xdotool wmctrl eza bat
     )
 
     sudo pacman -S --needed --noconfirm "${official_packages[@]}"
     ok "Paquetes oficiales instalados"
-}
-
-# ------------------------------------------------------------
-# AUR packages
-# FIX: se quita "nerd-fonts" (meta-paquete AUR enorme e
-# interactivo). Las fuentes Nerd necesarias ya se instalan
-# arriba desde el repo oficial.
-# ------------------------------------------------------------
-install_aur_packages() {
-    step "Instalando paquetes AUR"
-    if ! command -v paru >/dev/null 2>&1; then
-        die "paru no está disponible."
-    fi
-
-    local aur_packages=(
-        fzf-tab-git
-    )
-
-    paru -S --needed --noconfirm "${aur_packages[@]}"
-    ok "Paquetes AUR instalados"
 }
 
 # ------------------------------------------------------------
@@ -451,8 +394,6 @@ configure_default_wallpaper() {
     mkdir -p "$HOME/.config/techogr"
     printf '%s\n' "$wallpaper" > "$HOME/.config/techogr/default-wallpaper"
 
-    # FIX: aplicamos el wallpaper de inmediato con feh si hay
-    # sesión X activa (útil si el script se corre dentro de X).
     if [[ -n "${DISPLAY:-}" ]] && command -v feh >/dev/null 2>&1; then
         feh --bg-fill "$wallpaper" >/dev/null 2>&1 || true
     fi
@@ -519,8 +460,6 @@ if command -v dbus-update-activation-environment >/dev/null 2>&1; then
         >/dev/null 2>&1 || true
 fi
 
-# No inicies aquí polybar, picom, sxhkd, etc.
-# bspwmrc controla todo el entorno gráfico.
 exec bspwm
 EOF
     chmod +x "$HOME/.xinitrc"
@@ -536,7 +475,6 @@ export XDG_SESSION_TYPE="x11"
 export PATH="$HOME/.local/bin:$PATH"
 export GTK_USE_PORTAL=0
 export XCURSOR_SIZE="${XCURSOR_SIZE:-24}"
-# No inicies bspwm aquí; lo hace el display manager o .xinitrc.
 EOF
     chmod +x "$HOME/.xprofile"
 
@@ -544,7 +482,7 @@ EOF
 }
 
 # ------------------------------------------------------------
-# Desktop session (.desktop para el login manager)
+# Desktop session (.desktop)
 # ------------------------------------------------------------
 install_desktop_session() {
     step "Registrando BSPWM en el sistema"
@@ -598,8 +536,6 @@ if ((${#outputs[@]} == 1)); then
     exit 0
 fi
 
-# Múltiples monitores: no forzar un output fijo (p. ej. Virtual-1).
-# BSPWM gestiona los monitores sin tocar xrandr aquí.
 exit 0
 EOF
     chmod +x "$LOCAL_BIN/techogr-monitor-setup"
@@ -607,9 +543,7 @@ EOF
 }
 
 # ------------------------------------------------------------
-# Zsh como shell por defecto
-# FIX: el script instalaba zsh (paquete) pero nunca lo dejaba
-# como shell por defecto del usuario.
+# Zsh Setup
 # ------------------------------------------------------------
 setup_shell() {
     step "Configurando Zsh como shell por defecto"
@@ -625,13 +559,11 @@ setup_shell() {
         chsh -s "$zsh_path" "$USER" || warn "No se pudo cambiar la shell por defecto automáticamente."
     fi
 
-    ok "Zsh configurado como shell por defecto (efectivo en el próximo login)"
+    ok "Zsh configurado como shell por defecto"
 }
 
 # ------------------------------------------------------------
-# Servicios del sistema
-# FIX: el script instalaba NetworkManager y lightdm pero nunca
-# los habilitaba; sin esto no hay red ni login gráfico tras reiniciar.
+# Services
 # ------------------------------------------------------------
 enable_services() {
     step "Habilitando servicios del sistema"
@@ -689,10 +621,16 @@ check_bspwm_files() {
 print_summary() {
     printf '\n'
     line
-    printf '%b\n' "${GREEN}${BOLD} Instalación completada${RESET}"
+    printf '%b\n' "${GREEN}${BOLD} Instalación completada con éxito${RESET}"
     line
     printf '%b\n' " Backup guardado en: ${BACKUP_DIR}"
     printf '%b\n' " Log completo en:    ${LOG_FILE}"
+    printf '\n'
+    printf '%b\n' "${YELLOW}${BOLD} [!] AVISO IMPORTANTE SOBRE AUR:${RESET}"
+    printf '%b\n' " Para mantener el script liviano e independiente de fallos de libalpm,"
+    printf '%b\n' " no se instaló ningún AUR helper ni el paquete 'fzf-tab-git'."
+    printf '%b\n' " Si deseas instalar 'fzf-tab-git' o un helper (paru/yay), hazlo manualmente:"
+    printf '%b\n' "   git clone https://aur.archlinux.org/fzf-tab-git.git && cd fzf-tab-git && makepkg -si"
     printf '\n'
     printf '%b\n' " Reinicia el sistema o cierra sesión."
     printf '%b\n' " En tu login manager (LightDM) selecciona la sesión ${BOLD}BSPWM${RESET}."
@@ -701,9 +639,6 @@ print_summary() {
 
 # ------------------------------------------------------------
 # MAIN
-# FIX: esta era la pieza más importante que faltaba: sin un
-# main() que orqueste todo, el script no ejecutaba nada al
-# correrlo (solo definía funciones).
 # ------------------------------------------------------------
 main() {
     title
@@ -711,9 +646,7 @@ main() {
     check_arch
     check_network
     install_base_tools
-    install_paru
     install_packages
-    install_aur_packages
     create_backup
     prepare_directories
     install_dotfiles
@@ -729,7 +662,6 @@ main() {
     check_bspwm_files
     print_summary
 
-    # Detiene el proceso de sudo keep-alive
     if [[ -n "${SUDO_KEEPALIVE_PID:-}" ]]; then
         kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
     fi
@@ -737,5 +669,4 @@ main() {
 
 main "$@"
 
-# Espera a que `tee` termine de volcar el log antes de salir.
 wait "$TEE_PID" 2>/dev/null || true
