@@ -1,36 +1,58 @@
 #!/usr/bin/env bash
 # =============================================================================
 # TechOGR BSPWM Dotfiles Installer
-# v4.0.0
-# https://github.com/TechOGR/bspwm_dotfiles_arch
+# =============================================================================
+# Repository:
+#   https://github.com/TechOGR/bspwm_dotfiles_arch
 #
-# Arch Linux / Arch-based distributions
+# Goals:
+#   - Arch Linux and Arch-based distributions
+#   - Safe package installation with conflict handling
+#   - Never install rust and rustup in the same pacman transaction
+#   - Build Eww v0.6.0 with its upstream Rust toolchain (1.76.0)
+#   - Never use cargo tree for dependency detection
+#   - Never modify Cargo.lock to guess/fix dependency versions
+#   - Automatic backups before replacing dotfiles
+#   - Hardware-safe BSPWM monitor setup
+#   - Recoverable failures and detailed logs
 # =============================================================================
 
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-SCRIPT_VERSION="4.0.0"
-REPO_URL="https://github.com/TechOGR/bspwm_dotfiles_arch.git"
-EWW_REPO_URL="https://github.com/elkowar/eww.git"
-EWW_REF="v0.6.0"
-EWW_TIME_VERSION="0.3.34"
+readonly SCRIPT_VERSION="5.0.0"
+readonly REPO_URL="https://github.com/TechOGR/bspwm_dotfiles_arch.git"
+readonly EWW_REPO="https://github.com/elkowar/eww"
+readonly EWW_VERSION="v0.6.0"
+readonly EWW_TARBALL="https://github.com/elkowar/eww/archive/refs/tags/${EWW_VERSION}.tar.gz"
+readonly EWW_RUST_VERSION="1.76.0"
+readonly RUSTUP_BASE_URL="https://static.rust-lang.org/rustup/dist"
 
-HOME_DIR="$HOME"
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
-LOCAL_BIN="${XDG_BIN_HOME:-$HOME/.local/bin}"
-LOCAL_SHARE="${XDG_DATA_HOME:-$HOME/.local/share}"
-STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/techogr-bspwm"
-BACKUP_ROOT="$HOME/.RiceBackup"
-TIMESTAMP="$(date '+%Y-%m-%d_%H-%M-%S')"
-BACKUP_DIR="$BACKUP_ROOT/$TIMESTAMP"
-LOG_FILE="$STATE_DIR/install-$TIMESTAMP.log"
-BUILD_DIR="$STATE_DIR/build"
+readonly HOME_DIR="$HOME"
+readonly CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
+readonly DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
+readonly STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/techogr-bspwm"
+readonly BUILD_DIR="$STATE_DIR/build"
+readonly LOCAL_BIN="$HOME/.local/bin"
+readonly BACKUP_ROOT="$HOME/.RiceBackup"
+readonly TIMESTAMP="$(date '+%Y-%m-%d_%H-%M-%S')"
+readonly BACKUP_DIR="$BACKUP_ROOT/$TIMESTAMP"
+readonly LOG_FILE="$STATE_DIR/install-$TIMESTAMP.log"
+readonly PACMAN_ERROR_FILE="$STATE_DIR/pacman-error-$TIMESTAMP.log"
+readonly EWW_ERROR_FILE="$STATE_DIR/eww-build-$TIMESTAMP.log"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_DIR="$SCRIPT_DIR"
-TEMP_ROOT=""
+
+# A private Rust toolchain is used only when the system does not already have
+# rustup. This avoids making pacman install rustup beside Arch's rust package.
+RUST_STATE_DIR="$STATE_DIR/rust"
+RUSTUP_HOME_LOCAL="$RUST_STATE_DIR/rustup"
+CARGO_HOME_LOCAL="$RUST_STATE_DIR/cargo"
+RUSTUP_BIN_LOCAL="$CARGO_HOME_LOCAL/bin/rustup"
+
 SUDO_KEEPALIVE_PID=""
+TEMP_DIR=""
 
 DRY_RUN=0
 NO_UPGRADE=0
@@ -38,6 +60,10 @@ NO_SHELL=0
 NO_EWW=0
 ENABLE_NETWORK=0
 ENABLE_LIGHTDM=0
+
+# -----------------------------------------------------------------------------
+# Colors
+# -----------------------------------------------------------------------------
 
 RESET='\033[0m'
 BOLD='\033[1m'
@@ -48,6 +74,10 @@ BLUE='\033[34m'
 CYAN='\033[36m'
 MAGENTA='\033[35m'
 WHITE='\033[97m'
+
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
 
 mkdir -p "$STATE_DIR"
 exec > >(tee -a "$LOG_FILE") 2>&1
@@ -66,35 +96,43 @@ fatal() {
 
 on_error() {
     local code=$?
-    error "Falló el comando en la línea ${BASH_LINENO[0]:-unknown}."
-    error "Comando: ${BASH_COMMAND:-unknown}"
-    error "Código de salida: $code"
+    error "El instalador encontró un error no controlado."
+    error "Línea: ${BASH_LINENO[0]:-desconocida}"
+    error "Comando: ${BASH_COMMAND:-desconocido}"
+    error "Código: $code"
     error "Log: $LOG_FILE"
     exit "$code"
 }
+
 trap on_error ERR
 
 cleanup() {
     if [[ -n "$SUDO_KEEPALIVE_PID" ]]; then
         kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
     fi
-    if [[ -n "$TEMP_ROOT" && -d "$TEMP_ROOT" ]]; then
-        rm -rf -- "$TEMP_ROOT"
+
+    if [[ -n "$TEMP_DIR" && -d "$TEMP_DIR" ]]; then
+        rm -rf -- "$TEMP_DIR"
     fi
 }
+
 trap cleanup EXIT
+
+# -----------------------------------------------------------------------------
+# UI / usage
+# -----------------------------------------------------------------------------
 
 print_banner() {
     printf '%b\n' "${MAGENTA}${BOLD}"
     printf '╔══════════════════════════════════════════════════════════════╗\n'
-    printf '║             TechOGR BSPWM DOTFILES INSTALLER               ║\n'
-    printf '║                         v%-33s║\n' "$SCRIPT_VERSION"
+    printf '║                TECHOGR BSPWM DOTFILES                        ║\n'
+    printf '║                    INSTALLER v%-26s║\n' "$SCRIPT_VERSION"
     printf '╚══════════════════════════════════════════════════════════════╝\n'
     printf '%b\n' "$RESET"
 }
 
 usage() {
-cat <<USAGE
+    cat <<USAGE
 Uso:
   ./install.sh [opciones]
 
@@ -103,13 +141,19 @@ Opciones:
   --no-shell          No cambiar el shell de login a zsh.
   --no-eww            No instalar Eww.
   --enable-network    Habilitar NetworkManager.
-  --enable-lightdm    Instalar/activar LightDM solo si no hay DM activo.
-  --dry-run           Mostrar acciones sin modificar el sistema.
+  --enable-lightdm    Instalar/activar LightDM si no hay otro display manager activo.
+  --dry-run           Mostrar operaciones sin ejecutarlas.
   -h, --help          Mostrar esta ayuda.
+
+Instalación normal:
+  chmod +x install.sh
+  ./install.sh
 USAGE
 }
 
-command_exists() { command -v "$1" >/dev/null 2>&1; }
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
 
 run() {
     if (( DRY_RUN )); then
@@ -131,16 +175,26 @@ root_run() {
     fi
 }
 
-pkg_installed() { pacman -Q "$1" >/dev/null 2>&1; }
-pkg_available() { pacman -Si "$1" >/dev/null 2>&1; }
+pkg_installed() {
+    pacman -Q "$1" >/dev/null 2>&1
+}
 
-# =============================================================================
+pkg_available() {
+    pacman -Si "$1" >/dev/null 2>&1
+}
+
+# -----------------------------------------------------------------------------
 # Environment
-# =============================================================================
+# -----------------------------------------------------------------------------
+
 check_environment() {
     step "Validando entorno"
 
-    (( EUID != 0 )) || fatal "Ejecuta el instalador como usuario normal, no como root."
+    if (( EUID == 0 )); then
+        fatal "Ejecuta este instalador como tu usuario normal, no como root."
+    fi
+
+    [[ -n "$HOME" ]] || fatal "HOME no está definido."
     [[ -r /etc/os-release ]] || fatal "No existe /etc/os-release."
     command_exists pacman || fatal "pacman no está instalado."
     command_exists sudo || fatal "sudo no está instalado."
@@ -149,22 +203,33 @@ check_environment() {
     source /etc/os-release
 
     local arch_family=0
-    [[ "${ID:-}" == "arch" ]] && arch_family=1
-    [[ " ${ID_LIKE:-} " == *" arch "* ]] && arch_family=1
 
-    (( arch_family )) || fatal "Se requiere Arch Linux o un derivado basado en Arch/pacman. Detectado: ${PRETTY_NAME:-desconocido}"
+    if [[ "${ID:-}" == "arch" ]]; then
+        arch_family=1
+    fi
+
+    if [[ " ${ID_LIKE:-} " == *" arch "* ]]; then
+        arch_family=1
+    fi
+
+    if (( arch_family == 0 )); then
+        fatal "Se requiere Arch Linux o un derivado compatible con pacman. Detectado: ${PRETTY_NAME:-desconocido}"
+    fi
 
     ok "Sistema: ${PRETTY_NAME:-Arch Linux}"
     ok "Usuario: $USER"
+    ok "Arquitectura: $(uname -m)"
 }
 
 prepare_sudo() {
     step "Validando sudo"
-    sudo -v || fatal "No se pudieron obtener permisos sudo."
 
-    if (( ! DRY_RUN )); then
+    sudo -v || fatal "No se pudieron obtener privilegios sudo."
+
+    if (( DRY_RUN == 0 )); then
         (
-            while sleep 45; do
+            while true; do
+                sleep 45
                 sudo -n true 2>/dev/null || exit 0
             done
         ) &
@@ -172,36 +237,51 @@ prepare_sudo() {
     fi
 }
 
-bootstrap_packages() {
-    step "Preparando herramientas básicas"
+bootstrap_tools() {
+    step "Preparando herramientas del instalador"
 
-    # These are the only tools the installer itself must have before proceeding.
     local wanted=()
     local pkg
 
-    for pkg in git curl rsync; do
-        pkg_installed "$pkg" || wanted+=("$pkg")
+    for pkg in pacman git curl rsync tar install awk sed grep find; do
+        if command_exists "$pkg"; then
+            continue
+        fi
+
+        case "$pkg" in
+            pacman|install|awk|sed|grep|find)
+                fatal "Falta una herramienta esencial del sistema: $pkg"
+                ;;
+            git|curl|rsync|tar)
+                wanted+=("$pkg")
+                ;;
+        esac
     done
 
     if ((${#wanted[@]})); then
-        root_run pacman -S --needed --noconfirm "${wanted[@]}"
+        pacman_install_safe "${wanted[@]}"
     fi
 
     command_exists git || fatal "git no está disponible."
     command_exists curl || fatal "curl no está disponible."
     command_exists rsync || fatal "rsync no está disponible."
+    command_exists tar || fatal "tar no está disponible."
 }
 
 check_network() {
     step "Comprobando conectividad"
-    curl -fsS --max-time 10 https://archlinux.org/ >/dev/null || \
+
+    if ! curl -fsS --max-time 12 https://archlinux.org/ >/dev/null; then
         fatal "No hay conectividad con archlinux.org."
+    fi
+
+    if ! curl -fsS --max-time 12 https://github.com/ >/dev/null; then
+        fatal "No hay conectividad con GitHub."
+    fi
+
     ok "Conectividad disponible"
 }
 
-# =============================================================================
-# Repository
-# =============================================================================
 validate_repo() {
     step "Validando repositorio"
 
@@ -212,9 +292,10 @@ validate_repo() {
     ok "Estructura del rice válida"
 }
 
-# =============================================================================
-# General conflict handling
-# =============================================================================
+# -----------------------------------------------------------------------------
+# Pacman installation with conflict recovery
+# -----------------------------------------------------------------------------
+
 extract_conflict_pairs() {
     local output="$1"
     local line left right
@@ -224,7 +305,10 @@ extract_conflict_pairs() {
             left="${BASH_REMATCH[1]}"
             right="${BASH_REMATCH[2]}"
             printf '%s:%s\n' "$left" "$right"
-        elif [[ "$line" =~ ([A-Za-z0-9@._+:-]+)[[:space:]]+conflicts[[:space:]]+with[[:space:]]+([A-Za-z0-9@._+:-]+) ]]; then
+            continue
+        fi
+
+        if [[ "$line" =~ ([A-Za-z0-9@._+:-]+)[[:space:]]+conflicts[[:space:]]+with[[:space:]]+([A-Za-z0-9@._+:-]+) ]]; then
             left="${BASH_REMATCH[1]}"
             right="${BASH_REMATCH[2]}"
             printf '%s:%s\n' "$left" "$right"
@@ -239,29 +323,34 @@ choose_conflict_action() {
     local left_installed=0
     local right_installed=0
 
-    pkg_installed "$left" && left_installed=1
-    pkg_installed "$right" && right_installed=1
+    if pkg_installed "$left"; then
+        left_installed=1
+    fi
+
+    if pkg_installed "$right"; then
+        right_installed=1
+    fi
 
     printf '\n'
-    printf '%b\n' "${YELLOW}${BOLD}╔══════════════════════════════════════════════════════╗${RESET}"
-    printf '%b\n' "${YELLOW}${BOLD}║                 CONFLICTO DETECTADO                 ║${RESET}"
-    printf '%b\n' "${YELLOW}${BOLD}╚══════════════════════════════════════════════════════╝${RESET}"
+    printf '%b\n' "${YELLOW}${BOLD}╔════════════════════════════════════════════════════════╗${RESET}"
+    printf '%b\n' "${YELLOW}${BOLD}║                  CONFLICTO DE PACMAN                  ║${RESET}"
+    printf '%b\n' "${YELLOW}${BOLD}╚════════════════════════════════════════════════════════╝${RESET}"
     printf '\n'
-    printf 'Los paquetes en conflicto son:\n\n'
-    printf '  1) %s%s\n' "$left" "$( (( left_installed )) && printf '  [INSTALADO]' || true )"
-    printf '  2) %s%s\n' "$right" "$( (( right_installed )) && printf '  [INSTALADO]' || true )"
+    printf 'Pacman detectó dos paquetes incompatibles:\n\n'
+    printf '  [1] %-25s%s\n' "$left" "$([[ $left_installed == 1 ]] && printf '[INSTALADO]' || true)"
+    printf '  [2] %-25s%s\n' "$right" "$([[ $right_installed == 1 ]] && printf '[INSTALADO]' || true)"
     printf '\n'
 
-    # Explicit recommendation for rust/rustup.
-    if [[ ("$left" == rust && "$right" == rustup) || ("$left" == rustup && "$right" == rust) ]]; then
-        printf '%b\n' "${CYAN}${BOLD}Recomendación: conservar 'rust' y eliminar 'rustup'.${RESET}"
-        printf 'El instalador compilará Eww con el toolchain de Rust disponible en el sistema.\n'
-    elif (( left_installed && !right_installed )); then
-        printf '%b\n' "${CYAN}Recomendación: conservar %s porque ya está instalado.${RESET}" "$left"
-    elif (( right_installed && !left_installed )); then
-        printf '%b\n' "${CYAN}Recomendación: conservar %s porque ya está instalado.${RESET}" "$right"
+    if { [[ "$left" == "rust" ]] && [[ "$right" == "rustup" ]]; } ||
+       { [[ "$left" == "rustup" ]] && [[ "$right" == "rust" ]]; }; then
+        printf '%b\n' "${CYAN}${BOLD}Recomendación: conservar rust y no instalar rustup mediante pacman.${RESET}"
+        printf 'El instalador usa un toolchain Rust privado para Eww y evita este conflicto.\n'
+    elif (( left_installed == 1 && right_installed == 0 )); then
+        printf '%b\n' "${CYAN}Recomendación: conservar $left porque ya está instalado.${RESET}"
+    elif (( right_installed == 1 && left_installed == 0 )); then
+        printf '%b\n' "${CYAN}Recomendación: conservar $right porque ya está instalado.${RESET}"
     else
-        printf '%b\n' "${CYAN}Recomendación: no elimines un paquete que ya uses para otra parte del sistema. Si no sabes cuál conservar, cancela.${RESET}"
+        printf '%b\n' "${CYAN}Recomendación: no elimines nada si no conoces el propósito del paquete.${RESET}"
     fi
 
     printf '\n'
@@ -270,6 +359,7 @@ choose_conflict_action() {
         printf '  [1] Eliminar %s y conservar/instalar %s\n' "$left" "$right"
         printf '  [2] Eliminar %s y conservar/instalar %s\n' "$right" "$left"
         printf '  [3] Cancelar instalación\n\n'
+
         read -r -p 'Selecciona [1/2/3]: ' choice
 
         case "$choice" in
@@ -295,14 +385,23 @@ choose_conflict_action() {
     done
 }
 
-install_official_packages() {
+pacman_install_safe() {
     local requested=("$@")
     local available=()
     local missing=()
-    local pkg output pairs pair left right
+    local pkg
+    local output
+    local pairs
+    local pair
+    local left
+    local right
+    local attempts=0
 
     for pkg in "${requested[@]}"; do
-        pkg_installed "$pkg" && continue
+        if pkg_installed "$pkg"; then
+            continue
+        fi
+
         if pkg_available "$pkg"; then
             available+=("$pkg")
         else
@@ -313,102 +412,113 @@ install_official_packages() {
     if ((${#missing[@]})); then
         warn "No encontrados en los repositorios configurados:"
         printf '  - %s\n' "${missing[@]}"
-        printf '%s\n' "${missing[@]}" > "$STATE_DIR/missing-packages.txt"
+        printf '%s\n' "${missing[@]}" >> "$STATE_DIR/missing-packages.txt"
     fi
 
-    ((${#available[@]})) || return 0
+    if ((${#available[@]} == 0)); then
+        return 0
+    fi
 
-    # Never put rust and rustup in the same pacman transaction.
-    local transaction=()
-    for pkg in "${available[@]}"; do
-        case "$pkg" in
-            rust|rustup) ;;
-            *) transaction+=("$pkg") ;;
-        esac
+    while (( attempts < 3 )); do
+        attempts=$((attempts + 1))
+
+        if output="$(sudo pacman -S --needed --noconfirm "${available[@]}" 2>&1)"; then
+            printf '%s\n' "$output"
+            return 0
+        fi
+
+        printf '%s\n' "$output"
+        printf '%s\n' "$output" > "$PACMAN_ERROR_FILE"
+
+        pairs="$(extract_conflict_pairs "$output" || true)"
+
+        if [[ -n "$pairs" ]]; then
+            while IFS= read -r pair; do
+                [[ -n "$pair" ]] || continue
+
+                left="${pair%%:*}"
+                right="${pair#*:}"
+
+                # The decision is made by the user. Nothing is removed blindly.
+                choose_conflict_action "$left" "$right"
+            done <<< "$pairs"
+
+            continue
+        fi
+
+        warn "Pacman falló sin un conflicto que pueda resolver automáticamente."
+        warn "No se eliminará ningún paquete a ciegas."
+        fatal "No se pudo completar la instalación de paquetes. Revisa $PACMAN_ERROR_FILE"
     done
 
-    if ((${#transaction[@]})); then
-        output=""
-        if ! output="$(sudo pacman -S --needed --noconfirm "${transaction[@]}" 2>&1)"; then
-            printf '%s\n' "$output"
-            printf '%s\n' "$output" > "$STATE_DIR/pacman-error-$TIMESTAMP.txt"
-
-            pairs="$(extract_conflict_pairs "$output" || true)"
-            if [[ -n "$pairs" ]]; then
-                while IFS= read -r pair; do
-                    [[ -n "$pair" ]] || continue
-                    left="${pair%%:*}"
-                    right="${pair#*:}"
-                    choose_conflict_action "$left" "$right"
-                done <<< "$pairs"
-            else
-                warn "No pude interpretar automáticamente el conflicto."
-                warn "No se eliminará ningún paquete a ciegas."
-                fatal "pacman no pudo completar la transacción. Revisa $STATE_DIR/pacman-error-$TIMESTAMP.txt"
-            fi
-        else
-            printf '%s\n' "$output"
-        fi
-    fi
+    fatal "Pacman sigue reportando un conflicto después de varios intentos. Revisa $PACMAN_ERROR_FILE"
 }
 
-# =============================================================================
-# Rust selection
-# =============================================================================
-get_rust_provider() {
-    local has_rust=0
-    local has_rustup=0
+# -----------------------------------------------------------------------------
+# System update
+# -----------------------------------------------------------------------------
 
-    pkg_installed rust && has_rust=1
-    pkg_installed rustup && has_rustup=1
-
-    if (( has_rust && has_rustup )); then
-        printf 'both\n'
-    elif (( has_rust )); then
-        printf 'rust\n'
-    elif (( has_rustup )); then
-        printf 'rustup\n'
-    else
-        printf 'none\n'
-    fi
-}
-
-resolve_rust_conflict() {
-    local provider
-    provider="$(get_rust_provider)"
-
-    [[ "$provider" == both ]] || return 0
-
-    choose_conflict_action rust rustup
-}
-
-# =============================================================================
-# System upgrade
-# =============================================================================
 full_upgrade() {
-    (( NO_UPGRADE )) && {
+    if (( NO_UPGRADE == 1 )); then
         warn "Actualización completa omitida (--no-upgrade)."
         return 0
-    }
+    fi
 
     step "Actualizando el sistema"
-    root_run pacman -Syu --noconfirm
+
+    local output
+
+    if output="$(sudo pacman -Syu --noconfirm 2>&1)"; then
+        printf '%s\n' "$output"
+        ok "Sistema actualizado"
+        return 0
+    fi
+
+    printf '%s\n' "$output"
+    printf '%s\n' "$output" > "$PACMAN_ERROR_FILE"
+
+    local pairs
+    pairs="$(extract_conflict_pairs "$output" || true)"
+
+    if [[ -n "$pairs" ]]; then
+        local pair left right
+        while IFS= read -r pair; do
+            [[ -n "$pair" ]] || continue
+            left="${pair%%:*}"
+            right="${pair#*:}"
+            choose_conflict_action "$left" "$right"
+        done <<< "$pairs"
+
+        if ! sudo pacman -Syu --noconfirm; then
+            fatal "La actualización del sistema no pudo completarse. Revisa $PACMAN_ERROR_FILE"
+        fi
+
+        return 0
+    fi
+
+    fatal "pacman -Syu no pudo completarse. Revisa $PACMAN_ERROR_FILE"
 }
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 # Dependencies
-# =============================================================================
+# -----------------------------------------------------------------------------
+
 install_dependencies() {
     step "Instalando dependencias del rice"
 
-    # Rust/rustup are intentionally NOT included here. They are resolved in
-    # ensure_eww_toolchain so conflicting alternatives never enter the same pacman transaction.
-    install_official_packages \
+    # IMPORTANT:
+    # - rust is intentionally NOT here
+    # - rustup is intentionally NOT here
+    # Eww gets a dedicated isolated Rust toolchain below.
+    # This makes the installer immune to rust/rustup pacman conflicts.
+
+    pacman_install_safe \
         base-devel \
         git \
         curl \
         wget \
         rsync \
+        tar \
         unzip \
         7zip \
         jq \
@@ -484,12 +594,13 @@ install_dependencies() {
         papirus-icon-theme \
         \
         dbus \
-        dbus-broker \
         polkit \
         polkit-gnome \
         \
         clipcat \
-        python-pywal \
+        \
+        python \
+        python-pip \
         \
         noto-fonts \
         noto-fonts-emoji \
@@ -498,288 +609,291 @@ install_dependencies() {
         ttf-firacode-nerd \
         ttf-nerd-fonts-symbols
 
-    ok "Dependencias principales instaladas"
+    # pywal is currently an official Arch Extra package, but derivatives can
+    # temporarily have stale/missing repositories. It is not allowed to abort
+    # the complete rice installation.
+    if pkg_available python-pywal; then
+        pacman_install_safe python-pywal
+    else
+        warn "python-pywal no está disponible en los repositorios configurados."
+        warn "La instalación continúa; el comando 'wal' puede faltar hasta instalar Pywal."
+    fi
+
+    ok "Dependencias principales procesadas"
 }
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 # fzf-tab
-# =============================================================================
+# -----------------------------------------------------------------------------
+
 install_fzf_tab() {
     step "Instalando fzf-tab desde upstream"
 
     local target="/usr/share/zsh/plugins/fzf-tab"
+    local source_dir="$BUILD_DIR/fzf-tab"
 
     if [[ -f "$target/fzf-tab.zsh" ]]; then
         ok "fzf-tab ya está instalado"
         return 0
     fi
 
-    local src="$BUILD_DIR/fzf-tab"
-
+    rm -rf -- "$source_dir"
     mkdir -p "$BUILD_DIR"
-    rm -rf -- "$src"
 
-    git clone --depth=1 https://github.com/Aloxaf/fzf-tab.git "$src"
+    if ! git clone --depth=1 https://github.com/Aloxaf/fzf-tab.git "$source_dir"; then
+        fatal "No se pudo descargar fzf-tab."
+    fi
 
     root_run mkdir -p "$target"
-    root_run cp -a "$src/." "$target/"
+    root_run rsync -a "$source_dir/" "$target/"
 
-    [[ -f "$target/fzf-tab.zsh" ]] || fatal "No se pudo instalar fzf-tab."
+    [[ -f "$target/fzf-tab.zsh" ]] || fatal "fzf-tab no quedó instalado correctamente."
+
     ok "fzf-tab instalado"
 }
 
-# =============================================================================
-# Eww
-# =============================================================================
-ensure_eww_toolchain() {
-    step "Preparando toolchain para Eww"
+# -----------------------------------------------------------------------------
+# Rust / Eww toolchain
+# -----------------------------------------------------------------------------
 
-    local has_rust=0
-    local has_rustup=0
+rustup_target_triple() {
+    local arch
+    arch="$(uname -m)"
 
-    pkg_installed rust && has_rust=1
-    pkg_installed rustup && has_rustup=1
-
-    if (( has_rust && has_rustup )); then
-        printf '\n'
-        printf '%b\n' "${YELLOW}${BOLD}Rust y rustup están instalados al mismo tiempo.${RESET}"
-        printf 'Eww 0.6.0 incluye oficialmente rust-toolchain.toml y fija Rust 1.76.0.\n'
-        printf '%b\n' "${CYAN}${BOLD}Recomendación: conservar rustup y eliminar rust.${RESET}"
-        printf '\n'
-
-        while true; do
-            printf '  [1] Eliminar rust y conservar rustup  (RECOMENDADO)\n'
-            printf '  [2] Eliminar rustup y conservar rust\n'
-            printf '  [3] Cancelar instalación\n\n'
-            read -r -p 'Selecciona [1/2/3]: ' choice
-            case "$choice" in
-                1)
-                    root_run pacman -Rns --noconfirm rust
-                    has_rust=0
-                    break
-                    ;;
-                2)
-                    root_run pacman -Rns --noconfirm rustup
-                    has_rustup=0
-                    break
-                    ;;
-                3)
-                    fatal "Instalación cancelada por el usuario."
-                    ;;
-                *)
-                    warn "Opción inválida."
-                    ;;
-            esac
-        done
-    fi
-
-    if (( !has_rust && !has_rustup )); then
-        printf '\n'
-        printf '%b\n' "${CYAN}${BOLD}No se detectó Rust.${RESET}"
-        printf 'Para Eww 0.6.0 recomiendo rustup porque el release trae\n'
-        printf 'rust-toolchain.toml con Rust 1.76.0 fijado por upstream.\n\n'
-        printf '  [1] Instalar rustup (RECOMENDADO)\n'
-        printf '  [2] Instalar rust del sistema\n'
-        printf '  [3] Cancelar instalación\n\n'
-
-        while true; do
-            read -r -p 'Selecciona [1/2/3]: ' choice
-            case "$choice" in
-                1)
-                    install_official_packages rustup
-                    has_rustup=1
-                    break
-                    ;;
-                2)
-                    install_official_packages rust
-                    has_rust=1
-                    break
-                    ;;
-                3)
-                    fatal "Instalación cancelada por el usuario."
-                    ;;
-                *)
-                    warn "Opción inválida."
-                    ;;
-            esac
-        done
-    fi
-
-    if (( has_rustup )); then
-        command_exists rustup || fatal "rustup se instaló pero no está disponible en PATH."
-        command_exists cargo || fatal "cargo no está disponible."
-
-        ok "Usando rustup para Eww; upstream fija Rust 1.76.0 en rust-toolchain.toml."
-        return 0
-    fi
-
-    if (( has_rust )); then
-        command_exists rustc || fatal "rustc no está disponible."
-        command_exists cargo || fatal "cargo no está disponible."
-        warn "Usando Rust del sistema. Si Eww falla por compatibilidad del toolchain, el instalador ofrecerá cambiar a rustup."
-        return 0
-    fi
-
-    fatal "No se pudo preparar un toolchain Rust."
+    case "$arch" in
+        x86_64) printf '%s\n' 'x86_64-unknown-linux-gnu' ;;
+        aarch64) printf '%s\n' 'aarch64-unknown-linux-gnu' ;;
+        armv7l|armv7) printf '%s\n' 'armv7-unknown-linux-gnueabihf' ;;
+        i686) printf '%s\n' 'i686-unknown-linux-gnu' ;;
+        *) return 1 ;;
+    esac
 }
 
-get_active_rust_version() {
-    if command_exists rustup && [[ -f "rust-toolchain.toml" ]]; then
-        rustup show active-toolchain 2>/dev/null | awk '{print $1}' || true
+ensure_rustup_local() {
+    mkdir -p "$RUSTUP_HOME_LOCAL" "$CARGO_HOME_LOCAL/bin" "$RUST_STATE_DIR"
+
+    if [[ -x "$RUSTUP_BIN_LOCAL" ]]; then
+        printf '%s\n' "$RUSTUP_BIN_LOCAL"
         return 0
     fi
 
-    rustc --version 2>/dev/null || true
+    local target
+    target="$(rustup_target_triple)" || {
+        fatal "Arquitectura $(uname -m) no soportada por el bootstrap automático de rustup."
+    }
+
+    local installer="$RUST_STATE_DIR/rustup-init"
+
+    step "Preparando Rust aislado para Eww"
+
+    info "No se instalará rustup mediante pacman."
+    info "El toolchain de Eww se mantendrá separado del Rust del sistema."
+
+    if ! curl -fL --retry 3 --retry-delay 2 \
+        "$RUSTUP_BASE_URL/$target/rustup-init" \
+        -o "$installer"; then
+        fatal "No se pudo descargar rustup-init."
+    fi
+
+    chmod +x "$installer"
+
+    RUSTUP_HOME="$RUSTUP_HOME_LOCAL" \
+    CARGO_HOME="$CARGO_HOME_LOCAL" \
+    "$installer" \
+        -y \
+        --profile minimal \
+        --default-toolchain none \
+        --no-modify-path
+
+    rm -f -- "$installer"
+
+    [[ -x "$RUSTUP_BIN_LOCAL" ]] || fatal "rustup local no quedó instalado correctamente."
+
+    printf '%s\n' "$RUSTUP_BIN_LOCAL"
+}
+
+ensure_eww_rust() {
+    step "Preparando toolchain Rust para Eww $EWW_VERSION"
+
+    local rustup_bin=""
+    local rustup_home=""
+    local cargo_home=""
+
+    if command_exists rustup; then
+        rustup_bin="$(command -v rustup)"
+        rustup_home="${RUSTUP_HOME:-$HOME/.rustup}"
+        cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+        ok "Se utilizará el rustup existente: $rustup_bin"
+    else
+        rustup_bin="$(ensure_rustup_local)"
+        rustup_home="$RUSTUP_HOME_LOCAL"
+        cargo_home="$CARGO_HOME_LOCAL"
+        ok "Se utilizará rustup aislado: $rustup_bin"
+    fi
+
+    if ! RUSTUP_HOME="$rustup_home" CARGO_HOME="$cargo_home" \
+        "$rustup_bin" toolchain install "$EWW_RUST_VERSION" \
+        --profile minimal \
+        --component rust-src; then
+        fatal "No se pudo instalar el toolchain Rust $EWW_RUST_VERSION para Eww."
+    fi
+
+    export TECHOGR_RUSTUP="$rustup_bin"
+    export TECHOGR_RUSTUP_HOME="$rustup_home"
+    export TECHOGR_CARGO_HOME="$cargo_home"
+
+    ok "Rust $EWW_RUST_VERSION preparado"
+}
+
+rust_cargo() {
+    RUSTUP_HOME="$TECHOGR_RUSTUP_HOME" \
+    CARGO_HOME="$TECHOGR_CARGO_HOME" \
+    "$TECHOGR_RUSTUP" run "$EWW_RUST_VERSION" cargo "$@"
+}
+
+rustc_version() {
+    RUSTUP_HOME="$TECHOGR_RUSTUP_HOME" \
+    CARGO_HOME="$TECHOGR_CARGO_HOME" \
+    "$TECHOGR_RUSTUP" run "$EWW_RUST_VERSION" rustc --version
+}
+
+# -----------------------------------------------------------------------------
+# Eww
+# -----------------------------------------------------------------------------
+
+prepare_eww_source() {
+    local source_root="$BUILD_DIR/eww"
+    local archive="$BUILD_DIR/eww-${EWW_VERSION}.tar.gz"
+    local extract_root="$BUILD_DIR/eww-source"
+
+    rm -rf -- "$source_root" "$extract_root"
+    mkdir -p "$BUILD_DIR"
+
+    step "Descargando Eww $EWW_VERSION"
+
+    if ! curl -fL --retry 3 --retry-delay 2 "$EWW_TARBALL" -o "$archive"; then
+        fatal "No se pudo descargar Eww $EWW_VERSION."
+    fi
+
+    mkdir -p "$extract_root"
+
+    tar -xzf "$archive" -C "$extract_root"
+
+    local extracted
+    extracted="$(find "$extract_root" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+
+    [[ -n "$extracted" && -d "$extracted" ]] || fatal "No se pudo extraer Eww $EWW_VERSION."
+
+    mv -- "$extracted" "$source_root"
+
+    rm -f -- "$archive"
+
+    [[ -f "$source_root/Cargo.lock" ]] || fatal "El release de Eww no contiene Cargo.lock."
+    [[ -f "$source_root/rust-toolchain.toml" ]] || fatal "El release de Eww no contiene rust-toolchain.toml."
+
+    ok "Fuente de Eww preparada"
 }
 
 build_eww() {
-    local src="$1"
-    local build_log="$STATE_DIR/eww-build-$TIMESTAMP.log"
+    local source_root="$BUILD_DIR/eww"
 
-    pushd "$src" >/dev/null
+    [[ -d "$source_root" ]] || fatal "No existe el árbol fuente de Eww."
 
-    : > "$build_log"
+    step "Compilando Eww $EWW_VERSION para X11"
 
-    info "Toolchain activo: $(get_active_rust_version)"
-    info "Cargo.lock oficial será respetado."
-    info "No se ejecutará cargo tree ni se hará detección heurística del crate time."
+    : > "$EWW_ERROR_FILE"
 
-    # Eww v0.6.0 ships rust-toolchain.toml with Rust 1.76.0.
-    # When rustup is available, cargo automatically follows that file.
-    if command_exists rustup && [[ -f rust-toolchain.toml ]]; then
-        info "rust-toolchain.toml detectado; sincronizando el toolchain fijado por Eww."
-        if ! rustup toolchain install 1.76.0 --component rust-src >/dev/null 2>&1; then
-            warn "No se pudo instalar Rust 1.76.0 automáticamente."
-        fi
-    fi
+    pushd "$source_root" >/dev/null
 
-    if cargo build --release --locked --no-default-features --features x11 >"$build_log" 2>&1; then
+    info "Toolchain esperado por upstream: Rust $EWW_RUST_VERSION"
+    info "Toolchain efectivo: $(rustc_version)"
+    info "Se utilizará Cargo.lock oficial."
+    info "No se ejecutará cargo tree."
+    info "No se actualizarán ni sustituirán crates automáticamente."
+
+    # Eww's release explicitly contains rust-toolchain.toml with 1.76.0.
+    # We nevertheless invoke the exact toolchain through rustup so the build
+    # does not depend on the user's global Rust version.
+    if rust_cargo build \
+        --release \
+        --locked \
+        --no-default-features \
+        --features x11 \
+        >"$EWW_ERROR_FILE" 2>&1; then
         popd >/dev/null
         return 0
     fi
 
-    warn "La compilación de Eww falló."
-    warn "Log: $build_log"
-
-    # Do not inspect with cargo tree. Instead, look only at Cargo's actual error
-    # output. If it is a Rust/MSRV/time problem and rustup is available, retry
-    # explicitly with the toolchain fixed by upstream.
-    if grep -Eiq 'time([[:space:]`]|-[[:digit:]]|[[:alnum:]_]|$)|requires.*rustc|rust-version|MSRV' "$build_log"; then
-        warn "El error parece relacionado con Rust/MSRV o el crate time."
-    fi
-
-    if command_exists rustup && [[ -f rust-toolchain.toml ]]; then
-        step "Reintentando Eww con el toolchain oficial 1.76.0"
-
-        rustup toolchain install 1.76.0 --component rust-src >>"$build_log" 2>&1 || true
-
-        if cargo +1.76.0 build --release --locked --no-default-features --features x11 >>"$build_log" 2>&1; then
-            popd >/dev/null
-            return 0
-        fi
-    else
-        # If the user chose system Rust and the old release needs its pinned
-        # toolchain, ask before installing rustup and replacing rust.
-        if pkg_installed rust && !pkg_installed rustup; then
-            popd >/dev/null
-
-            printf '\n'
-            printf '%b\n' "${YELLOW}${BOLD}Eww no pudo compilarse con el Rust del sistema.${RESET}"
-            printf 'El release v0.6.0 de Eww incluye rust-toolchain.toml con Rust 1.76.0.\n'
-            printf '%b\n' "${CYAN}${BOLD}Recomendación: cambiar de rust a rustup para usar exactamente el toolchain de Eww.${RESET}"
-            printf '\n'
-
-            while true; do
-                printf '  [1] Eliminar rust, instalar rustup y reintentar (RECOMENDADO)\n'
-                printf '  [2] Mantener rust y abortar\n\n'
-                read -r -p 'Selecciona [1/2]: ' choice
-                case "$choice" in
-                    1)
-                        root_run pacman -Rns --noconfirm rust
-                        install_official_packages rustup
-                        command_exists rustup || fatal "rustup no quedó disponible."
-                        pushd "$src" >/dev/null
-                        rustup toolchain install 1.76.0 --component rust-src
-                        if cargo +1.76.0 build --release --locked --no-default-features --features x11 >>"$build_log" 2>&1; then
-                            popd >/dev/null
-                            return 0
-                        fi
-                        popd >/dev/null
-                        fatal "Eww sigue sin compilar con Rust 1.76.0. Revisa $build_log"
-                        ;;
-                    2)
-                        fatal "Instalación cancelada porque Eww no compila con el Rust del sistema."
-                        ;;
-                    *)
-                        warn "Opción inválida."
-                        ;;
-                esac
-            done
-        fi
-    fi
-
     popd >/dev/null
-    return 1
+
+    warn "La primera compilación de Eww falló."
+    warn "Log completo: $EWW_ERROR_FILE"
+
+    # Known historical issue: Eww 0.6.0 and the time crate can fail with a
+    # modern system compiler. We already use upstream's pinned 1.76.0, so we
+    # DO NOT mutate Cargo.lock or run cargo tree as a guess.
+    if grep -Eiq 'time|rust-version|requires.*rustc|MSRV|edition[[:space:]]+2021|error\[E0' "$EWW_ERROR_FILE"; then
+        warn "El log contiene un error de Rust/dependencias. Se conserva intacto para diagnóstico."
+    fi
+
+    fatal "Eww $EWW_VERSION no pudo compilarse con el toolchain oficial $EWW_RUST_VERSION. Revisa $EWW_ERROR_FILE"
 }
 
 install_eww() {
-    (( NO_EWW )) && {
+    if (( NO_EWW == 1 )); then
         warn "Eww omitido (--no-eww)."
         return 0
-    }
+    fi
 
-    step "Instalando Eww $EWW_REF para X11"
+    step "Instalando Eww $EWW_VERSION"
 
     if command_exists eww; then
-        ok "Eww ya está instalado: $(eww --version 2>/dev/null || echo instalado)"
+        local version
+        version="$(eww --version 2>/dev/null || true)"
+        ok "Eww ya está instalado: ${version:-desconocido}"
         return 0
     fi
 
-    ensure_eww_toolchain
+    ensure_eww_rust
+    prepare_eww_source
+    build_eww
 
-    local src="$BUILD_DIR/eww"
-    mkdir -p "$BUILD_DIR"
-    rm -rf -- "$src"
+    local binary="$BUILD_DIR/eww/target/release/eww"
 
-    git clone --depth=1 --branch "$EWW_REF" "$EWW_REPO_URL" "$src"
+    [[ -x "$binary" ]] || fatal "Cargo terminó sin generar el binario Eww."
 
-    [[ -f "$src/Cargo.lock" ]] || fatal "Eww $EWW_REF no contiene Cargo.lock."
-    [[ -f "$src/rust-toolchain.toml" ]] || warn "No se encontró rust-toolchain.toml en el release."
-
-    info "Cargo.lock oficial detectado."
-
-    if ! build_eww "$src"; then
-        fatal "No se pudo compilar Eww $EWW_REF. Revisa: $STATE_DIR/eww-build-$TIMESTAMP.log"
-    fi
-
-    [[ -x "$src/target/release/eww" ]] || fatal "Cargo terminó sin generar target/release/eww."
-
-    root_run install -Dm755 "$src/target/release/eww" /usr/local/bin/eww
+    root_run install -Dm755 "$binary" /usr/local/bin/eww
 
     command_exists eww || fatal "Eww no aparece en PATH después de la instalación."
-    ok "Eww instalado: $(eww --version 2>/dev/null || echo "$EWW_REF")"
+
+    ok "Eww instalado: $(eww --version 2>/dev/null || echo "$EWW_VERSION")"
 }
 
-# =============================================================================
-# Backup
-# =============================================================================
+# -----------------------------------------------------------------------------
+# Backup / dotfiles
+# -----------------------------------------------------------------------------
+
 backup_one() {
     local target="$1"
-    [[ -e "$target" || -L "$target" ]] || return 0
 
-    local rel
-    if [[ "$target" == "$HOME_DIR/"* ]]; then
-        rel="${target#$HOME_DIR/}"
-    else
-        rel="$(basename -- "$target")"
+    if [[ ! -e "$target" && ! -L "$target" ]]; then
+        return 0
     fi
 
-    mkdir -p "$BACKUP_DIR/$(dirname -- "$rel")"
-    cp -a -- "$target" "$BACKUP_DIR/$rel"
+    local relative
+
+    if [[ "$target" == "$HOME_DIR/"* ]]; then
+        relative="${target#$HOME_DIR/}"
+    else
+        relative="$(basename -- "$target")"
+    fi
+
+    mkdir -p "$BACKUP_DIR/$(dirname -- "$relative")"
+    cp -a -- "$target" "$BACKUP_DIR/$relative"
 }
 
 create_backup() {
-    step "Creando backup"
+    step "Creando backup antes de modificar configuraciones"
 
     mkdir -p "$BACKUP_DIR"
 
@@ -796,12 +910,15 @@ create_backup() {
         "$HOME/.config/gtk-3.0"
         "$HOME/.config/gtk-4.0"
         "$HOME/.config/eww"
+        "$HOME/.config/mpd"
+        "$HOME/.config/ncmpcpp"
         "$HOME/.zshrc"
         "$HOME/.xinitrc"
         "$HOME/.xprofile"
     )
 
     local item
+
     for item in "${targets[@]}"; do
         backup_one "$item"
     done
@@ -818,23 +935,23 @@ INFO
     ok "Backup creado en $BACKUP_DIR"
 }
 
-# =============================================================================
-# Deploy
-# =============================================================================
 deploy_directory() {
     local src="$1"
     local dest="$2"
+
     [[ -d "$src" ]] || return 0
 
     mkdir -p "$(dirname -- "$dest")"
     backup_one "$dest"
     mkdir -p "$dest"
+
     rsync -a --delete "$src/" "$dest/"
 }
 
 deploy_file() {
     local src="$1"
     local dest="$2"
+
     [[ -f "$src" || -L "$src" ]] || return 0
 
     mkdir -p "$(dirname -- "$dest")"
@@ -845,15 +962,20 @@ deploy_file() {
 deploy_merge() {
     local src="$1"
     local dest="$2"
+
     [[ -d "$src" ]] || return 0
 
     mkdir -p "$dest"
 
     while IFS= read -r -d '' file; do
-        local rel="${file#$src/}"
-        local target="$dest/$rel"
-        backup_one "$target"
+        local relative
+        local target
+
+        relative="${file#$src/}"
+        target="$dest/$relative"
+
         mkdir -p "$(dirname -- "$target")"
+        backup_one "$target"
         install -Dm644 "$file" "$target"
     done < <(find "$src" -type f -print0)
 }
@@ -864,29 +986,36 @@ install_dotfiles() {
     mkdir -p \
         "$CONFIG_DIR" \
         "$LOCAL_BIN" \
-        "$LOCAL_SHARE/applications" \
-        "$LOCAL_SHARE/fonts"
+        "$DATA_DIR/applications" \
+        "$DATA_DIR/fonts"
 
     shopt -s nullglob dotglob
 
-    local src name
+    local src
+    local name
 
     for src in "$REPO_DIR/config"/*; do
         [[ -d "$src" ]] || continue
+
         name="$(basename -- "$src")"
         deploy_directory "$src" "$CONFIG_DIR/$name"
     done
 
     for src in "$REPO_DIR/home"/.* "$REPO_DIR/home"/*; do
         [[ -e "$src" || -L "$src" ]] || continue
+
         name="$(basename -- "$src")"
+
         [[ "$name" == "." || "$name" == ".." ]] && continue
-        deploy_file "$src" "$HOME/$name"
+
+        if [[ -f "$src" || -L "$src" ]]; then
+            deploy_file "$src" "$HOME/$name"
+        fi
     done
 
     deploy_merge "$REPO_DIR/misc/bin" "$LOCAL_BIN"
-    deploy_merge "$REPO_DIR/misc/applications" "$LOCAL_SHARE/applications"
-    deploy_merge "$REPO_DIR/misc/fonts" "$LOCAL_SHARE/fonts"
+    deploy_merge "$REPO_DIR/misc/applications" "$DATA_DIR/applications"
+    deploy_merge "$REPO_DIR/misc/fonts" "$DATA_DIR/fonts"
 
     if [[ -d "$REPO_DIR/misc/wallpapers" ]]; then
         deploy_merge "$REPO_DIR/misc/wallpapers" "$HOME/Wallpapers"
@@ -895,43 +1024,64 @@ install_dotfiles() {
     fi
 
     shopt -u nullglob dotglob
+
     ok "Configuraciones instaladas"
 }
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 # Permissions / hardware safety
-# =============================================================================
-fix_permissions() {
-    step "Aplicando permisos"
+# -----------------------------------------------------------------------------
 
-    [[ -d "$LOCAL_BIN" ]] && find "$LOCAL_BIN" -type f -exec chmod +x {} +
-    [[ -f "$CONFIG_DIR/bspwm/bspwmrc" ]] && chmod +x "$CONFIG_DIR/bspwm/bspwmrc"
-    [[ -d "$CONFIG_DIR/bspwm/bin" ]] && chmod +x "$CONFIG_DIR/bspwm/bin"/* 2>/dev/null || true
-    [[ -d "$CONFIG_DIR/polybar" ]] && find "$CONFIG_DIR/polybar" -type f -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
-    [[ -d "$CONFIG_DIR/eww" ]] && find "$CONFIG_DIR/eww" -type f -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
+fix_permissions() {
+    step "Aplicando permisos de ejecución"
+
+    if [[ -d "$LOCAL_BIN" ]]; then
+        find "$LOCAL_BIN" -type f -exec chmod +x {} +
+    fi
+
+    if [[ -f "$CONFIG_DIR/bspwm/bspwmrc" ]]; then
+        chmod +x "$CONFIG_DIR/bspwm/bspwmrc"
+    fi
+
+    if [[ -d "$CONFIG_DIR/bspwm/bin" ]]; then
+        find "$CONFIG_DIR/bspwm/bin" -type f -exec chmod +x {} +
+    fi
+
+    if [[ -d "$CONFIG_DIR/polybar" ]]; then
+        find "$CONFIG_DIR/polybar" -type f -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
+    fi
+
+    if [[ -d "$CONFIG_DIR/eww" ]]; then
+        find "$CONFIG_DIR/eww" -type f -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
+    fi
 
     ok "Permisos aplicados"
 }
 
 patch_virtual_monitor() {
     local file="$CONFIG_DIR/bspwm/bspwmrc"
+
     [[ -f "$file" ]] || return 0
 
     if grep -Eq '^[[:space:]]*xrandr --output Virtual-1 --mode 1920x1080 --rate 60[[:space:]]*$' "$file"; then
         step "Haciendo segura la configuración Virtual-1"
+
         backup_one "$file"
+
         sed -i \
             's@^[[:space:]]*xrandr --output Virtual-1 --mode 1920x1080 --rate 60[[:space:]]*$@if xrandr --query 2>/dev/null | grep -q "^Virtual-1 connected"; then xrandr --output Virtual-1 --mode 1920x1080 --rate 60; fi@' \
             "$file"
+
         ok "Virtual-1 ahora es condicional"
     fi
 }
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 # X session
-# =============================================================================
+# -----------------------------------------------------------------------------
+
 setup_x_session() {
-    step "Configurando sesión X11/BSPWM"
+    step "Preparando sesión X11/BSPWM"
 
     if [[ ! -e "$HOME/.xinitrc" ]]; then
         cat > "$HOME/.xinitrc" <<'EOF_XINITRC'
@@ -958,6 +1108,7 @@ EOF_XPROFILE
     if [[ ! -e "$desktop_file" ]]; then
         local tmp
         tmp="$(mktemp)"
+
         cat > "$tmp" <<'EOF_DESKTOP'
 [Desktop Entry]
 Name=BSPWM
@@ -967,38 +1118,44 @@ TryExec=bspwm
 Type=Application
 DesktopNames=bspwm
 EOF_DESKTOP
+
         root_run install -Dm644 "$tmp" "$desktop_file"
-        rm -f "$tmp"
+        rm -f -- "$tmp"
     fi
 
     ok "Sesión BSPWM preparada"
 }
 
-# =============================================================================
-# Services / shell
-# =============================================================================
+# -----------------------------------------------------------------------------
+# Services
+# -----------------------------------------------------------------------------
+
 setup_services() {
-    if (( ENABLE_NETWORK )); then
+    if (( ENABLE_NETWORK == 1 )); then
         step "Habilitando NetworkManager"
+
         if command_exists systemctl; then
             root_run systemctl enable --now NetworkManager.service
             ok "NetworkManager habilitado"
         else
-            warn "systemctl no está disponible."
+            warn "systemctl no está disponible; NetworkManager quedó instalado sin habilitarse."
         fi
     fi
 
-    if (( ENABLE_LIGHTDM )); then
+    if (( ENABLE_LIGHTDM == 1 )); then
         step "Configurando LightDM"
-        install_official_packages lightdm lightdm-gtk-greeter
+
+        pacman_install_safe lightdm lightdm-gtk-greeter
 
         if command_exists systemctl; then
-            local active enabled
+            local active
+            local enabled
+
             active="$(systemctl is-active display-manager.service 2>/dev/null || true)"
             enabled="$(systemctl is-enabled display-manager.service 2>/dev/null || true)"
 
             if [[ "$active" == "active" || "$enabled" == "enabled" ]]; then
-                warn "Ya existe un display manager activo/habilitado. No se reemplaza."
+                warn "Ya existe un display manager activo/habilitado. No se reemplazará."
             else
                 root_run systemctl enable lightdm.service
                 ok "LightDM habilitado"
@@ -1007,15 +1164,24 @@ setup_services() {
     fi
 }
 
+# -----------------------------------------------------------------------------
+# Shell
+# -----------------------------------------------------------------------------
+
 setup_zsh() {
-    (( NO_SHELL )) && {
+    if (( NO_SHELL == 1 )); then
         warn "Cambio de shell omitido (--no-shell)."
         return 0
-    }
+    fi
 
-    command_exists zsh || return 0
+    if ! command_exists zsh; then
+        warn "zsh no está disponible."
+        return 0
+    fi
 
-    local zsh_path current
+    local zsh_path
+    local current
+
     zsh_path="$(command -v zsh)"
     current="$(getent passwd "$USER" | awk -F: '{print $7}')"
 
@@ -1035,29 +1201,50 @@ setup_zsh() {
 
 patch_zsh_update_alias() {
     local zshrc="$HOME/.zshrc"
+
     [[ -f "$zshrc" ]] || return 0
 
-    if ! command_exists paru && grep -qE '^alias update="paru -Syu' "$zshrc"; then
+    # Avoid breaking an existing user configuration. We only replace an alias
+    # that explicitly depends on paru when paru is not installed.
+    if command_exists paru; then
+        return 0
+    fi
+
+    if grep -qE '^alias update="paru -Syu' "$zshrc"; then
+        step "Eliminando dependencia innecesaria de paru en el alias update"
+
         backup_one "$zshrc"
-        sed -i 's/^alias update="paru -Syu[^\"]*"/alias update="sudo pacman -Syu"/' "$zshrc"
-        ok "Alias update ajustado para no depender de paru"
+
+        sed -i \
+            's/^alias update="paru -Syu[^\"]*"/alias update="sudo pacman -Syu"/' \
+            "$zshrc"
+
+        ok "Alias update ajustado a pacman"
     fi
 }
 
+# -----------------------------------------------------------------------------
+# Fonts
+# -----------------------------------------------------------------------------
+
 refresh_fonts() {
-    command_exists fc-cache || return 0
+    if ! command_exists fc-cache; then
+        return 0
+    fi
+
     step "Actualizando caché de fuentes"
     fc-cache -f
     ok "Caché de fuentes actualizado"
 }
 
-# =============================================================================
-# Validation
-# =============================================================================
+# -----------------------------------------------------------------------------
+# Final validation
+# -----------------------------------------------------------------------------
+
 validate_installation() {
     step "Validando instalación"
 
-    local files=(
+    local required_files=(
         "$CONFIG_DIR/bspwm/bspwmrc"
         "$CONFIG_DIR/bspwm/config/sxhkdrc"
         "$CONFIG_DIR/polybar"
@@ -1065,11 +1252,14 @@ validate_installation() {
         "$HOME/.zshrc"
     )
 
-    (( NO_EWW == 0 )) && files+=("$CONFIG_DIR/eww")
+    if (( NO_EWW == 0 )); then
+        required_files+=("$CONFIG_DIR/eww")
+    fi
 
-    local failed=0 item
+    local failed=0
+    local item
 
-    for item in "${files[@]}"; do
+    for item in "${required_files[@]}"; do
         if [[ -e "$item" ]]; then
             ok "Existe: $item"
         else
@@ -1093,9 +1283,12 @@ validate_installation() {
         clipcatd
     )
 
-    (( NO_EWW == 0 )) && commands+=(eww)
+    if (( NO_EWW == 0 )); then
+        commands+=(eww)
+    fi
 
     local cmd
+
     for cmd in "${commands[@]}"; do
         if command_exists "$cmd"; then
             ok "Disponible: $cmd"
@@ -1105,47 +1298,86 @@ validate_installation() {
         fi
     done
 
-    if (( failed == 0 )); then
-        ok "Validación completada"
+    if command_exists wal; then
+        ok "Disponible: wal (Pywal)"
     else
-        warn "La instalación terminó con avisos. Revisa $LOG_FILE"
+        warn "wal no está disponible. Pywal no pudo ser instalado desde los repositorios actuales."
+    fi
+
+    if (( failed == 0 )); then
+        ok "Validación principal completada"
+    else
+        warn "La instalación terminó con componentes faltantes. Revisa $LOG_FILE"
     fi
 }
+
+# -----------------------------------------------------------------------------
+# Summary
+# -----------------------------------------------------------------------------
 
 print_summary() {
     printf '\n%b\n' "${GREEN}${BOLD}╔══════════════════════════════════════════════════════════════╗${RESET}"
     printf '%b\n' "${GREEN}${BOLD}║                  INSTALACIÓN COMPLETADA                     ║${RESET}"
     printf '%b\n' "${GREEN}${BOLD}╚══════════════════════════════════════════════════════════════╝${RESET}"
     printf '\n'
-    printf '  Rice:     TechOGR BSPWM\n'
-    printf '  Config:   %s\n' "$CONFIG_DIR"
-    printf '  Backup:   %s\n' "$BACKUP_DIR"
-    printf '  Log:      %s\n' "$LOG_FILE"
+    printf '  Rice:       TechOGR BSPWM\n'
+    printf '  Config:     %s\n' "$CONFIG_DIR"
+    printf '  Backup:     %s\n' "$BACKUP_DIR"
+    printf '  Log:        %s\n' "$LOG_FILE"
+    printf '  Eww log:    %s\n' "$EWW_ERROR_FILE"
     printf '\n'
     printf '%b\n' "${CYAN}${BOLD}Siguiente paso:${RESET}"
     printf '  Cierra sesión y selecciona BSPWM en tu display manager.\n'
     printf '  O utiliza: startx\n'
+    printf '\n'
+    printf '%b\n' "${YELLOW}Nota:${RESET}"
+    printf '  El instalador no reemplaza un display manager existente.\n'
+    printf '  Para NetworkManager: ./install.sh --enable-network\n'
+    printf '  Para LightDM:        ./install.sh --enable-lightdm\n'
+    printf '  Para omitir update:  ./install.sh --no-upgrade\n'
 }
+
+# -----------------------------------------------------------------------------
+# Main
+# -----------------------------------------------------------------------------
 
 main() {
     while (($#)); do
         case "$1" in
-            --no-upgrade) NO_UPGRADE=1 ;;
-            --no-shell) NO_SHELL=1 ;;
-            --no-eww) NO_EWW=1 ;;
-            --enable-network) ENABLE_NETWORK=1 ;;
-            --enable-lightdm) ENABLE_LIGHTDM=1 ;;
-            --dry-run) DRY_RUN=1 ;;
-            -h|--help) usage; exit 0 ;;
-            *) fatal "Opción desconocida: $1" ;;
+            --no-upgrade)
+                NO_UPGRADE=1
+                ;;
+            --no-shell)
+                NO_SHELL=1
+                ;;
+            --no-eww)
+                NO_EWW=1
+                ;;
+            --enable-network)
+                ENABLE_NETWORK=1
+                ;;
+            --enable-lightdm)
+                ENABLE_LIGHTDM=1
+                ;;
+            --dry-run)
+                DRY_RUN=1
+                ;;
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            *)
+                fatal "Opción desconocida: $1"
+                ;;
         esac
         shift
     done
 
     print_banner
+
     check_environment
     prepare_sudo
-    bootstrap_packages
+    bootstrap_tools
     check_network
     validate_repo
     full_upgrade
