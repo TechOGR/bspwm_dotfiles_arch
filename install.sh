@@ -56,6 +56,7 @@ line() {
 
 title() {
     clear 2>/dev/null || true
+
     printf '\n'
     printf '%b\n' "${MAGENTA}${BOLD}"
     printf '   ████████╗███████╗ ██████╗██╗  ██╗ ██████╗  ██████╗ ██████╗ \n'
@@ -65,6 +66,7 @@ title() {
     printf '      ██║   ███████╗╚██████╗ ██║  ██║╚██████╔╝╚██████╔╝██████╔╝\n'
     printf '      ╚═╝   ╚══════╝ ╚═════╝ ╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═════╝\n'
     printf '%b\n' "${RESET}"
+
     printf '%b\n' "${WHITE}${BOLD}              BSPWM DOTFILES INSTALLER${RESET}"
     printf '%b\n\n' "${BLUE}                 Arch Linux Edition${RESET}"
 }
@@ -148,7 +150,7 @@ check_network() {
 }
 
 # ------------------------------------------------------------
-# Required commands
+# Base tools
 # ------------------------------------------------------------
 
 install_base_tools() {
@@ -170,11 +172,11 @@ install_base_tools() {
 }
 
 # ------------------------------------------------------------
-# AUR helper
+# YAY
 # ------------------------------------------------------------
 
 install_yay() {
-    step "Comprobando AUR helper"
+    step "Comprobando yay"
 
     if command -v yay >/dev/null 2>&1; then
         ok "yay ya está instalado"
@@ -186,31 +188,74 @@ install_yay() {
     local tmp_dir
     tmp_dir="$(mktemp -d)"
 
-    trap 'rm -rf "$tmp_dir"' RETURN
-
-    git clone --depth=1 https://aur.archlinux.org/yay-bin.git "$tmp_dir/yay-bin"
-
     (
-        cd "$tmp_dir/yay-bin"
+        cd "$tmp_dir"
+
+        git clone --depth=1 \
+            https://aur.archlinux.org/yay-bin.git
+
+        cd yay-bin
+
         makepkg -si --noconfirm
     )
 
-    if ! command -v yay >/dev/null 2>&1; then
+    rm -rf "$tmp_dir"
+
+    if command -v yay >/dev/null 2>&1; then
+        ok "yay instalado correctamente"
+    else
         die "No se pudo instalar yay."
     fi
-
-    ok "yay instalado"
 }
 
 # ------------------------------------------------------------
-# Package installation
+# PARU
+# ------------------------------------------------------------
+
+install_paru() {
+    step "Comprobando paru"
+
+    if command -v paru >/dev/null 2>&1; then
+        ok "paru ya está instalado"
+        return
+    fi
+
+    info "Instalando paru..."
+
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+
+    (
+        cd "$tmp_dir"
+
+        git clone --depth=1 \
+            https://aur.archlinux.org/paru-bin.git
+
+        cd paru-bin
+
+        makepkg -si --noconfirm
+    )
+
+    rm -rf "$tmp_dir"
+
+    if command -v paru >/dev/null 2>&1; then
+        ok "paru instalado correctamente"
+    else
+        die "No se pudo instalar paru."
+    fi
+}
+
+# ------------------------------------------------------------
+# Official packages
 # ------------------------------------------------------------
 
 install_packages() {
     step "Instalando stack BSPWM"
 
     local official_packages=(
+        # ----------------------------------------------------
         # X11
+        # ----------------------------------------------------
         xorg-server
         xorg-xinit
         xorg-xrandr
@@ -220,16 +265,22 @@ install_packages() {
         xorg-xdpyinfo
         xorg-xset
 
+        # ----------------------------------------------------
         # Window manager
+        # ----------------------------------------------------
         bspwm
         sxhkd
 
+        # ----------------------------------------------------
         # Bar / compositor / launcher
+        # ----------------------------------------------------
         polybar
         picom
         rofi
 
+        # ----------------------------------------------------
         # Desktop utilities
+        # ----------------------------------------------------
         feh
         dunst
         xsettingsd
@@ -237,30 +288,43 @@ install_packages() {
         lxsession
         polkit-gnome
 
+        # ----------------------------------------------------
         # Terminal / shell
+        # ----------------------------------------------------
         kitty
         zsh
+        fzf
 
-        # File management
+        # ----------------------------------------------------
+        # File manager
+        # ----------------------------------------------------
         thunar
         thunar-volman
         tumbler
 
+        # ----------------------------------------------------
         # Audio
+        # ----------------------------------------------------
         pavucontrol
         playerctl
 
+        # ----------------------------------------------------
         # Network
+        # ----------------------------------------------------
         networkmanager
         network-manager-applet
 
+        # ----------------------------------------------------
         # Clipboard / screenshots
+        # ----------------------------------------------------
         xclip
         xsel
         maim
         scrot
 
-        # CLI utilities
+        # ----------------------------------------------------
+        # CLI
+        # ----------------------------------------------------
         bc
         jq
         unzip
@@ -270,44 +334,64 @@ install_packages() {
         rsync
         htop
         btop
-        neofetch
 
+        # ----------------------------------------------------
         # Fonts
+        # ----------------------------------------------------
         noto-fonts
         noto-fonts-emoji
         ttf-dejavu
 
+        # ----------------------------------------------------
         # GTK / themes
+        # ----------------------------------------------------
         gtk3
         gtk4
         papirus-icon-theme
 
+        # ----------------------------------------------------
         # System
+        # ----------------------------------------------------
         dbus
         dbus-broker
         polkit
 
-        # Optional functionality used by many scripts
+        # ----------------------------------------------------
+        # Utilities used by scripts
+        # ----------------------------------------------------
         imagemagick
         xdotool
         wmctrl
-        xdg-user-dirs
+        eza
+        bat
     )
 
-    sudo pacman -S --needed --noconfirm "${official_packages[@]}"
+    sudo pacman -S --needed --noconfirm \
+        "${official_packages[@]}"
 
     ok "Paquetes oficiales instalados"
+}
 
+# ------------------------------------------------------------
+# AUR packages
+# ------------------------------------------------------------
+
+install_aur_packages() {
     step "Instalando paquetes AUR"
+
+    if ! command -v paru >/dev/null 2>&1; then
+        die "paru no está disponible."
+    fi
 
     local aur_packages=(
         nerd-fonts
+        fzf-tab-git
     )
 
-    yay -S --needed --noconfirm "${aur_packages[@]}" || \
-        warn "Algunos paquetes AUR no pudieron instalarse; continuando."
+    paru -S --needed --noconfirm \
+        "${aur_packages[@]}"
 
-    ok "Paquetes AUR procesados"
+    ok "Paquetes AUR instalados"
 }
 
 # ------------------------------------------------------------
@@ -384,22 +468,38 @@ prepare_directories() {
         "$STATE_DIR" \
         "$HOME/.local/share/applications" \
         "$HOME/.local/share/fonts" \
-        "$HOME/.cache" \
-        "$HOME/Pictures" \
-        "$HOME/Pictures/wallpapers" \
-        "$HOME/Pictures/screenshots" \
+        "$HOME/.cache"
+
+    # --------------------------------------------------------
+    # XDG user directories
+    # --------------------------------------------------------
+
+    xdg-user-dirs-update >/dev/null 2>&1 || true
+
+    local pictures_dir
+
+    pictures_dir="$(xdg-user-dir PICTURES 2>/dev/null || true)"
+
+    if [[ -z "$pictures_dir" || "$pictures_dir" == "$HOME" ]]; then
+        pictures_dir="$HOME/Pictures"
+    fi
+
+    mkdir -p \
+        "$pictures_dir" \
+        "$pictures_dir/Wallpapers" \
+        "$pictures_dir/screenshots"
+
+    mkdir -p \
         "$HOME/Downloads" \
         "$HOME/Documents" \
         "$HOME/Videos" \
         "$HOME/Music"
 
-    xdg-user-dirs-update >/dev/null 2>&1 || true
-
     ok "Directorios preparados"
 }
 
 # ------------------------------------------------------------
-# Copy configuration
+# Configuration
 # ------------------------------------------------------------
 
 copy_directory() {
@@ -410,7 +510,8 @@ copy_directory() {
 
     mkdir -p "$destination"
 
-    rsync -a --delete \
+    rsync -a \
+        --delete \
         "$source/" \
         "$destination/"
 }
@@ -422,7 +523,10 @@ copy_file() {
     [[ -f "$source" ]] || return 0
 
     mkdir -p "$(dirname "$destination")"
-    install -m 0644 "$source" "$destination"
+
+    install -m 0644 \
+        "$source" \
+        "$destination"
 }
 
 install_dotfiles() {
@@ -433,12 +537,24 @@ install_dotfiles() {
     # --------------------------------------------------------
 
     if [[ -d "$SCRIPT_DIR/config" ]]; then
+
         while IFS= read -r -d '' source; do
+
             local name
             name="$(basename "$source")"
 
-            copy_directory "$source" "$CONFIG_DIR/$name"
-        done < <(find "$SCRIPT_DIR/config" -mindepth 1 -maxdepth 1 -type d -print0)
+            copy_directory \
+                "$source" \
+                "$CONFIG_DIR/$name"
+
+        done < <(
+            find "$SCRIPT_DIR/config" \
+                -mindepth 1 \
+                -maxdepth 1 \
+                -type d \
+                -print0
+        )
+
     fi
 
     # --------------------------------------------------------
@@ -446,29 +562,167 @@ install_dotfiles() {
     # --------------------------------------------------------
 
     if [[ -d "$SCRIPT_DIR/home" ]]; then
+
         while IFS= read -r -d '' source; do
+
             local name
             name="$(basename "$source")"
 
-            copy_file "$source" "$HOME_DIR/$name"
-        done < <(find "$SCRIPT_DIR/home" -mindepth 1 -maxdepth 1 -type f -print0)
+            copy_file \
+                "$source" \
+                "$HOME_DIR/$name"
+
+        done < <(
+            find "$SCRIPT_DIR/home" \
+                -mindepth 1 \
+                -maxdepth 1 \
+                -type f \
+                -print0
+        )
+
     fi
 
     # --------------------------------------------------------
-    # misc/*
+    # misc/bin/*
     # --------------------------------------------------------
 
     if [[ -d "$SCRIPT_DIR/misc/bin" ]]; then
-        rsync -a "$SCRIPT_DIR/misc/bin/" "$LOCAL_BIN/"
+
+        rsync -a \
+            "$SCRIPT_DIR/misc/bin/" \
+            "$LOCAL_BIN/"
+
     fi
 
+    # --------------------------------------------------------
+    # misc/applications/*
+    # --------------------------------------------------------
+
     if [[ -d "$SCRIPT_DIR/misc/applications" ]]; then
+
         rsync -a \
             "$SCRIPT_DIR/misc/applications/" \
             "$HOME/.local/share/applications/"
+
     fi
 
     ok "Configuración copiada"
+}
+
+# ------------------------------------------------------------
+# Wallpapers
+# ------------------------------------------------------------
+
+install_wallpapers() {
+    step "Instalando wallpapers"
+
+    local wallpaper_source="$SCRIPT_DIR/Wallpapers"
+
+    if [[ ! -d "$wallpaper_source" ]]; then
+        warn "No existe la carpeta Wallpapers en el repositorio."
+        warn "Se continuará sin instalar wallpapers."
+        return
+    fi
+
+    # --------------------------------------------------------
+    # Detect the user's real Pictures directory.
+    # Works with:
+    #
+    # ~/Pictures
+    # ~/Imágenes
+    # ~/Bilder
+    # etc.
+    # --------------------------------------------------------
+
+    local pictures_dir
+
+    pictures_dir="$(xdg-user-dir PICTURES 2>/dev/null || true)"
+
+    if [[ -z "$pictures_dir" || "$pictures_dir" == "$HOME" ]]; then
+        pictures_dir="$HOME/Pictures"
+    fi
+
+    local wallpaper_dir="$pictures_dir/Wallpapers"
+
+    mkdir -p "$wallpaper_dir"
+
+    # --------------------------------------------------------
+    # Copy wallpapers.
+    # Existing files are kept.
+    # --------------------------------------------------------
+
+    rsync -av \
+        "$wallpaper_source/" \
+        "$wallpaper_dir/"
+
+    ok "Wallpapers instalados en:"
+    printf '     %s\n' "$wallpaper_dir"
+
+    # --------------------------------------------------------
+    # Stable path for scripts/configuration.
+    # --------------------------------------------------------
+
+    mkdir -p "$HOME/.local/share/techogr-bspwm"
+
+    ln -sfn \
+        "$wallpaper_dir" \
+        "$HOME/.local/share/techogr-bspwm/Wallpapers"
+
+    ok "Ruta estable de wallpapers creada"
+}
+
+# ------------------------------------------------------------
+# Default wallpaper
+# ------------------------------------------------------------
+
+configure_default_wallpaper() {
+    step "Configurando wallpaper predeterminado"
+
+    local pictures_dir
+
+    pictures_dir="$(xdg-user-dir PICTURES 2>/dev/null || true)"
+
+    if [[ -z "$pictures_dir" || "$pictures_dir" == "$HOME" ]]; then
+        pictures_dir="$HOME/Pictures"
+    fi
+
+    local wallpaper_dir="$pictures_dir/Wallpapers"
+
+    if [[ ! -d "$wallpaper_dir" ]]; then
+        warn "No existe $wallpaper_dir"
+        return
+    fi
+
+    local wallpaper=""
+
+    while IFS= read -r -d '' file; do
+        wallpaper="$file"
+        break
+    done < <(
+        find "$wallpaper_dir" \
+            -type f \
+            \( \
+                -iname "*.jpg" \
+                -o -iname "*.jpeg" \
+                -o -iname "*.png" \
+                -o -iname "*.webp" \
+            \) \
+            -print0 \
+            2>/dev/null
+    )
+
+    if [[ -z "$wallpaper" ]]; then
+        warn "No se encontraron imágenes en Wallpapers."
+        return
+    fi
+
+    mkdir -p "$HOME/.config/techogr"
+
+    printf '%s\n' "$wallpaper" \
+        > "$HOME/.config/techogr/default-wallpaper"
+
+    ok "Wallpaper predeterminado:"
+    printf '     %s\n' "$wallpaper"
 }
 
 # ------------------------------------------------------------
@@ -479,17 +733,20 @@ fix_permissions() {
     step "Corrigiendo permisos"
 
     # BSPWM
-    [[ -f "$CONFIG_DIR/bspwm/bspwmrc" ]] && \
+    if [[ -f "$CONFIG_DIR/bspwm/bspwmrc" ]]; then
         chmod +x "$CONFIG_DIR/bspwm/bspwmrc"
+    fi
 
-    # All BSPWM scripts
+    # BSPWM scripts
     if [[ -d "$CONFIG_DIR/bspwm/bin" ]]; then
+
         find "$CONFIG_DIR/bspwm/bin" \
             -type f \
             -exec chmod +x {} \;
+
     fi
 
-    # Other configuration scripts
+    # Other shell/python scripts
     for directory in \
         "$CONFIG_DIR/polybar" \
         "$CONFIG_DIR/eww" \
@@ -498,29 +755,41 @@ fix_permissions() {
         "$CONFIG_DIR/sxhkd"; do
 
         if [[ -d "$directory" ]]; then
+
             find "$directory" \
                 -type f \
-                \( -name "*.sh" -o -name "*.py" \) \
-                -exec chmod +x {} \; 2>/dev/null || true
+                \( \
+                    -name "*.sh" \
+                    -o -name "*.py" \
+                \) \
+                -exec chmod +x {} \; \
+                2>/dev/null || true
+
         fi
+
     done
 
     # Local binaries
     if [[ -d "$LOCAL_BIN" ]]; then
+
         find "$LOCAL_BIN" \
             -type f \
             -exec chmod +x {} \;
+
     fi
 
-    # xinit files
-    [[ -f "$HOME/.xinitrc" ]] && chmod +x "$HOME/.xinitrc"
-    [[ -f "$HOME/.xprofile" ]] && chmod +x "$HOME/.xprofile"
+    # X session files
+    [[ -f "$HOME/.xinitrc" ]] && \
+        chmod +x "$HOME/.xinitrc"
+
+    [[ -f "$HOME/.xprofile" ]] && \
+        chmod +x "$HOME/.xprofile"
 
     ok "Permisos corregidos"
 }
 
 # ------------------------------------------------------------
-# Safe X session
+# X session
 # ------------------------------------------------------------
 
 install_xsession() {
@@ -533,13 +802,21 @@ install_xsession() {
 # TechOGR BSPWM X11 Session
 # ============================================================
 
-# User environment
 export XDG_CURRENT_DESKTOP="BSPWM"
 export XDG_SESSION_DESKTOP="bspwm"
 export XDG_SESSION_TYPE="x11"
 export DESKTOP_SESSION="bspwm"
 
-# D-Bus
+# ------------------------------------------------------------
+# User PATH
+# ------------------------------------------------------------
+
+export PATH="$HOME/.local/bin:$PATH"
+
+# ------------------------------------------------------------
+# D-Bus environment
+# ------------------------------------------------------------
+
 if command -v dbus-update-activation-environment >/dev/null 2>&1; then
     dbus-update-activation-environment --systemd \
         DISPLAY \
@@ -551,33 +828,40 @@ if command -v dbus-update-activation-environment >/dev/null 2>&1; then
         >/dev/null 2>&1 || true
 fi
 
-# Start BSPWM.
-# IMPORTANT:
-# Do not launch polybar/picom/eww/etc. here.
+# ------------------------------------------------------------
+# Start BSPWM
+#
+# Do NOT start polybar, picom, eww, sxhkd, etc. here.
 # bspwmrc controls the graphical environment.
+# ------------------------------------------------------------
+
 exec bspwm
 EOF
 
     chmod +x "$HOME/.xinitrc"
 
-    # .xprofile is intentionally lightweight.
+    # --------------------------------------------------------
+    # .xprofile
+    # --------------------------------------------------------
+
     cat > "$HOME/.xprofile" <<'EOF'
 #!/bin/sh
+
+# ============================================================
+# TechOGR BSPWM X11 Environment
+# ============================================================
 
 export XDG_CURRENT_DESKTOP="BSPWM"
 export XDG_SESSION_DESKTOP="bspwm"
 export XDG_SESSION_TYPE="x11"
 
-# User PATH
 export PATH="$HOME/.local/bin:$PATH"
 
-# GTK
 export GTK_USE_PORTAL=0
 
-# Cursor
 export XCURSOR_SIZE="${XCURSOR_SIZE:-24}"
 
-# Do not start bspwm from here.
+# Do not start bspwm here.
 # The display manager or .xinitrc starts the session.
 EOF
 
@@ -608,7 +892,7 @@ DesktopNames=BSPWM
 X-GDM-SessionRegisters=true
 EOF
 
-    ok "Sesión BSPWM registrada en /usr/share/xsessions/"
+    ok "Sesión BSPWM registrada"
 }
 
 # ------------------------------------------------------------
@@ -621,11 +905,15 @@ install_safe_launcher() {
     cat > "$LOCAL_BIN/start-bspwm" <<'EOF'
 #!/bin/sh
 
-# TechOGR BSPWM launcher
+# ============================================================
+# TechOGR BSPWM Launcher
+# ============================================================
 
 export XDG_CURRENT_DESKTOP="BSPWM"
 export XDG_SESSION_DESKTOP="bspwm"
 export XDG_SESSION_TYPE="x11"
+
+export PATH="$HOME/.local/bin:$PATH"
 
 exec bspwm
 EOF
@@ -642,39 +930,35 @@ EOF
 install_monitor_helper() {
     step "Instalando detector de monitores"
 
-    mkdir -p "$LOCAL_BIN"
-
     cat > "$LOCAL_BIN/techogr-monitor-setup" <<'EOF'
 #!/usr/bin/env bash
 
 # ============================================================
-# TechOGR automatic monitor setup
+# TechOGR Automatic Monitor Setup
 # ============================================================
 
 set -u
 
 command -v xrandr >/dev/null 2>&1 || exit 0
 
-# Do not fail the BSPWM session if xrandr is unavailable.
 xrandr >/dev/null 2>&1 || exit 0
 
-# Find connected outputs.
 mapfile -t outputs < <(
     xrandr --query |
-    awk '$2 == "connected" {print $1}'
+        awk '$2 == "connected" {print $1}'
 )
 
 ((${#outputs[@]} > 0)) || exit 0
 
-# If one monitor is present, keep the current X configuration.
-# This avoids dangerous hardcoded output names such as Virtual-1.
+# One monitor:
+# keep the configuration supplied by X.
 if ((${#outputs[@]} == 1)); then
     exit 0
 fi
 
 # Multiple monitors:
-# xrandr is left untouched unless an explicit user layout exists.
-# BSPWM itself will handle desktops/monitors.
+# Do not force a hardcoded output such as Virtual-1.
+# BSPWM can handle the monitors without modifying Xrandr.
 exit 0
 EOF
 
@@ -684,7 +968,7 @@ EOF
 }
 
 # ------------------------------------------------------------
-# BSPWM dependency checker
+# BSPWM file validation
 # ------------------------------------------------------------
 
 check_bspwm_files() {
@@ -698,33 +982,45 @@ check_bspwm_files() {
     )
 
     for file in "${required[@]}"; do
+
         if [[ -f "$file" ]]; then
             ok "$(basename "$file")"
         else
             warn "Falta: $file"
             missing=1
         fi
+
     done
 
     if [[ -d "$CONFIG_DIR/bspwm/bin" ]]; then
+
         while IFS= read -r -d '' file; do
+
             if [[ ! -x "$file" ]]; then
+
                 warn "Script sin permiso de ejecución: $file"
+
                 chmod +x "$file" || true
+
             fi
-        done < <(find "$CONFIG_DIR/bspwm/bin" -type f -print0)
+
+        done < <(
+            find "$CONFIG_DIR/bspwm/bin" \
+                -type f \
+                -print0
+        )
+
     fi
 
     if ((missing)); then
         warn "Hay archivos BSPWM ausentes."
-        warn "El sistema continuará, pero revisa el contenido del repositorio."
     else
         ok "Archivos principales de BSPWM correctos"
     fi
 }
 
 # ------------------------------------------------------------
-# Validate commands used by BSPWM
+# Command validation
 # ------------------------------------------------------------
 
 check_commands() {
@@ -736,28 +1032,37 @@ check_commands() {
         xrandr
         xsetroot
         xprop
+        polybar
+        picom
+        rofi
+        kitty
+        zsh
+        fzf
+        paru
     )
 
     local failed=0
 
     for command in "${commands[@]}"; do
+
         if command -v "$command" >/dev/null 2>&1; then
             ok "$command"
         else
             warn "$command no encontrado"
             failed=1
         fi
+
     done
 
     if ((failed)); then
         warn "Faltan algunos comandos."
     else
-        ok "Stack X11/BSPWM validado"
+        ok "Stack BSPWM validado"
     fi
 }
 
 # ------------------------------------------------------------
-# Check bspwmrc syntax
+# bspwmrc syntax
 # ------------------------------------------------------------
 
 check_bspwmrc_syntax() {
@@ -774,7 +1079,7 @@ check_bspwmrc_syntax() {
         ok "Sintaxis de bspwmrc correcta"
     else
         warn "bspwmrc contiene errores de sintaxis."
-        warn "No se modificará automáticamente para evitar romper tu configuración."
+        warn "No se modificará automáticamente."
     fi
 }
 
@@ -787,93 +1092,236 @@ setup_user_services() {
 
     mkdir -p "$HOME/.config/systemd/user"
 
-    # Make sure the user systemd instance can receive environment.
     if command -v systemctl >/dev/null 2>&1; then
-        systemctl --user daemon-reload >/dev/null 2>&1 || true
+        systemctl --user daemon-reload \
+            >/dev/null 2>&1 || true
     fi
 
     ok "Servicios de usuario preparados"
 }
 
 # ------------------------------------------------------------
-# Shell
+# ZSH
 # ------------------------------------------------------------
 
 configure_shell() {
     step "Configurando ZSH"
 
-    if command -v zsh >/dev/null 2>&1; then
-        if [[ "${SHELL:-}" != "$(command -v zsh)" ]]; then
-            info "Cambiando shell predeterminado a zsh..."
+    if ! command -v zsh >/dev/null 2>&1; then
+        warn "ZSH no está disponible."
+        return
+    fi
 
-            if chsh -s "$(command -v zsh)" "$USER" >/dev/null 2>&1; then
-                ok "ZSH configurado"
-            else
-                warn "No se pudo cambiar automáticamente el shell."
-                warn "Puedes hacerlo después con: chsh -s \$(which zsh)"
-            fi
+    local zsh_path
+    zsh_path="$(command -v zsh)"
+
+    if [[ "${SHELL:-}" != "$zsh_path" ]]; then
+
+        info "Cambiando shell predeterminado a ZSH..."
+
+        if chsh -s "$zsh_path" "$USER" >/dev/null 2>&1; then
+            ok "ZSH configurado"
         else
-            ok "ZSH ya es el shell predeterminado"
+            warn "No se pudo cambiar automáticamente el shell."
+            warn "Puedes hacerlo con: chsh -s $(which zsh)"
         fi
+
+    else
+        ok "ZSH ya es el shell predeterminado"
     fi
 }
 
 # ------------------------------------------------------------
-# GTK / user dirs
+# fzf-tab
+# ------------------------------------------------------------
+
+configure_fzf_tab() {
+    step "Configurando fzf-tab para ZSH"
+
+    local zshrc="$HOME/.zshrc"
+
+    if [[ ! -f "$zshrc" ]]; then
+        warn "No existe $zshrc"
+        return
+    fi
+
+    # --------------------------------------------------------
+    # Remove previously generated TechOGR fzf-tab block.
+    # This makes the installer idempotent.
+    # --------------------------------------------------------
+
+    local temp_file
+    temp_file="$(mktemp)"
+
+    awk '
+        BEGIN { skip=0 }
+
+        /^# >>> TechOGR fzf-tab >>>$/ {
+            skip=1
+            next
+        }
+
+        /^# <<< TechOGR fzf-tab <<<$ / {
+            skip=0
+            next
+        }
+
+        !skip {
+            print
+        }
+    ' "$zshrc" > "$temp_file"
+
+    mv "$temp_file" "$zshrc"
+
+    # --------------------------------------------------------
+    # Add configuration.
+    # --------------------------------------------------------
+
+    cat >> "$zshrc" <<'EOF'
+
+# >>> TechOGR fzf-tab >>>
+# ============================================================
+# fzf-tab
+# ============================================================
+
+# fzf-tab installed from AUR.
+# Load it when the plugin file exists.
+
+if [[ -f /usr/share/zsh/plugins/fzf-tab-git/fzf-tab.plugin.zsh ]]; then
+    source /usr/share/zsh/plugins/fzf-tab-git/fzf-tab.plugin.zsh
+elif [[ -f /usr/share/zsh/plugins/fzf-tab/fzf-tab.plugin.zsh ]]; then
+    source /usr/share/zsh/plugins/fzf-tab/fzf-tab.plugin.zsh
+elif [[ -f /usr/share/zsh/site-functions/fzf-tab.plugin.zsh ]]; then
+    source /usr/share/zsh/site-functions/fzf-tab.plugin.zsh
+fi
+
+# ------------------------------------------------------------
+# Completion style
+# ------------------------------------------------------------
+
+zstyle ':completion:*' menu no
+
+zstyle ':fzf-tab:*' fzf-flags \
+    '--height=40%' \
+    '--layout=reverse' \
+    '--border=rounded'
+
+# ------------------------------------------------------------
+# Directory preview
+# ------------------------------------------------------------
+
+if (( $+commands[eza] )); then
+
+    zstyle ':fzf-tab:complete:cd:*' fzf-preview \
+        'eza --tree --level=2 --color=always --icons "$realpath"'
+
+    zstyle ':fzf-tab:complete:*:*' fzf-preview \
+        'if [[ -d "$realpath" ]]; then
+            eza --tree --level=2 --color=always --icons "$realpath"
+        elif [[ -f "$realpath" ]] && (( $+commands[bat] )); then
+            bat --color=always --style=numbers "$realpath"
+        fi'
+
+fi
+
+# <<< TechOGR fzf-tab <<<
+EOF
+
+    ok "fzf-tab configurado"
+}
+
+# ------------------------------------------------------------
+# Environment
 # ------------------------------------------------------------
 
 configure_environment() {
     step "Configurando entorno"
 
-    xdg-user-dirs-update >/dev/null 2>&1 || true
+    xdg-user-dirs-update \
+        >/dev/null 2>&1 || true
 
-    # Make sure local binaries have priority.
     if [[ -f "$HOME/.zshrc" ]]; then
-        if ! grep -qF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.zshrc"; then
+
+        if ! grep -qF \
+            'export PATH="$HOME/.local/bin:$PATH"' \
+            "$HOME/.zshrc"; then
+
             printf '\n# TechOGR local binaries\nexport PATH="$HOME/.local/bin:$PATH"\n' \
                 >> "$HOME/.zshrc"
+
         fi
+
     fi
 
     ok "Entorno configurado"
 }
 
 # ------------------------------------------------------------
-# Installation report
+# Final report
 # ------------------------------------------------------------
 
 print_report() {
     printf '\n'
+
     line
 
-    printf '%b\n' "${GREEN}${BOLD}  INSTALACIÓN COMPLETADA${RESET}"
-    printf '\n'
-
-    printf '  %b %s\n' "${GREEN}✓${RESET}" "BSPWM instalado"
-    printf '  %b %s\n' "${GREEN}✓${RESET}" "SXHKD instalado"
-    printf '  %b %s\n' "${GREEN}✓${RESET}" "Polybar instalado"
-    printf '  %b %s\n' "${GREEN}✓${RESET}" "Picom instalado"
-    printf '  %b %s\n' "${GREEN}✓${RESET}" "Rofi instalado"
-    printf '  %b %s\n' "${GREEN}✓${RESET}" "Xorg/Xinit instalado"
-    printf '  %b %s\n' "${GREEN}✓${RESET}" "Sesión BSPWM registrada"
-    printf '  %b %s\n' "${GREEN}✓${RESET}" ".xinitrc configurado"
-    printf '  %b %s\n' "${GREEN}✓${RESET}" ".xprofile configurado"
-    printf '  %b %s\n' "${GREEN}✓${RESET}" "Permisos corregidos"
-    printf '  %b %s\n' "${GREEN}✓${RESET}" "Configuración validada"
+    printf '%b\n' \
+        "${GREEN}${BOLD}  INSTALACIÓN COMPLETADA${RESET}"
 
     printf '\n'
-    printf '%b\n' "${CYAN}  Backup:${RESET} $BACKUP_DIR"
-    printf '%b\n' "${CYAN}  Log:${RESET}    $LOG_FILE"
+
+    printf '  %b %s\n' "${GREEN}✓${RESET}" "BSPWM"
+    printf '  %b %s\n' "${GREEN}✓${RESET}" "SXHKD"
+    printf '  %b %s\n' "${GREEN}✓${RESET}" "Polybar"
+    printf '  %b %s\n' "${GREEN}✓${RESET}" "Picom"
+    printf '  %b %s\n' "${GREEN}✓${RESET}" "Rofi"
+    printf '  %b %s\n' "${GREEN}✓${RESET}" "Kitty"
+    printf '  %b %s\n' "${GREEN}✓${RESET}" "Xorg/Xinit"
+    printf '  %b %s\n' "${GREEN}✓${RESET}" "ZSH"
+    printf '  %b %s\n' "${GREEN}✓${RESET}" "fzf"
+    printf '  %b %s\n' "${GREEN}✓${RESET}" "fzf-tab"
+    printf '  %b %s\n' "${GREEN}✓${RESET}" "yay"
+    printf '  %b %s\n' "${GREEN}✓${RESET}" "paru"
+    printf '  %b %s\n' "${GREEN}✓${RESET}" "Sesión BSPWM"
+    printf '  %b %s\n' "${GREEN}✓${RESET}" "Wallpapers"
+    printf '  %b %s\n' "${GREEN}✓${RESET}" "Permisos"
+    printf '  %b %s\n' "${GREEN}✓${RESET}" "Validaciones"
 
     printf '\n'
+
+    local pictures_dir
+    pictures_dir="$(xdg-user-dir PICTURES 2>/dev/null || true)"
+
+    if [[ -z "$pictures_dir" || "$pictures_dir" == "$HOME" ]]; then
+        pictures_dir="$HOME/Pictures"
+    fi
+
+    printf '%b\n' \
+        "${CYAN}  Wallpapers:${RESET} $pictures_dir/Wallpapers"
+
+    printf '%b\n' \
+        "${CYAN}  Backup:${RESET}     $BACKUP_DIR"
+
+    printf '%b\n' \
+        "${CYAN}  Log:${RESET}        $LOG_FILE"
+
+    printf '\n'
+
     line
 
-    printf '\n%b\n' "${WHITE}${BOLD}  SIGUIENTE PASO${RESET}"
+    printf '\n%b\n' \
+        "${WHITE}${BOLD}  SIGUIENTE PASO${RESET}"
+
     printf '\n'
+
     printf '  Cierra sesión y selecciona:\n\n'
-    printf '      %bBSPWM%b\n\n' "${MAGENTA}${BOLD}" "${RESET}"
 
-    printf '%b\n\n' "${YELLOW}  Si utilizas startx, ejecuta: startx${RESET}"
+    printf '      %bBSPWM%b\n\n' \
+        "${MAGENTA}${BOLD}" \
+        "${RESET}"
+
+    printf '%b\n\n' \
+        "${YELLOW}  Si utilizas startx: startx${RESET}"
 }
 
 # ------------------------------------------------------------
@@ -881,38 +1329,95 @@ print_report() {
 # ------------------------------------------------------------
 
 main() {
+
     title
 
     info "Repositorio: TechOGR/bspwm_dotfiles_arch"
     info "Instalador: Professional BSPWM Installer"
     info "Backup: habilitado"
+    info "Wallpapers: habilitados"
+    info "Paru: habilitado"
+    info "fzf-tab: habilitado"
     info "Modo: seguro/idempotente"
+
+    # --------------------------------------------------------
+    # System
+    # --------------------------------------------------------
 
     check_arch
     check_network
 
+    # --------------------------------------------------------
+    # Package managers
+    # --------------------------------------------------------
+
     install_base_tools
+
     install_yay
+    install_paru
+
+    # --------------------------------------------------------
+    # Packages
+    # --------------------------------------------------------
+
     install_packages
+    install_aur_packages
+
+    # --------------------------------------------------------
+    # Backup + directories
+    # --------------------------------------------------------
 
     create_backup
     prepare_directories
+
+    # --------------------------------------------------------
+    # Dotfiles
+    # --------------------------------------------------------
+
     install_dotfiles
+
+    # --------------------------------------------------------
+    # Wallpapers
+    # --------------------------------------------------------
+
+    install_wallpapers
+    configure_default_wallpaper
+
+    # --------------------------------------------------------
+    # X11 / BSPWM session
+    # --------------------------------------------------------
 
     install_xsession
     install_desktop_session
     install_safe_launcher
     install_monitor_helper
 
+    # --------------------------------------------------------
+    # Permissions
+    # --------------------------------------------------------
+
     fix_permissions
+
+    # --------------------------------------------------------
+    # Validation
+    # --------------------------------------------------------
 
     check_bspwm_files
     check_commands
     check_bspwmrc_syntax
 
+    # --------------------------------------------------------
+    # Services / shell
+    # --------------------------------------------------------
+
     setup_user_services
     configure_shell
+    configure_fzf_tab
     configure_environment
+
+    # --------------------------------------------------------
+    # Done
+    # --------------------------------------------------------
 
     print_report
 }
