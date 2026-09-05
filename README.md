@@ -7,33 +7,6 @@ Mi configuración personalizada para el gestor de ventanas **BSPWM**, optimizada
 ## 📦 Paquetes y Dependencias
 
 El script de instalación automatizado se encargará de instalar todo lo necesario. Aquí tienes la lista de lo que incluye:
-
-### Gestores de Ventanas y Atajos
-* **bspwm**: El gestor de ventanas en mosaico (Tiling Window Manager).
-* **sxhkd**: El demonio encargado de gestionar todos los atajos de teclado.
-
-### Entorno y Utilidades Visuales
-* **polybar**: La barra de estado superior/inferior altamente personalizable.
-* **rofi**: El lanzador de aplicaciones y menú de búsqueda.
-* **jgmenu**: El menú que aparece al hacer clic derecho en el escritorio.
-* **dunst**: El servidor de notificaciones ligero.
-* **picom**: El compositor para añadir transparencias, sombras y animaciones.
-* **feh**: Utilidad para gestionar el fondo de pantalla.
-
-### Terminal y Consola
-* **kitty**: El emulador de terminal rápido y acelerado por GPU.
-* **zsh**: La shell interactiva avanzada.
-* **neovim**: El editor de texto moderno basado en Vim.
-* **ranger**: El explorador de archivos en terminal.
-
-### Herramientas del Sistema
-* **thunar**: El explorador de archivos gráfico (entorno GTK).
-* **ueberzug**: Para permitir la previsualización de imágenes dentro de ranger.
-* **scrot**: Para realizar capturas de pantalla de manera nativa.
-* **xclip**: Herramientas para interactuar con el portapapeles del sistema.
-* **brightnessctl**: Control del brillo de la pantalla desde el teclado.
-* **xorg-xsetroot** y **libnotify**: Dependencias esenciales del sistema y avisos.
-
 ---
 
 ## 🚀 Guía de Instalación
@@ -43,7 +16,7 @@ El proceso está completamente automatizado a través de un script seguro. Sigue
 ### 1. Clonar el repositorio
 Abre tu terminal y clona este repositorio en tu máquina:
 ```bash
-git clone https://github.com
+git clone https://github.com/TechOGR/bspwm_dotfiles_arch.git
 cd bspwm_dotfiles_arch
 ```
 
