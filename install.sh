@@ -172,28 +172,39 @@ install_base_tools() {
 }
 
 # ------------------------------------------------------------
-# PARU
+# AUR — compilación directa, SIN AUR helper persistente
 #
-# FIX: se elimina install_yay(). Compilaba yay-bin desde AUR
-# pero nunca se usaba en el resto del script (solo paru se usa
-# en install_aur_packages), así que solo añadía tiempo de
-# compilación y una fuente extra de posibles fallos sin
-# ningún beneficio real.
+# FIX CRÍTICO (causa raíz de "libalpm.so.15: cannot open shared
+# object file"):
 #
-# NOTA: tu README actual todavía dice "instalar yay si no lo
-# tienes" — convendría actualizar ese texto a "paru", ya que
-# es lo que el script realmente usa.
+# yay y paru (incluidas sus variantes -bin) son binarios que se
+# ENLAZAN DINÁMICAMENTE contra libalpm.so. Ese enlace queda fijado
+# a la versión de pacman/libalpm que había en el sistema en el
+# momento de instalarlos. La primera vez que hagas un `pacman -Syu`
+# normal y pacman suba de versión (cosa que pasa tarde o temprano
+# en una rolling release), la libalpm.so vieja desaparece y el
+# binario de yay/paru queda roto para siempre con ese error exacto.
+# No es un fallo de instalación puntual: es un defecto estructural
+# de tener un AUR helper compilado viviendo en el sistema.
+#
+# SOLUCIÓN: no se instala ningún AUR helper. Los (pocos) paquetes
+# de AUR que realmente se necesitan se compilan directamente con
+# `makepkg`, igual que hace un helper por dentro. `makepkg` es un
+# script de shell que invoca a `pacman` como proceso aparte: NUNCA
+# se enlaza contra libalpm.so, así que este error deja de ser
+# posible sin importar cuántas veces actualices el sistema después.
 # ------------------------------------------------------------
 
-install_paru() {
-    step "Comprobando paru"
+build_aur_package() {
+    local pkg_name="$1"
+    local repo_url="$2"
 
-    if command -v paru >/dev/null 2>&1; then
-        ok "paru ya está instalado"
+    if pacman -Qi "$pkg_name" >/dev/null 2>&1; then
+        ok "$pkg_name ya está instalado"
         return
     fi
 
-    info "Instalando paru..."
+    info "Compilando $pkg_name desde AUR..."
 
     local tmp_dir
     tmp_dir="$(mktemp -d)"
@@ -201,35 +212,48 @@ install_paru() {
     (
         cd "$tmp_dir"
 
-        git clone --depth=1 \
-            https://aur.archlinux.org/paru-bin.git
+        git clone --depth=1 "$repo_url" "$pkg_name"
 
-        cd paru-bin
+        cd "$pkg_name"
 
         makepkg -si --noconfirm
     )
 
     rm -rf "$tmp_dir"
 
-    if command -v paru >/dev/null 2>&1; then
-        ok "paru instalado correctamente"
+    if pacman -Qi "$pkg_name" >/dev/null 2>&1; then
+        ok "$pkg_name instalado correctamente"
     else
-        die "No se pudo instalar paru."
+        die "No se pudo instalar $pkg_name desde AUR."
     fi
+}
+
+install_aur_extras() {
+    step "Instalando paquetes de AUR (compilación directa)"
+
+    # Único paquete que realmente necesitamos de AUR.
+    # Las Nerd Fonts ya no vienen de aquí: se instalan desde el
+    # repo oficial en install_packages() (ver nota allí).
+    build_aur_package "fzf-tab-git" "https://aur.archlinux.org/fzf-tab-git.git"
+
+    ok "Paquetes AUR instalados"
 }
 
 # ------------------------------------------------------------
 # Official packages
 #
-# FIX 1: se añaden las fuentes Nerd Font como paquetes explícitos
-# del repo oficial (extra), en vez de dejarlas en AUR bajo el
-# nombre ambiguo "nerd-fonts" (ver install_aur_packages más abajo
-# para el detalle del problema que esto causaba).
+# FIX: se añaden las fuentes Nerd Font como paquetes explícitos
+# del repo oficial "extra". El nombre "nerd-fonts" ya no resuelve
+# a un paquete único: en Arch es un GRUPO con varios paquetes que
+# "proveen" el mismo nombre virtual (p. ej. ttf-nerd-fonts-symbols
+# vs ttf-nerd-fonts-symbols-mono). Con --noconfirm no se cuelga,
+# pero resuelve el conflicto de forma arbitraria e instala solo un
+# paquete de símbolos sueltos, no las fuentes monoespaciadas
+# parcheadas que Polybar/Rofi necesitan para los íconos. Por eso
+# se piden explícitamente por nombre.
 #
-# FIX 2 (NUEVO): se añade "jgmenu". Tu propio README documenta
-# "Click Derecho en Escritorio -> Desplegar el menú de aplicaciones
-# (JGmenu)" como atajo, pero el paquete nunca se instalaba. Está
-# disponible en el repo oficial "extra", sin necesidad de AUR.
+# FIX: se añade "jgmenu". Está disponible en el repo oficial
+# "extra" y hace falta para el menú de clic derecho del escritorio.
 # ------------------------------------------------------------
 
 install_packages() {
@@ -320,11 +344,7 @@ install_packages() {
         btop
 
         # ----------------------------------------------------
-        # Fonts
-        #
-        # FIX: fuentes Nerd Font explícitas desde el repo oficial
-        # "extra", en lugar de instalarlas vía AUR bajo el nombre
-        # ambiguo "nerd-fonts" (ver nota en install_aur_packages).
+        # Fonts (repo oficial, sin pasar por AUR)
         # ----------------------------------------------------
         noto-fonts
         noto-fonts-emoji
@@ -361,39 +381,6 @@ install_packages() {
         "${official_packages[@]}"
 
     ok "Paquetes oficiales instalados"
-}
-
-# ------------------------------------------------------------
-# AUR packages
-#
-# FIX: se elimina "nerd-fonts" de este arreglo. Ese nombre ya
-# no resuelve a un paquete único: en los repos de Arch es un
-# GRUPO donde varios paquetes distintos "proveen" el mismo
-# nombre virtual "nerd-fonts" (p. ej. ttf-nerd-fonts-symbols vs
-# ttf-nerd-fonts-symbols-mono). Con --noconfirm, pacman/paru no
-# se cuelga, pero resuelve el conflicto de forma arbitraria e
-# instala solo un paquete de símbolos sueltos, NO las fuentes
-# monoespaciadas parcheadas (JetBrains Mono Nerd, FiraCode Nerd,
-# etc.) que tu Polybar/Rofi probablemente necesitan para los
-# íconos. Esas fuentes ahora se piden explícitamente en
-# install_packages(), desde el repo oficial, sin pasar por AUR.
-# ------------------------------------------------------------
-
-install_aur_packages() {
-    step "Instalando paquetes AUR"
-
-    if ! command -v paru >/dev/null 2>&1; then
-        die "paru no está disponible."
-    fi
-
-    local aur_packages=(
-        fzf-tab-git
-    )
-
-    paru -S --needed --noconfirm \
-        "${aur_packages[@]}"
-
-    ok "Paquetes AUR instalados"
 }
 
 # ------------------------------------------------------------
@@ -1024,10 +1011,10 @@ check_bspwm_files() {
 # ------------------------------------------------------------
 # Command validation
 #
-# FIX: se renombra la variable de bucle "command" a "cmd" para
-# no reutilizar el mismo nombre que el builtin de bash "command"
-# que se invoca justo debajo. Funcionalmente no rompía nada,
-# pero es un nombre confuso que conviene evitar.
+# FIX: se elimina "paru" de esta lista (ya no se instala ningún
+# AUR helper). Se renombró la variable de bucle "command" a "cmd"
+# para no chocar por nombre con el builtin "command" invocado
+# justo debajo.
 # ------------------------------------------------------------
 
 check_commands() {
@@ -1046,7 +1033,6 @@ check_commands() {
         kitty
         zsh
         fzf
-        paru
     )
 
     local failed=0
@@ -1110,10 +1096,6 @@ setup_user_services() {
 
 # ------------------------------------------------------------
 # ZSH
-#
-# FIX: se usa la variable ya resuelta $zsh_path en el mensaje
-# de ayuda en vez de volver a llamar a `which zsh`, que no
-# siempre está instalado en una base de Arch mínima.
 # ------------------------------------------------------------
 
 configure_shell() {
@@ -1153,13 +1135,11 @@ configure_shell() {
 #
 # Ese espacio hacía que el patrón NUNCA coincidiera con la
 # línea real del marcador de cierre (que no tiene espacio al
-# final). Efecto real: la primera vez que corrías el instalador
-# no pasaba nada raro, pero en la SEGUNDA ejecución (o cualquier
-# re-ejecución posterior), el awk entraba en modo "skip" al
-# encontrar el marcador de apertura y nunca lo desactivaba,
-# por lo que borraba en silencio TODO lo que tuvieras después
-# de ese bloque en tu .zshrc (alias, funciones, configuración
-# propia, etc.). Se corrige quitando el espacio sobrante.
+# final). En cualquier re-ejecución del instalador, el awk
+# entraba en modo "skip" al encontrar el marcador de apertura
+# y nunca lo desactivaba, borrando en silencio todo lo que
+# hubiera después de ese bloque en tu .zshrc. Corregido quitando
+# el espacio sobrante.
 # ------------------------------------------------------------
 
 configure_fzf_tab() {
@@ -1286,9 +1266,8 @@ configure_environment() {
 # ------------------------------------------------------------
 # Final report
 #
-# FIX: se quita la línea de "yay" del resumen, ya que install_yay
-# fue eliminado (ver nota en la sección PARU más arriba). Se añade
-# "JGmenu" ya que ahora sí se instala.
+# FIX: se quita "yay" y "paru" del resumen (ya no se instala
+# ningún AUR helper). Se añade "JGmenu".
 # ------------------------------------------------------------
 
 print_report() {
@@ -1312,7 +1291,6 @@ print_report() {
     printf '  %b %s\n' "${GREEN}✓${RESET}" "ZSH"
     printf '  %b %s\n' "${GREEN}✓${RESET}" "fzf"
     printf '  %b %s\n' "${GREEN}✓${RESET}" "fzf-tab"
-    printf '  %b %s\n' "${GREEN}✓${RESET}" "paru"
     printf '  %b %s\n' "${GREEN}✓${RESET}" "Sesión BSPWM"
     printf '  %b %s\n' "${GREEN}✓${RESET}" "Wallpapers"
     printf '  %b %s\n' "${GREEN}✓${RESET}" "Permisos"
@@ -1358,9 +1336,10 @@ print_report() {
 # ------------------------------------------------------------
 # Main
 #
-# FIX: se elimina la llamada a install_yay (función eliminada,
-# ver nota más arriba). El resto del orden de ejecución se
-# mantiene igual porque ya era correcto.
+# FIX: se eliminan install_yay e install_paru. En su lugar se
+# llama a install_aur_extras(), que compila directamente con
+# makepkg el único paquete de AUR necesario (fzf-tab-git), sin
+# dejar ningún AUR helper instalado en el sistema.
 # ------------------------------------------------------------
 
 main() {
@@ -1371,7 +1350,7 @@ main() {
     info "Instalador: Professional BSPWM Installer"
     info "Backup: habilitado"
     info "Wallpapers: habilitados"
-    info "Paru: habilitado"
+    info "AUR helper: ninguno (compilación directa con makepkg)"
     info "fzf-tab: habilitado"
     info "Modo: seguro/idempotente"
 
@@ -1383,19 +1362,17 @@ main() {
     check_network
 
     # --------------------------------------------------------
-    # Package managers
+    # Base tools
     # --------------------------------------------------------
 
     install_base_tools
-
-    install_paru
 
     # --------------------------------------------------------
     # Packages
     # --------------------------------------------------------
 
     install_packages
-    install_aur_packages
+    install_aur_extras
 
     # --------------------------------------------------------
     # Backup + directories
