@@ -1,89 +1,48 @@
 #!/usr/bin/env bash
 # ==============================================================================
-#  🛠️ TECHOGR BSPWM DOTFILES - ADVANCED SYSTEM INSTALLER
+#  🛠️ TECHOGR BSPWM DOTFILES - FULL SYSTEM & DISPLAY MANAGER INSTALLER
 # ==============================================================================
+#  Convierte una instalación CLI/Mínima en un entorno de escritorio completo.
 #  Compatible con: Arch Linux, CachyOS, EndeavourOS, Garuda, BlackArch, Manjaro, etc.
 #  Licencia: GPL-3.0
 # ==============================================================================
 
-# ------------------------------------------------------------------------------
-# 1. PARÁMETROS GLOBALES Y CONFIGURACIÓN DE SEGURIDAD
-# ------------------------------------------------------------------------------
 set -o pipefail
 
-SCRIPT_VERSION="2.5.0"
-REPO_NAME="TechOGR/bspwm_dotfiles_arch"
+# ------------------------------------------------------------------------------
+# 1. PARÁMETROS GLOBALES Y LOGGING
+# ------------------------------------------------------------------------------
+SCRIPT_VERSION="3.0.0"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_FILE="$HOME/.techogr_install.log"
 BACKUP_BASE_DIR="$HOME/.dotfiles_backup"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 TARGET_BACKUP="$BACKUP_BASE_DIR/backup_$TIMESTAMP"
 
-# Limpiar archivo de log previo
 echo "=== TechOGR BSPWM Installer Log - $(date) ===" > "$LOG_FILE"
 
 # ------------------------------------------------------------------------------
-# 2. PALETA DE COLORES ANSI Y GLIFOS
+# 2. COLORES Y GLIFOS
 # ------------------------------------------------------------------------------
 C_RESET="\e[0m"
 C_BOLD="\e[1m"
-C_DIM="\e[2m"
 C_RED="\e[31m"
 C_GREEN="\e[32m"
 C_YELLOW="\e[33m"
 C_BLUE="\e[34m"
 C_MAGENTA="\e[35m"
 C_CYAN="\e[36m"
-C_WHITE="\e[37m"
-C_BG_BLUE="\e[44m"
 
 ARROW="${C_CYAN}➜${C_RESET}"
 CHECK="${C_GREEN}✔${C_RESET}"
 CROSS="${C_RED}✖${C_RESET}"
 WARN="${C_YELLOW}⚠${C_RESET}"
-STAR="${C_MAGENTA}★${C_RESET}"
 
-# ------------------------------------------------------------------------------
-# 3. FUNCIONES DE INTERFAZ, SPINNER Y LOGGING
-# ------------------------------------------------------------------------------
-log_info() {
-    echo -e " ${ARROW} ${C_BOLD}$1${C_RESET}"
-    echo "[INFO] $(date +'%T') - $1" >> "$LOG_FILE"
-}
-
-log_success() {
-    echo -e " ${CHECK} ${C_GREEN}${C_BOLD}$1${C_RESET}"
-    echo "[SUCCESS] $(date +'%T') - $1" >> "$LOG_FILE"
-}
-
-log_warning() {
-    echo -e " ${WARN} ${C_YELLOW}${C_BOLD}$1${C_RESET}"
-    echo "[WARNING] $(date +'%T') - $1" >> "$LOG_FILE"
-}
-
-log_error() {
-    echo -e " ${CROSS} ${C_RED}${C_BOLD}$1${C_RESET}"
-    echo "[ERROR] $(date +'%T') - $1" >> "$LOG_FILE"
-}
-
-log_step() {
-    echo -e "\n${C_MAGENTA}${C_BOLD}:: $1${C_RESET}"
-    echo "==================== [STEP] $1 ====================" >> "$LOG_FILE"
-}
-
-spinner() {
-    local pid=$1
-    local delay=0.08
-    local spinstr='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
-    while kill -0 "$pid" 2>/dev/null; do
-        local temp=${spinstr#?}
-        printf " [%c]  " "$spinstr"
-        spinstr=$temp${spinstr%"$temp"}
-        sleep $delay
-        printf "\b\b\b\b\b\b"
-    done
-    printf "    \b\b\b\b"
-}
+log_info()    { echo -e " ${ARROW} ${C_BOLD}$1${C_RESET}"; echo "[INFO] $(date +'%T') - $1" >> "$LOG_FILE"; }
+log_success() { echo -e " ${CHECK} ${C_GREEN}${C_BOLD}$1${C_RESET}"; echo "[SUCCESS] $(date +'%T') - $1" >> "$LOG_FILE"; }
+log_warning() { echo -e " ${WARN} ${C_YELLOW}${C_BOLD}$1${C_RESET}"; echo "[WARNING] $(date +'%T') - $1" >> "$LOG_FILE"; }
+log_error()   { echo -e " ${CROSS} ${C_RED}${C_BOLD}$1${C_RESET}"; echo "[ERROR] $(date +'%T') - $1" >> "$LOG_FILE"; }
+log_step()    { echo -e "\n${C_MAGENTA}${C_BOLD}:: $1${C_RESET}"; echo "========== [STEP] $1 ==========" >> "$LOG_FILE"; }
 
 print_banner() {
     clear
@@ -97,42 +56,38 @@ print_banner() {
      ╚═╝   ╚══════╝ ╚═════╝╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝
 EOF
     echo -e "${C_BLUE}  ┌─────────────────────────────────────────────────────────────┐"
-    echo -e "  │      BSPWM Professional Environment Automated Installer     │"
-    echo -e "  │            Author: TechOGR  |  Architecture: x86_64         │"
-    echo -e "  │      Target: Arch Linux, CachyOS, Endeavour, Garuda, etc.   │"
+    echo -e "  │      Full Desktop & Display Manager Automated Installer     │"
+    echo -e "  │       Transforma sistemas mínimos (CLI) en BSPWM puro       │"
+    echo -e "  │        Compatible con CachyOS, Arch, EndeavourOS, etc.      │"
     echo -e "  └─────────────────────────────────────────────────────────────┘${C_RESET}\n"
 }
 
 # ------------------------------------------------------------------------------
-# 4. GESTIÓN DE PRIVILEGIOS Y SEÑALES DE SALIDA
+# 3. CONTROL DE PRIVILEGIOS Y LIMPIEZA
 # ------------------------------------------------------------------------------
-cleanup_and_exit() {
-    local exit_code=$?
-    if [ $exit_code -ne 0 ]; then
-        echo ""
-        log_error "La instalación fue cancelada o sufrió un error crítico (Código: $exit_code)."
-        log_info "Consulta los detalles en el archivo de registro: ${C_CYAN}$LOG_FILE${C_RESET}"
-    fi
-    # Matar el bucle que mantiene vivo a sudo si existe
+cleanup() {
+    local code=$?
     if [ -n "$SUDO_PID" ] && kill -0 "$SUDO_PID" 2>/dev/null; then
         kill "$SUDO_PID" 2>/dev/null || true
     fi
-    exit $exit_code
+    if [ $code -ne 0 ]; then
+        echo ""
+        log_error "Instalación interrumpida (Código: $code). Revisa el registro en: $LOG_FILE"
+    fi
 }
-trap cleanup_and_exit EXIT INT TERM
+trap cleanup EXIT INT TERM
 
 check_privileges() {
     if [ "$EUID" -eq 0 ]; then
-        echo -e "${C_RED}${C_BOLD}Error Crítico:${C_RESET} Este script ${C_BOLD}NO${C_RESET} debe ejecutarse como root ni usando 'sudo ./install.sh'."
-        echo -e "Ejecútalo con tu usuario normal: ${C_CYAN}./install.sh${C_RESET}"
-        echo -e "El instalador te solicitará la contraseña de administrador cuando sea estrictamente necesario."
+        echo -e "${C_RED}${C_BOLD}Error:${C_RESET} No ejecutes este script como root o usando sudo."
+        echo -e "Ejecútalo como usuario normal: ${C_CYAN}./install.sh${C_RESET}"
         exit 1
     fi
 
-    log_info "Solicitando privilegios de superusuario para tareas de administración..."
-    sudo -v || { log_error "Autenticación fallida con sudo."; exit 1; }
+    log_info "Solicitando credenciales de administrador..."
+    sudo -v || { log_error "No se pudieron obtener permisos sudo."; exit 1; }
 
-    # Mantener el token de sudo activo en segundo plano
+    # Mantener vivo sudo
     while true; do
         sudo -n true
         sleep 50
@@ -142,273 +97,375 @@ check_privileges() {
 }
 
 # ------------------------------------------------------------------------------
-# 5. VALIDACIÓN DEL SISTEMA, KERNEL Y ENTORNO
+# 4. COMPROBACIÓN DEL SISTEMA Y RED
 # ------------------------------------------------------------------------------
-validate_system() {
-    log_step "Comprobando compatibilidad de la distribución y arquitectura"
+validate_environment() {
+    log_step "Verificando compatibilidad de la distribución y red"
 
-    # Arquitectura
     ARCH=$(uname -m)
     if [ "$ARCH" != "x86_64" ]; then
-        log_error "Arquitectura '$ARCH' no soportada. Este entorno requiere x86_64."
+        log_error "Arquitectura no soportada: $ARCH (se requiere x86_64)."
         exit 1
     fi
-    log_success "Arquitectura compatible: $ARCH"
 
-    # Distribución base Arch
     if [ -f /etc/os-release ]; then
         # shellcheck disable=SC1091
         source /etc/os-release
-        DISTRO_ID="${ID:-unknown}"
-        DISTRO_LIKE="${ID_LIKE:-unknown}"
         DISTRO_NAME="${NAME:-Arch Linux}"
-
-        if [[ "$DISTRO_ID" =~ (arch|cachyos|endeavouros|garuda|blackarch|manjaro|arcolinux) ]] || \
-           [[ "$DISTRO_LIKE" =~ arch ]]; then
-            log_success "Distribución soportada detectada: ${C_CYAN}$DISTRO_NAME${C_RESET}"
+        if [[ "${ID:-}" =~ (arch|cachyos|endeavouros|garuda|blackarch|manjaro|arcolinux) ]] || \
+           [[ "${ID_LIKE:-}" =~ arch ]]; then
+            log_success "Distribución compatible detectada: ${C_CYAN}$DISTRO_NAME${C_RESET}"
         else
             log_error "Esta distribución ($DISTRO_NAME) no está basada en Arch Linux."
             exit 1
         fi
     else
-        log_error "No se pudo identificar la distribución del sistema (/etc/os-release ausente)."
+        log_error "No se pudo leer /etc/os-release."
         exit 1
     fi
 
-    # Comprobar si pacman está bloqueado
+    # Desbloquear pacman si quedó trabado
     if [ -f /var/lib/pacman/db.lck ]; then
-        log_warning "Se detectó el archivo de bloqueo /var/lib/pacman/db.lck."
-        read -rp " ¿Deseas eliminar el bloqueo de pacman para continuar? [s/N]: " unlock_choice
-        if [[ "$unlock_choice" =~ ^[sS]$ ]]; then
-            sudo rm -f /var/lib/pacman/db.lck
-            log_success "Bloqueo eliminado correctamente."
-        else
-            log_error "No se puede continuar mientras pacman esté bloqueado por otro proceso."
-            exit 1
-        fi
+        log_warning "Base de datos de pacman bloqueada (/var/lib/pacman/db.lck)."
+        sudo rm -f /var/lib/pacman/db.lck
+        log_success "Bloqueo de pacman eliminado."
     fi
 
-    # Conectividad a Internet
-    log_info "Verificando conexión a internet..."
-    local test_urls=("https://archlinux.org" "https://1.1.1.1" "https://github.com")
-    local connected=false
-
-    for url in "${test_urls[@]}"; do
-        if curl -s --head --connect-timeout 4 "$url" &>/dev/null; then
-            connected=true
-            break
-        fi
-    done
-
-    if [ "$connected" = true ]; then
-        log_success "Conexión a internet verificada y activa."
+    # Conectividad
+    log_info "Verificando acceso a internet..."
+    if curl -s --head --connect-timeout 4 "https://archlinux.org" &>/dev/null || \
+       curl -s --head --connect-timeout 4 "https://1.1.1.1" &>/dev/null; then
+        log_success "Conexión a internet confirmada."
     else
-        log_error "No se detecta conexión a internet. Revisa tus interfaces de red."
+        log_error "No hay conexión a internet activa."
         exit 1
     fi
 }
 
 # ------------------------------------------------------------------------------
-# 6. DETECCIÓN DE HARDWARE Y MÁQUINAS VIRTUALES (OPTIMIZACIÓN DE COMPOSICIÓN)
+# 5. DETECCIÓN DE HARDWARE Y CONTROLADORES GRÁFICOS (XORG + GPU)
 # ------------------------------------------------------------------------------
-detect_hardware_environment() {
-    log_step "Analizando hardware y virtualización"
+detect_and_install_hardware_drivers() {
+    log_step "Detección de Hardware y Controladores de Video"
 
     IS_VM=false
-    HYPERVISOR="Bare-Metal"
+    GPU_PACKAGES=()
 
-    if command -v systemd-detect-virt &>/dev/null; then
-        VIRT_TYPE=$(systemd-detect-virt)
-        if [ "$VIRT_TYPE" != "none" ]; then
-            IS_VM=true
-            HYPERVISOR="$VIRT_TYPE"
-        fi
-    elif grep -Eqi "(vmware|virtualbox|qemu|kvm)" /sys/class/dmi/id/product_name 2>/dev/null; then
+    if command -v systemd-detect-virt &>/dev/null && [ "$(systemd-detect-virt)" != "none" ]; then
         IS_VM=true
-        HYPERVISOR="DMI-Detected-VM"
-    fi
-
-    if [ "$IS_VM" = true ]; then
-        log_warning "Entorno virtualizado detectado: ${C_YELLOW}$HYPERVISOR${C_RESET}"
-        log_info "Picom se configurará con backend 'xrender' y sin vsync forzado para evitar fallos de OpenGL."
+        VIRT_NAME=$(systemd-detect-virt)
+        log_warning "Máquina Virtual detectada: $VIRT_NAME"
         PICOM_BACKEND="xrender"
         PICOM_VSYNC="false"
+
+        case "$VIRT_NAME" in
+            oracle|virtualbox)
+                GPU_PACKAGES+=(virtualbox-guest-utils xf86-video-vmware)
+                ;;
+            vmware)
+                GPU_PACKAGES+=(open-vm-tools xf86-video-vmware xf86-input-vmmouse)
+                ;;
+            kvm|qemu|bochs)
+                GPU_PACKAGES+=(qemu-guest-agent)
+                ;;
+        esac
     else
-        log_success "Instalación en máquina física nativa ($HYPERVISOR)."
-        # Chequear GPU
-        if lspci -k 2>/dev/null | grep -EA3 -i "vga|3d|display" | grep -iq "nvidia"; then
-            log_info "GPU NVIDIA detectada. Ajustando parámetros de composición glx."
-            PICOM_BACKEND="glx"
-            PICOM_VSYNC="true"
-        else
-            log_info "GPU Intel/AMD detectada. Ajustando parámetros de composición glx."
-            PICOM_BACKEND="glx"
-            PICOM_VSYNC="true"
+        log_success "Instalación en máquina física (Bare-Metal)."
+        PICOM_BACKEND="glx"
+        PICOM_VSYNC="true"
+
+        # Detección de GPU
+        local VGA_INFO
+        VGA_INFO=$(lspci -k 2>/dev/null | grep -EA3 -i "vga|3d|display" || true)
+
+        if echo "$VGA_INFO" | grep -iq "nvidia"; then
+            log_info "GPU NVIDIA detectada. Asegurando utilidades compatibles."
+            GPU_PACKAGES+=(nvidia-utils)
+        fi
+        if echo "$VGA_INFO" | grep -iq "intel"; then
+            log_info "GPU Intel detectada. Añadiendo aceleración Vulkan/OpenGL."
+            GPU_PACKAGES+=(vulkan-intel intel-media-driver)
+        fi
+        if echo "$VGA_INFO" | grep -iq "amd|radeon|advanced micro devices"; then
+            log_info "GPU AMD detectada. Añadiendo aceleración Vulkan/Radeon."
+            GPU_PACKAGES+=(xf86-video-amdgpu vulkan-radeon)
         fi
     fi
 
-    # Detección de Batería (Laptop)
-    if [ -d "/sys/class/power_supply" ] && ls -A /sys/class/power_supply | grep -qE "BAT[0-9]|battery"; then
-        log_info "Dispositivo portátil (Laptop/Batería) detectado."
-        IS_LAPTOP=true
-    else
-        log_info "Dispositivo de escritorio (Desktop) detectado."
-        IS_LAPTOP=false
+    # Controladores base Xorg y Mesa universal
+    GPU_PACKAGES+=(mesa libglvnd xf86-video-fbdev xf86-video-vesa)
+
+    log_info "Instalando paquetes gráficos esenciales..."
+    sudo pacman -S --needed --noconfirm "${GPU_PACKAGES[@]}" &>> "$LOG_FILE" || true
+
+    # Habilitar servicios de VM si aplica
+    if [ "$IS_VM" = true ]; then
+        command -v VBoxService &>/dev/null && sudo systemctl enable --now vboxservice.service &>> "$LOG_FILE" || true
+        command -v vmtoolsd &>/dev/null && sudo systemctl enable --now vmtoolsd.service &>> "$LOG_FILE" || true
     fi
 }
 
 # ------------------------------------------------------------------------------
-# 7. GESTOR DE PAQUETES AUR (YAY / PARU / FALLBACK AUTOMATIZADO)
+# 6. CONFIGURACIÓN DE AUR HELPER (YAY-BIN)
 # ------------------------------------------------------------------------------
-setup_aur_manager() {
-    log_step "Configuración del Gestor de Paquetes AUR"
+setup_aur_helper() {
+    log_step "Verificación / Instalación del Administrador AUR"
 
     if command -v yay &>/dev/null; then
         AUR_HELPER="yay"
-        log_success "AUR Helper localizado: yay"
+        log_success "AUR Helper detectado: yay"
     elif command -v paru &>/dev/null; then
         AUR_HELPER="paru"
-        log_success "AUR Helper localizado: paru"
-    elif command -v pikaur &>/dev/null; then
-        AUR_HELPER="pikaur"
-        log_success "AUR Helper localizado: pikaur"
+        log_success "AUR Helper detectado: paru"
     else
-        log_warning "No se encontró ningún gestor AUR. Procediendo a compilar 'yay-bin'..."
-
-        log_info "Instalando paquetes base para compilación (base-devel, git)..."
+        log_warning "No se detectó ningún gestor AUR. Instalando yay-bin automáticamente..."
         sudo pacman -S --needed --noconfirm base-devel git &>> "$LOG_FILE"
 
-        local TMP_YAY="/tmp/yay-bin-installer-$$"
-        rm -rf "$TMP_YAY"
-        mkdir -p "$TMP_YAY"
+        local TMP_DIR="/tmp/yay-bin-installer-$$"
+        rm -rf "$TMP_DIR"
+        mkdir -p "$TMP_DIR"
 
-        log_info "Clonando repositorio oficial de yay-bin desde AUR..."
-        if git clone https://aur.archlinux.org/yay-bin.git "$TMP_YAY/yay-bin" &>> "$LOG_FILE"; then
+        if git clone https://aur.archlinux.org/yay-bin.git "$TMP_DIR/yay-bin" &>> "$LOG_FILE"; then
             (
-                cd "$TMP_YAY/yay-bin" || exit 1
+                cd "$TMP_DIR/yay-bin" || exit 1
                 makepkg -si --noconfirm &>> "$LOG_FILE"
             )
-            rm -rf "$TMP_YAY"
-
-            if command -v yay &>/dev/null; then
-                AUR_HELPER="yay"
-                log_success "yay-bin fue compilado e instalado con éxito."
-            else
-                log_error "Falló la compilación de yay-bin. Consulta $LOG_FILE"
-                exit 1
-            fi
+            rm -rf "$TMP_DIR"
+            AUR_HELPER="yay"
+            log_success "yay-bin instalado correctamente."
         else
-            log_error "No se pudo clonar yay-bin desde AUR. Revisa la conectividad a aur.archlinux.org."
+            log_error "No se pudo clonar yay-bin de AUR. Revisa tu conexión a internet."
             exit 1
         fi
     fi
 }
 
 # ------------------------------------------------------------------------------
-# 8. MATRIZ DE DEPENDENCIAS DEL SISTEMA
+# 7. MATRIZ INTEGRAL DE PAQUETES (SERVIDOR GRÁFICO, AUDIO, WM, LIGHTDM)
 # ------------------------------------------------------------------------------
-install_system_packages() {
-    log_step "Instalación de Paquetes y Dependencias de Entorno"
+install_full_system_stack() {
+    log_step "Instalando Servidor Gráfico, Display Manager y BSPWM"
 
-    # Actualizar bases de datos
-    log_info "Sincronizando repositorios oficiales..."
+    log_info "Sincronizando base de datos de repositorios..."
     sudo pacman -Sy &>> "$LOG_FILE"
 
-    # 1. Dependencias Base y Window Manager
-    local CORE_PKGS=(
-        bspwm sxhkd polybar rofi picom
-        kitty feh dunst libnotify jgmenu
-        xclip xdotool xdo xorg-xsetroot xorg-xrandr xorg-xrdb
-        xorg-xprop xorg-xdpyinfo xorg-xwininfo xsettingsd
-        polkit-gnome lxsession
+    # 1. Servidor Gráfico X11 Base
+    local XORG_STACK=(
+        xorg-server
+        xorg-xinit
+        xorg-xrandr
+        xorg-xrdb
+        xorg-xsetroot
+        xorg-xprop
+        xorg-xdpyinfo
+        xorg-xwininfo
+        xorg-xinput
+        xorg-xkill
+        xdotool
+        xdo
+        xclip
+        xsettingsd
     )
 
-    # 2. Utilidades de Sistema, Audio y Brillo
-    local UTILS_PKGS=(
-        brightnessctl pamixer playerctl maim viewnior
-        imagemagick jq bc xfce4-power-manager
-        xss-lock i3lock htop fastfetch
-        zsh zsh-autosuggestions zsh-syntax-highlighting
-        xdg-user-dirs xdg-utils
+    # 2. Display Manager (Inicio de Sesión Gráfico)
+    local DISPLAY_MANAGER_STACK=(
+        lightdm
+        lightdm-gtk-greeter
+        lightdm-gtk-greeter-settings
     )
 
-    # 3. Tipografías, Iconos y Temas
-    local FONT_PKGS=(
+    # 3. BSPWM y Herramientas del Entorno
+    local DESKTOP_STACK=(
+        bspwm
+        sxhkd
+        polybar
+        rofi
+        picom
+        kitty
+        feh
+        dunst
+        libnotify
+        jgmenu
+        polkit-gnome
+        lxsession
+        network-manager-applet
+        volumeicon
+    )
+
+    # 4. Servidor de Sonido Moderno (PipeWire)
+    local AUDIO_STACK=(
+        pipewire
+        pipewire-pulse
+        pipewire-alsa
+        pipewire-jack
+        wireplumber
+        pamixer
+        playerctl
+        alsa-utils
+    )
+
+    # 5. Utilidades del Sistema, Terminal y Apariencia
+    local UTILS_STACK=(
+        brightnessctl
+        maim
+        viewnior
+        imagemagick
+        jq
+        bc
+        htop
+        fastfetch
+        zsh
+        zsh-autosuggestions
+        zsh-syntax-highlighting
+        xdg-user-dirs
+        xdg-utils
         ttf-jetbrains-mono-nerd
         ttf-font-awesome
         noto-fonts-emoji
         papirus-icon-theme
+        xss-lock
+        i3lock
     )
 
-    # 4. Paquetes desde AUR (Lockscreen gráfico avanzado)
-    local AUR_TARGET_PKGS=(
+    # Paquetes AUR para Lockscreen de sesión
+    local AUR_STACK=(
         i3lock-color
         betterlockscreen
     )
 
-    # Instalación de paquetes de Pacman con barra de progreso
-    local ALL_OFFICIAL=("${CORE_PKGS[@]}" "${UTILS_PKGS[@]}" "${FONT_PKGS[@]}")
-    local total_pkgs=${#ALL_OFFICIAL[@]}
-    local current_idx=0
-    local failed_packages=()
+    local MASTER_PACMAN_LIST=(
+        "${XORG_STACK[@]}"
+        "${DISPLAY_MANAGER_STACK[@]}"
+        "${DESKTOP_STACK[@]}"
+        "${AUDIO_STACK[@]}"
+        "${UTILS_STACK[@]}"
+    )
 
-    log_info "Procesando $total_pkgs dependencias oficiales de Pacman..."
+    local total_pkgs=${#MASTER_PACMAN_LIST[@]}
+    local count=0
+    local failed=()
 
-    for pkg in "${ALL_OFFICIAL[@]}"; do
-        ((current_idx++))
-        printf " [PACMAN] (%2d/%2d) %-30s" "$current_idx" "$total_pkgs" "$pkg"
-        
+    log_info "Instalando dependencias oficiales ($total_pkgs paquetes)..."
+    for pkg in "${MASTER_PACMAN_LIST[@]}"; do
+        ((count++))
+        printf " [PACMAN] (%2d/%2d) %-30s" "$count" "$total_pkgs" "$pkg"
         if pacman -Qi "$pkg" &>/dev/null; then
-            echo -e " [ ${C_GREEN}INSTALADO${C_RESET} ]"
+            echo -e " [ ${C_GREEN}LISTO${C_RESET} ]"
         else
             if sudo pacman -S --needed --noconfirm "$pkg" &>> "$LOG_FILE"; then
-                echo -e " [   ${C_CYAN}NUEVO${C_RESET}   ]"
+                echo -e " [ ${C_CYAN}INSTALADO${C_RESET} ]"
             else
-                echo -e " [   ${C_RED}FALLÓ${C_RESET}   ]"
-                failed_packages+=("$pkg")
+                echo -e " [ ${C_RED}FALLÓ${C_RESET} ]"
+                failed+=("$pkg")
             fi
         fi
     done
 
-    # Reintento de fallos en Pacman
-    if [ ${#failed_packages[@]} -gt 0 ]; then
-        log_warning "Reintentando paquetes que reportaron alertas: ${failed_packages[*]}"
-        for fpkg in "${failed_packages[@]}"; do
-            sudo pacman -S --needed --noconfirm "$fpkg" &>> "$LOG_FILE" || log_warning "Paquete $fpkg omitido o no disponible en este repositorio."
+    # Reintento selectivo
+    if [ ${#failed[@]} -gt 0 ]; then
+        log_warning "Reintentando paquetes pendientes: ${failed[*]}"
+        for f in "${failed[@]}"; do
+            sudo pacman -S --needed --noconfirm "$f" &>> "$LOG_FILE" || true
         done
     fi
 
-    # Instalación de paquetes AUR
-    log_info "Instalando paquetes desde AUR con ${AUR_HELPER}..."
-    for aur_pkg in "${AUR_TARGET_PKGS[@]}"; do
-        printf " [AUR]    Procesando %-30s" "$aur_pkg"
-        if pacman -Qi "$aur_pkg" &>/dev/null; then
-            echo -e " [ ${C_GREEN}INSTALADO${C_RESET} ]"
+    # AUR
+    log_info "Instalando paquetes visuales desde AUR..."
+    for apkg in "${AUR_STACK[@]}"; do
+        printf " [AUR]    Procesando %-30s" "$apkg"
+        if pacman -Qi "$apkg" &>/dev/null; then
+            echo -e " [ ${C_GREEN}LISTO${C_RESET} ]"
         else
-            if $AUR_HELPER -S --needed --noconfirm "$aur_pkg" &>> "$LOG_FILE"; then
-                echo -e " [   ${C_CYAN}NUEVO${C_RESET}   ]"
+            if $AUR_HELPER -S --needed --noconfirm "$apkg" &>> "$LOG_FILE"; then
+                echo -e " [ ${C_CYAN}INSTALADO${C_RESET} ]"
             else
-                echo -e " [  ${C_YELLOW}AVISO${C_RESET}   ]"
-                log_warning "No se pudo compilar $aur_pkg desde AUR. Se utilizará i3lock nativo como respaldo."
+                echo -e " [ ${C_YELLOW}AVISO${C_RESET} ]"
+                log_warning "$apkg no disponible por AUR. Se usará el respaldo con i3lock nativo."
             fi
         fi
     done
 
-    # Inicializar directorios estándar XDG
+    # Crear carpetas XDG estándar
     xdg-user-dirs-update &>> "$LOG_FILE" || true
-    log_success "Dependencias del sistema configuradas."
+    log_success "Pila de paquetes del sistema instalada con éxito."
 }
 
 # ------------------------------------------------------------------------------
-# 9. MOTOR DE RESPALDO Y GENERADOR DE SCRIPT DE RESTAURACIÓN
+# 8. CONFIGURACIÓN PROFESIONAL DEL DISPLAY MANAGER (LIGHTDM)
 # ------------------------------------------------------------------------------
-perform_backup() {
-    log_step "Creación de Copia de Seguridad Preventiva"
+setup_display_manager() {
+    log_step "Configuración del Gestor de Inicio Gráfico (LightDM)"
 
+    # Asegurar sesión Xsession para BSPWM en /usr/share/xsessions/bspwm.desktop
+    sudo mkdir -p /usr/share/xsessions
+    sudo tee /usr/share/xsessions/bspwm.desktop >/dev/null << 'EOF'
+[Desktop Entry]
+Name=BSPWM
+Comment=Binary space partitioning window manager
+Exec=bspwm
+Type=XSession
+DesktopNames=bspwm
+EOF
+
+    # Configurar fondo para la pantalla de inicio de sesión
+    local BG_TARGET_DIR="/usr/share/backgrounds/techogr"
+    sudo mkdir -p "$BG_TARGET_DIR"
+    local SAMPLE_WALL
+    SAMPLE_WALL=$(find "$SCRIPT_DIR/Wallpapers" -type f \( -name "*.jpg" -o -name "*.png" \) 2>/dev/null | head -n 1)
+
+    if [ -n "$SAMPLE_WALL" ]; then
+        sudo cp -f "$SAMPLE_WALL" "$BG_TARGET_DIR/login_background.jpg"
+        sudo chmod 644 "$BG_TARGET_DIR/login_background.jpg"
+    fi
+
+    # Configurar /etc/lightdm/lightdm.conf
+    log_info "Estableciendo BSPWM como sesión predeterminada en LightDM..."
+    sudo mkdir -p /etc/lightdm
+    sudo tee /etc/lightdm/lightdm.conf >/dev/null << 'EOF'
+[LightDM]
+run-directory=/run/lightdm
+
+[Seat:*]
+greeter-session=lightdm-gtk-greeter
+user-session=bspwm
+session-wrapper=/etc/lightdm/Xsession
+autologin-guest=false
+EOF
+
+    # Configurar /etc/lightdm/lightdm-gtk-greeter.conf con estética cuidada
+    log_info "Personalizando aspecto visual de la pantalla de bienvenida..."
+    sudo tee /etc/lightdm/lightdm-gtk-greeter.conf >/dev/null << EOF
+[greeter]
+theme-name = Adwaita-dark
+icon-theme-name = Papirus-Dark
+font-name = JetBrainsMono Nerd Font 10
+background = $BG_TARGET_DIR/login_background.jpg
+user-background = false
+clock-format = %A, %d %B  •  %H:%M
+indicators = ~host;~spacer;~clock;~spacer;~session;~power
+position = 50%,center 50%,center
+default-user-image = #avatar-default
+screensaver-timeout = 60
+EOF
+
+    # Deshabilitar otros gestores de pantalla en conflicto y habilitar LightDM
+    log_info "Activando servicio systemd de LightDM..."
+    for dm in sddm gdm lxdm ly greetd; do
+        sudo systemctl disable "$dm.service" &>> "$LOG_FILE" || true
+    done
+    sudo systemctl enable lightdm.service -f &>> "$LOG_FILE"
+    log_success "LightDM configurado. Tu PC iniciará en la pantalla gráfica directamente."
+}
+
+# ------------------------------------------------------------------------------
+# 9. BACKUP PREVENTIVO Y DESPLIEGUE DE DOTFILES
+# ------------------------------------------------------------------------------
+backup_and_deploy() {
+    log_step "Respaldo y Despliegue de Archivos de Configuración"
+
+    # Backup
     mkdir -p "$TARGET_BACKUP"
-    log_info "Directorio de respaldo asignado: ${C_CYAN}$TARGET_BACKUP${C_RESET}"
-
-    local BACKUP_ITEMS=(
+    local ITEMS=(
         "$HOME/.config/bspwm"
         "$HOME/.config/sxhkd"
         "$HOME/.config/polybar"
@@ -418,297 +475,187 @@ perform_backup() {
         "$HOME/.config/dunst"
         "$HOME/.config/jgmenu"
         "$HOME/.zshrc"
-        "$HOME/.zprofile"
-        "$HOME/.Xresources"
     )
-
-    local backed_count=0
-    for item in "${BACKUP_ITEMS[@]}"; do
-        if [ -e "$item" ]; then
-            cp -rf "$item" "$TARGET_BACKUP/" 2>> "$LOG_FILE"
-            ((backed_count++))
-            echo " - Respaldado: $(basename "$item")" >> "$LOG_FILE"
-        fi
+    for it in "${ITEMS[@]}"; do
+        [ -e "$it" ] && cp -rf "$it" "$TARGET_BACKUP/" 2>> "$LOG_FILE" || true
     done
+    log_success "Respaldo preventivo guardado en: $TARGET_BACKUP"
 
-    # Generar script de restauración automática en la carpeta de backup
-    cat << EOF > "$TARGET_BACKUP/restore.sh"
-#!/usr/bin/env bash
-# Script de restauración generado automáticamente por TechOGR Installer
-echo "Restaurando archivos de configuración del respaldo: $TIMESTAMP..."
-cp -rf "$TARGET_BACKUP"/* "\$HOME/.config/" 2>/dev/null || true
-[ -f "$TARGET_BACKUP/.zshrc" ] && cp -f "$TARGET_BACKUP/.zshrc" "\$HOME/"
-[ -f "$TARGET_BACKUP/.zprofile" ] && cp -f "$TARGET_BACKUP/.zprofile" "\$HOME/"
-[ -f "$TARGET_BACKUP/.Xresources" ] && cp -f "$TARGET_BACKUP/.Xresources" "\$HOME/"
-echo "Restauración finalizada exitosamente."
-EOF
-    chmod +x "$TARGET_BACKUP/restore.sh"
+    # Carpetas destino
+    mkdir -p "$HOME/.config" "$HOME/.local/bin" "$HOME/.local/share/fonts" "$HOME/Pictures/Wallpapers"
 
-    log_success "Se respaldaron $backed_count elementos. Script 'restore.sh' creado en el directorio de backup."
-}
+    # 1. config/ -> ~/.config/
+    [ -d "$SCRIPT_DIR/config" ] && cp -rf "$SCRIPT_DIR/config/"* "$HOME/.config/" 2>> "$LOG_FILE"
 
-# ------------------------------------------------------------------------------
-# 10. DESPLIEGUE DE ARCHIVOS DEL REPOSITORIO
-# ------------------------------------------------------------------------------
-deploy_dotfiles_repository() {
-    log_step "Desplegando Archivos y Configuraciones de TechOGR"
-
-    # Carpetas destino estándar
-    mkdir -p "$HOME/.config"
-    mkdir -p "$HOME/.local/bin"
-    mkdir -p "$HOME/.local/share/fonts"
-    mkdir -p "$HOME/Pictures/Wallpapers"
-
-    # 1. Directorio config/
-    if [ -d "$SCRIPT_DIR/config" ]; then
-        log_info "Copiando carpetas maestras desde config/ a ~/.config/ ..."
-        cp -rf "$SCRIPT_DIR/config/"* "$HOME/.config/" 2>> "$LOG_FILE"
-    else
-        log_warning "No se encontró el directorio 'config' en la raíz del repositorio."
-    fi
-
-    # 2. Directorio kitty/ (presente en la raíz del repo)
+    # 2. kitty/ -> ~/.config/kitty/
     if [ -d "$SCRIPT_DIR/kitty" ]; then
-        log_info "Configurando Kitty Terminal..."
         mkdir -p "$HOME/.config/kitty"
         cp -rf "$SCRIPT_DIR/kitty/"* "$HOME/.config/kitty/" 2>> "$LOG_FILE"
     fi
 
-    # 3. Directorio home/ (dotfiles de raíz como .zshrc)
-    if [ -d "$SCRIPT_DIR/home" ]; then
-        log_info "Copiando archivos de usuario desde home/ a $HOME/ ..."
-        cp -rf "$SCRIPT_DIR/home/." "$HOME/" 2>> "$LOG_FILE"
-    fi
+    # 3. home/ -> $HOME/ (archivos ocultos incluidos)
+    [ -d "$SCRIPT_DIR/home" ] && cp -rf "$SCRIPT_DIR/home/." "$HOME/" 2>> "$LOG_FILE"
 
-    # 4. Directorio Wallpapers/
+    # 4. Wallpapers/ -> ~/Pictures/Wallpapers/
     if [ -d "$SCRIPT_DIR/Wallpapers" ]; then
-        log_info "Instalando fondos de pantalla en ~/Pictures/Wallpapers/ ..."
         cp -rf "$SCRIPT_DIR/Wallpapers/"* "$HOME/Pictures/Wallpapers/" 2>> "$LOG_FILE"
-        # Enlace simbólico de conveniencia
         [ ! -L "$HOME/Wallpapers" ] && ln -sf "$HOME/Pictures/Wallpapers" "$HOME/Wallpapers" 2>/dev/null || true
     fi
 
-    # 5. Directorio misc/ (fuentes, scripts, temas locales)
+    # 5. misc/
     if [ -d "$SCRIPT_DIR/misc" ]; then
-        log_info "Procesando recursos adicionales (misc)..."
-        if [ -d "$SCRIPT_DIR/misc/fonts" ]; then
-            cp -rf "$SCRIPT_DIR/misc/fonts/"* "$HOME/.local/share/fonts/" 2>> "$LOG_FILE"
-        fi
-        if [ -d "$SCRIPT_DIR/misc/bin" ]; then
-            cp -rf "$SCRIPT_DIR/misc/bin/"* "$HOME/.local/bin/" 2>> "$LOG_FILE"
-        fi
+        [ -d "$SCRIPT_DIR/misc/fonts" ] && cp -rf "$SCRIPT_DIR/misc/fonts/"* "$HOME/.local/share/fonts/" 2>> "$LOG_FILE"
+        [ -d "$SCRIPT_DIR/misc/bin" ] && cp -rf "$SCRIPT_DIR/misc/bin/"* "$HOME/.local/bin/" 2>> "$LOG_FILE"
         cp -rf "$SCRIPT_DIR/misc/"* "$HOME/.local/share/" 2>/dev/null || true
     fi
 
-    # 6. Otorgar permisos de ejecución estrictos
-    log_info "Asignando permisos de ejecución a scripts del entorno..."
+    # 6. ~/.xinitrc de respaldo (para arrancar con 'startx' si se apaga LightDM)
+    tee "$HOME/.xinitrc" >/dev/null << 'EOF'
+#!/bin/sh
+userresources=$HOME/.Xresources
+usermodmap=$HOME/.Xmodmap
+[ -f "$userresources" ] && xrdb -merge "$userresources"
+[ -f "$usermodmap" ] && xmodmap "$usermodmap"
+sxhkd &
+exec bspwm
+EOF
+    chmod +x "$HOME/.xinitrc"
+
+    # 7. Permisos de ejecución
     find "$HOME/.config/bspwm" -type f -exec chmod +x {} + 2>/dev/null || true
     find "$HOME/.config/polybar" -type f \( -name "*.sh" -o -name "launch*" \) -exec chmod +x {} + 2>/dev/null || true
     find "$HOME/.local/bin" -type f -exec chmod +x {} + 2>/dev/null || true
-    [ -f "$HOME/.config/sxhkd/sxhkdrc" ] && chmod 644 "$HOME/.config/sxhkd/sxhkdrc"
 
-    # 7. Parches dinámicos de Picom según Hardware/VM
-    local PICOM_CONF="$HOME/.config/picom/picom.conf"
-    if [ -f "$PICOM_CONF" ]; then
-        log_info "Optimizando picom.conf para $HYPERVISOR (backend: $PICOM_BACKEND, vsync: $PICOM_VSYNC)..."
-        sed -i "s/backend = .*/backend = \"$PICOM_BACKEND\";/" "$PICOM_CONF" 2>/dev/null || true
-        sed -i "s/vsync = .*/vsync = $PICOM_VSYNC;/" "$PICOM_CONF" 2>/dev/null || true
+    # 8. Ajuste Picom según hardware
+    local PICOM_FILE="$HOME/.config/picom/picom.conf"
+    if [ -f "$PICOM_FILE" ]; then
+        sed -i "s/backend = .*/backend = \"$PICOM_BACKEND\";/" "$PICOM_FILE" 2>/dev/null || true
+        sed -i "s/vsync = .*/vsync = $PICOM_VSYNC;/" "$PICOM_FILE" 2>/dev/null || true
     fi
 
-    # 8. Refrescar caché de fuentes
-    log_info "Reconstruyendo caché de tipografías del sistema..."
+    # 9. Caché de fuentes
     fc-cache -fv &>> "$LOG_FILE"
-
-    log_success "Despliegue de archivos completado sin incidentes."
+    log_success "Archivos del repositorio desplegados y permisos asignados."
 }
 
 # ------------------------------------------------------------------------------
-# 11. BLOQUEO DE PANTALLA GRÁFICO LIVIANO Y AUTOMATIZACIÓN
+# 10. BLOQUEO DE PANTALLA DE SESIÓN (BETTERLOCKSCREEN / I3LOCK-COLOR)
 # ------------------------------------------------------------------------------
-setup_lockscreen_subsystem() {
-    log_step "Configuración del Sistema de Bloqueo Gráfico Liviano"
+setup_session_lockscreen() {
+    log_step "Configuración del Bloqueo Gráfico de Sesión (Atajo y Suspensión)"
 
-    # Crear script ejecutable principal: ~/.local/bin/techogr_lock
-    local LOCK_BIN="$HOME/.local/bin/techogr_lock"
-    cat << 'EOF' > "$LOCK_BIN"
+    # Script principal de bloqueo en ~/.local/bin/lockscreen
+    tee "$HOME/.local/bin/lockscreen" >/dev/null << 'EOF'
 #!/usr/bin/env bash
-# Script de Bloqueo Gráfico Liviano con capas de respaldo para BSPWM
-# TechOGR Dotfiles
-
-# Colores y estilo
-BLUR_RADIUS=0.5
-TIME_FORMAT="%I:%M %p"
-DATE_FORMAT="%A, %d de %B"
-
-# Capa 1: Betterlockscreen (Elegante con Blur y caché nativo)
 if command -v betterlockscreen &>/dev/null; then
-    betterlockscreen -l dimblur --time-format "$TIME_FORMAT"
-    exit 0
-fi
-
-# Capa 2: i3lock-color con UI circular moderna
-if command -v i3lock-color &>/dev/null; then
-    i3lock-color \
-        --insidever-color=24283b80 \
-        --insidewrong-color=f7768e80 \
-        --inside-color=1a1b26cc \
-        --ringver-color=7aa2f7ff \
-        --ringwrong-color=f7768eff \
-        --ring-color=bb9af7ff \
-        --line-uses-inside \
-        --keyhl-color=7dcfff \
-        --bshl-color=f7768e \
-        --separator-color=00000000 \
-        --verif-color=c0caf5ff \
-        --wrong-color=f7768eff \
-        --time-color=c0caf5ff \
-        --date-color=a9b1d6ff \
-        --clock \
-        --indicator \
-        --time-str="$TIME_FORMAT" \
-        --date-str="$DATE_FORMAT" \
-        --time-font="JetBrains Mono Nerd Font" \
-        --date-font="JetBrains Mono Nerd Font" \
-        --radius=120 \
-        --ring-width=8
-    exit 0
-fi
-
-# Capa 3: Fallback de ultra-emergencia con i3lock estándar
-if command -v i3lock &>/dev/null; then
+    betterlockscreen -l dimblur --time-format "%I:%M %p"
+elif command -v i3lock-color &>/dev/null; then
+    i3lock-color --clock --indicator --time-str="%H:%M" --date-str="%A, %d %B" \
+                 --inside-color=1a1b26bb --ring-color=7aa2f7ff --keyhl-color=bb9af7ff \
+                 --line-uses-inside --time-font="JetBrains Mono Nerd Font"
+else
     i3lock -c 1a1b26
-    exit 0
 fi
 EOF
-    chmod +x "$LOCK_BIN"
-    ln -sf "$LOCK_BIN" "$HOME/.local/bin/lockscreen" 2>/dev/null || true
+    chmod +x "$HOME/.local/bin/lockscreen"
 
-    # Si betterlockscreen está instalado, generar la caché con uno de los fondos
+    # Generar caché de imagen si betterlockscreen está disponible
     if command -v betterlockscreen &>/dev/null; then
-        local SAMPLE_WALL
-        SAMPLE_WALL=$(find "$HOME/Pictures/Wallpapers" -type f \( -name "*.jpg" -o -name "*.png" \) 2>/dev/null | head -n 1)
-        if [ -n "$SAMPLE_WALL" ]; then
-            log_info "Generando caché gráfico de bloqueo a partir de: $(basename "$SAMPLE_WALL")..."
-            betterlockscreen -u "$SAMPLE_WALL" --blur 0.5 &>> "$LOG_FILE" || true
-            log_success "Caché de imagen generada para Betterlockscreen."
+        local WALL_PICK
+        WALL_PICK=$(find "$HOME/Pictures/Wallpapers" -type f \( -name "*.jpg" -o -name "*.png" \) 2>/dev/null | head -n 1)
+        if [ -n "$WALL_PICK" ]; then
+            betterlockscreen -u "$WALL_PICK" --blur 0.5 &>> "$LOG_FILE" || true
         fi
     fi
 
-    # Registrar el atajo de bloqueo en sxhkdrc
+    # Atajo en sxhkdrc (Super + Alt + L)
     local SXHKD_CONF="$HOME/.config/sxhkd/sxhkdrc"
-    if [ -f "$SXHKD_CONF" ]; then
-        if ! grep -q "techogr_lock" "$SXHKD_CONF" && ! grep -q "betterlockscreen" "$SXHKD_CONF"; then
-            log_info "Vinculando atajo de teclado en sxhkdrc (Super + Alt + L)..."
-            cat << 'EOF' >> "$SXHKD_CONF"
+    if [ -f "$SXHKD_CONF" ] && ! grep -q "lockscreen" "$SXHKD_CONF"; then
+        tee -a "$SXHKD_CONF" >/dev/null << 'EOF'
 
-# ------------------------------------------------------------------------------
-# Bloqueo de pantalla gráfico (TechOGR BSPWM)
-# ------------------------------------------------------------------------------
+# Bloqueo de pantalla manual (TechOGR)
 super + alt + l
-    $HOME/.local/bin/techogr_lock
+    $HOME/.local/bin/lockscreen
 EOF
-        fi
     fi
 
-    # Integrar xss-lock en bspwmrc para suspender o cerrar la tapa de la laptop
+    # Bloqueo automático en suspensión con xss-lock en bspwmrc
     local BSPWMRC="$HOME/.config/bspwm/bspwmrc"
-    if [ -f "$BSPWMRC" ]; then
-        if ! grep -q "xss-lock" "$BSPWMRC"; then
-            log_info "Configurando bloqueo automático en suspensión con xss-lock en bspwmrc..."
-            cat << 'EOF' >> "$BSPWMRC"
+    if [ -f "$BSPWMRC" ] && ! grep -q "xss-lock" "$BSPWMRC"; then
+        tee -a "$BSPWMRC" >/dev/null << 'EOF'
 
-# Demonio de bloqueo de pantalla automático al suspender
+# Demonio de bloqueo de pantalla al suspender / cerrar tapa
 killall -q xss-lock
-xss-lock --transfer-sleep-lock -- $HOME/.local/bin/techogr_lock &
+xss-lock --transfer-sleep-lock -- $HOME/.local/bin/lockscreen &
 EOF
-        fi
     fi
 
-    log_success "Sistema de bloqueo configurado y vinculado correctamente."
+    log_success "Bloqueo de sesión configurado para atajo y suspensión."
 }
 
 # ------------------------------------------------------------------------------
-# 12. CONFIGURACIÓN DEL SHELL PREDETERMINADO (ZSH)
+# 11. SHELL PREDETERMINADA (ZSH)
 # ------------------------------------------------------------------------------
-configure_user_shell() {
-    log_step "Verificación del Intérprete de Comandos (Shell)"
+setup_user_shell() {
+    log_step "Configuración del Intérprete de Comandos (Zsh)"
 
-    CURRENT_SHELL=$(basename "$SHELL")
-    ZSH_BINARY=$(command -v zsh 2>/dev/null || true)
-
-    if [ -n "$ZSH_BINARY" ]; then
-        if [ "$CURRENT_SHELL" != "zsh" ]; then
-            log_info "Cambiando la shell predeterminada a ZSH ($ZSH_BINARY) para $USER..."
-            
-            # Asegurar que esté en /etc/shells
-            if ! grep -Fxq "$ZSH_BINARY" /etc/shells; then
-                echo "$ZSH_BINARY" | sudo tee -a /etc/shells >/dev/null
-            fi
-
-            # Cambiar shell de forma silenciosa
-            sudo chsh -s "$ZSH_BINARY" "$USER" &>> "$LOG_FILE" || chsh -s "$ZSH_BINARY" &>> "$LOG_FILE" || true
-            log_success "Shell predeterminada cambiada a ZSH."
-        else
-            log_success "ZSH ya es la shell predeterminada del usuario."
+    local ZSH_BIN
+    ZSH_BIN=$(command -v zsh 2>/dev/null || true)
+    if [ -n "$ZSH_BIN" ] && [ "$(basename "$SHELL")" != "zsh" ]; then
+        if ! grep -Fxq "$ZSH_BIN" /etc/shells; then
+            echo "$ZSH_BIN" | sudo tee -a /etc/shells >/dev/null
         fi
+        sudo chsh -s "$ZSH_BIN" "$USER" &>> "$LOG_FILE" || chsh -s "$ZSH_BIN" &>> "$LOG_FILE" || true
+        log_success "Shell predeterminada cambiada a ZSH."
     else
-        log_warning "ZSH no fue encontrado. Manteniendo la shell actual ($CURRENT_SHELL)."
+        log_info "ZSH ya está configurado como predeterminado."
     fi
 }
 
 # ------------------------------------------------------------------------------
-# 13. RESUMEN FINAL Y CHEATSHEET
+# 12. RESUMEN FINAL Y REINICIO
 # ------------------------------------------------------------------------------
-display_installation_summary() {
+show_summary() {
     echo ""
-    echo -e "${C_GREEN}${C_BOLD}╔════════════════════════════════════════════════════════════════════╗${C_RESET}"
-    echo -e "${C_GREEN}${C_BOLD}║       ¡INSTALACIÓN DE TECHOGR BSPWM COMPLETADA CON ÉXITO!          ║${C_RESET}"
-    echo -e "${C_GREEN}${C_BOLD}╚════════════════════════════════════════════════════════════════════╝${C_RESET}"
+    echo -e "${C_GREEN}${C_BOLD}╔═════════════════════════════════════════════════════════════════════════╗${C_RESET}"
+    echo -e "${C_GREEN}${C_BOLD}║          ¡SISTEMA GRÁFICO COMPLETO INSTALADO CORRECTAMENTE!            ║${C_RESET}"
+    echo -e "${C_GREEN}${C_BOLD}╚═════════════════════════════════════════════════════════════════════════╝${C_RESET}"
     echo ""
-    echo -e " ${C_CYAN}Resumen del Entorno Instalado:${C_RESET}"
-    echo -e "   • Distribución:             ${DISTRO_NAME:-Arch Linux}"
-    echo -e "   • Entorno de Hardware:      $HYPERVISOR (Picom: $PICOM_BACKEND)"
-    echo -e "   • Gestor AUR:               $AUR_HELPER"
-    echo -e "   • Registro de Instalación:  $LOG_FILE"
-    echo -e "   • Copia de Seguridad:       $TARGET_BACKUP"
+    echo -e " ${C_CYAN}Características configuradas:${C_RESET}"
+    echo -e "   • ${C_BOLD}Pantalla de Inicio (Login):${C_RESET} LightDM con tema Adwaita-dark y fondo personalizado."
+    echo -e "   • ${C_BOLD}Gestor de Ventanas:${C_RESET}         BSPWM como sesión predeterminada."
+    echo -e "   • ${C_BOLD}Bloqueo en Sesión:${C_RESET}          Super + Alt + L (o al suspender la PC)."
+    echo -e "   • ${C_BOLD}Terminal Kitty:${C_RESET}             Super + Enter."
+    echo -e "   • ${C_BOLD}Lanzador Rofi:${C_RESET}              Super + D."
+    echo -e "   • ${C_BOLD}Servidor de Sonido:${C_RESET}         PipeWire + WirePlumber activo."
     echo ""
-    echo -e " ${C_CYAN}Atajos de Teclado Esenciales:${C_RESET}"
-    echo -e "   • ${C_YELLOW}Super + Enter${C_RESET}             Abrir Terminal Kitty"
-    echo -e "   • ${C_YELLOW}Super + D${C_RESET}                 Lanzador de Aplicaciones (Rofi)"
-    echo -e "   • ${C_YELLOW}Super + Alt + L${C_RESET}           ${C_BOLD}Bloqueo de Pantalla Gráfico${C_RESET}"
-    echo -e "   • ${C_YELLOW}Super + Alt + R${C_RESET}           Reiniciar BSPWM y barras"
-    echo -e "   • ${C_YELLOW}Super + W / C${C_RESET}             Cerrar Ventana Enfocada"
-    echo -e "   • ${C_YELLOW}Super + 1 al 9${C_RESET}            Cambiar de Espacio de Trabajo"
-    echo -e "   • ${C_YELLOW}Click Derecho Escritorio${C_RESET}  Menú JGmenu"
+    echo -e "${C_YELLOW}${C_BOLD}¡TODO LISTO! Al reiniciar el equipo, verás la pantalla de inicio de sesión${C_RESET}"
+    echo -e "${C_YELLOW}${C_BOLD}pidiendo tu usuario y contraseña para entrar directo a BSPWM.${C_RESET}"
     echo ""
-    echo -e "${C_YELLOW}${C_BOLD}AVISO IMPORTANTE:${C_RESET}"
-    echo -e "Para garantizar que todas las variables XDG, temas de cursor y fuentes se carguen limpiamente,"
-    echo -e "se recomienda reiniciar el equipo o cerrar la sesión gráfica actual."
-    echo ""
-    read -rp " ¿Deseas reiniciar el sistema ahora? [s/N]: " reboot_choice
+    read -rp " ¿Deseas reiniciar el sistema ahora mismo? [s/N]: " reboot_choice
     if [[ "$reboot_choice" =~ ^[sS]$ ]]; then
         log_info "Reiniciando equipo..."
         sudo reboot
     else
-        log_info "Instalación concluida. ¡Disfruta de tu nuevo entorno BSPWM!"
+        log_info "Puedes reiniciar más tarde escribiendo: ${C_CYAN}sudo reboot${C_RESET}"
     fi
 }
 
 # ------------------------------------------------------------------------------
-# 14. ENTRADA PRINCIPAL (MAIN ENTRYPOINT)
+# ENTRADA PRINCIPAL
 # ------------------------------------------------------------------------------
 main() {
     print_banner
     check_privileges
-    validate_system
-    detect_hardware_environment
-    setup_aur_manager
-    install_system_packages
-    perform_backup
-    deploy_dotfiles_repository
-    setup_lockscreen_subsystem
-    configure_user_shell
-    display_installation_summary
+    validate_environment
+    detect_and_install_hardware_drivers
+    setup_aur_helper
+    install_full_system_stack
+    setup_display_manager
+    backup_and_deploy
+    setup_session_lockscreen
+    setup_user_shell
+    show_summary
 }
 
 main "$@"
