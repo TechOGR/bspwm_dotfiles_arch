@@ -1,54 +1,93 @@
- /***
- *    ╔═╗╔═╗╔╦╗╔╗ ╦╔═╗  ╔╦╗╦ ╦╔═╗╔╦╗╔═╗	author: z0mbi3
- *    ╔═╝║ ║║║║╠╩╗║║╣    ║ ╠═╣║╣ ║║║║╣ 	url: https://github.com/gh0stzk/dotfiles
- *    ╚═╝╚═╝╩ ╩╚═╝╩╚═╝   ╩ ╩ ╩╚═╝╩ ╩╚═╝	z0mbi3 Fox Firefox Theme
- */
- 
- 
-user_pref("toolkit.legacyUserProfileCustomizations.stylesheets", true);
-user_pref("browser.cache.disk.enable", false);
-user_pref("browser.cache.memory.enable", true);
-user_pref("browser.cache.memory.capacity", 524288);
-user_pref("browser.sessionstore.interval", 15000000);
-user_pref("extensions.pocket.enabled", false);
-user_pref("reader.parse-on-load.enabled", false);
-user_pref("accessibility.force_disabled", 1);
-user_pref("browser.helperApps.deleteTempFileOnExit", true);
+/****************************************************************************
+ * Betterfox                                                                *
+ * "Ad meliora"                                                             *
+ * version: 150                                                             *
+ * url: https://github.com/yokoffing/Betterfox                              *
+****************************************************************************/
+
+/****************************************************************************
+ * SECTION: SECUREFOX                                                       *
+****************************************************************************/
+/** TRACKING PROTECTION ***/
+user_pref("browser.contentblocking.category", "strict");
+user_pref("browser.download.start_downloads_in_tmp_dir", true);
 user_pref("browser.uitour.enabled", false);
+user_pref("privacy.globalprivacycontrol.enabled", true);
 
-/*** STARTUP ***/
+/** OCSP & CERTS / HPKP ***/
+user_pref("security.OCSP.enabled", 0);
+user_pref("privacy.antitracking.isolateContentScriptResources", true);
+user_pref("security.csp.reporting.enabled", false);
 
-/* set startup page
- * 0=blank, 1=home, 2=last visited page, 3=resume previous session*/
-user_pref("browser.startup.page", 0);
-/* set HOME+NEWWINDOW page
- * about:home=Firefox Home, custom URL, about:blank*/
-user_pref("browser.startup.homepage", "about:blank");
-/* disable sponsored content on Firefox Home (Activity Stream)
- * [SETTING] Home>Firefox Home Content ***/
-user_pref("browser.newtabpage.activity-stream.showSponsored", false); // [FF58+] Pocket > Sponsored Stories
-user_pref("browser.newtabpage.activity-stream.showSponsoredTopSites", false); // [FF83+] Sponsored shortcuts
-/* clear default topsites
- * [NOTE] This does not block you from adding your own ***/
-user_pref("browser.newtabpage.activity-stream.default.sites", "");
+/** SSL / TLS ***/
+user_pref("security.ssl.treat_unsafe_negotiation_as_broken", true);
+user_pref("browser.xul.error_pages.expert_bad_cert", true);
+user_pref("security.tls.enable_0rtt_data", false);
 
-/*** QUIETER FOX ***/
+/** DISK AVOIDANCE ***/
+user_pref("browser.cache.disk.enable", false);
+user_pref("browser.privatebrowsing.forceMediaMemoryCache", true);
+user_pref("media.memory_cache_max_size", 65536);
+user_pref("browser.sessionstore.interval", 60000);
 
-/* disable recommendation pane in about:addons (uses Google Analytics) ***/
-user_pref("extensions.getAddons.showPane", false); // [HIDDEN PREF]
-/* recommendations in about:addons' Extensions and Themes panes [FF68+] ***/
-user_pref("extensions.htmlaboutaddons.recommendations.enabled", false);
-/* personalized Extension Recommendations in about:addons and AMO [FF65+]
- * https://support.mozilla.org/kb/personalized-extension-recommendations ***/
-user_pref("browser.discovery.enabled", false);
+/** SHUTDOWN & SANITIZING ***/
+user_pref("privacy.history.custom", true);
+user_pref("browser.privatebrowsing.resetPBM.enabled", true);
+
+/** SPECULATIVE LOADING ***/
+user_pref("network.http.speculative-parallel-limit", 0);
+user_pref("network.dns.disablePrefetch", true);
+user_pref("network.dns.disablePrefetchFromHTTPS", true);
+user_pref("browser.urlbar.speculativeConnect.enabled", false);
+user_pref("browser.places.speculativeConnect.enabled", false);
+user_pref("network.prefetch-next", false);
+
+/** SEARCH / URL BAR ***/
+user_pref("browser.urlbar.trimHttps", true);
+user_pref("browser.urlbar.untrimOnUserInteraction.featureGate", true);
+user_pref("browser.search.separatePrivateDefault.ui.enabled", true);
+user_pref("browser.search.suggest.enabled", false);
+user_pref("browser.urlbar.quicksuggest.enabled", false);
+user_pref("browser.urlbar.groupLabels.enabled", false);
+user_pref("browser.formfill.enable", false);
+user_pref("network.IDN_show_punycode", true);
+
+/** HTTPS-ONLY MODE ***/
+user_pref("dom.security.https_only_mode", true);
+user_pref("dom.security.https_only_mode_error_page_user_suggestions", true);
+
+/** PASSWORDS ***/
+user_pref("signon.formlessCapture.enabled", false);
+user_pref("signon.privateBrowsingCapture.enabled", false);
+user_pref("network.auth.subresource-http-auth-allow", 1);
+user_pref("editor.truncate_user_pastes", false);
+
+/** EXTENSIONS ***/
+user_pref("extensions.enabledScopes", 5);
+
+/** HEADERS / REFERERS ***/
+user_pref("network.http.referer.XOriginTrimmingPolicy", 2);
+
+/** CONTAINERS ***/
+user_pref("privacy.userContext.ui.enabled", true);
+
+/** VARIOUS ***/
+user_pref("pdfjs.enableScripting", false);
+
+/** SAFE BROWSING ***/
+user_pref("browser.safebrowsing.downloads.remote.enabled", false);
+
+/** MOZILLA ***/
+user_pref("permissions.default.desktop-notification", 2);
+user_pref("permissions.default.geo", 2);
+user_pref("geo.provider.network.url", "https://beacondb.net/v1/geolocate");
+user_pref("browser.search.update", false);
+user_pref("permissions.manager.defaultsUrl", "");
+user_pref("extensions.getAddons.cache.enabled", false);
 
 /** TELEMETRY ***/
-
-/* disable new data submission */
 user_pref("datareporting.policy.dataSubmissionEnabled", false);
-/* disable Health Reports */
 user_pref("datareporting.healthreport.uploadEnabled", false);
-/* 0332: disable telemetry */
 user_pref("toolkit.telemetry.unified", false);
 user_pref("toolkit.telemetry.enabled", false);
 user_pref("toolkit.telemetry.server", "data:,");
@@ -58,57 +97,104 @@ user_pref("toolkit.telemetry.shutdownPingSender.enabled", false);
 user_pref("toolkit.telemetry.updatePing.enabled", false);
 user_pref("toolkit.telemetry.bhrPing.enabled", false);
 user_pref("toolkit.telemetry.firstShutdownPing.enabled", false);
-/* disable Telemetry Coverage */
-user_pref("toolkit.telemetry.coverage.opt-out", true); // [HIDDEN PREF]
-user_pref("toolkit.coverage.opt-out", true); // [FF64+] [HIDDEN PREF]
+user_pref("toolkit.telemetry.coverage.opt-out", true);
+user_pref("toolkit.coverage.opt-out", true);
 user_pref("toolkit.coverage.endpoint.base", "");
-/* disable PingCentre telemetry (used in several System Add-ons) [FF57+] */
-user_pref("browser.ping-centre.telemetry", false);
-/* disable Firefox Home (Activity Stream) telemetry ***/
 user_pref("browser.newtabpage.activity-stream.feeds.telemetry", false);
 user_pref("browser.newtabpage.activity-stream.telemetry", false);
-user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);
-user_pref("toolkit.telemetry.shutdownPingSender.enabledFirstsession", false);
-user_pref("browser.vpn_promo.enabled", false);
+user_pref("datareporting.usage.uploadEnabled", false);
 
-/** STUDIES ***/
-
-/* disable Studies ***/
+/** EXPERIMENTS ***/
 user_pref("app.shield.optoutstudies.enabled", false);
-/* disable Normandy/Shield [FF60+]
- * Shield is a telemetry system that can push and test "recipes" ***/
 user_pref("app.normandy.enabled", false);
 user_pref("app.normandy.api_url", "");
 
 /** CRASH REPORTS ***/
-
-/* disable Crash Reports ***/
 user_pref("breakpad.reportURL", "");
 user_pref("browser.tabs.crashReporting.sendReport", false);
-/* enforce no submission of backlogged Crash Reports [FF58+]
- * [SETTING] Privacy & Security>Firefox Data Collection & Use>Allow Firefox to send backlogged crash reports  ***/
-user_pref("browser.crashReports.unsubmittedCheck.autoSubmit2", false);
 
-/** OTHER ***/
+/****************************************************************************
+ * SECTION: PESKYFOX                                                        *
+****************************************************************************/
+/** MOZILLA UI ***/
+user_pref("extensions.getAddons.showPane", false);
+user_pref("extensions.htmlaboutaddons.recommendations.enabled", false);
+user_pref("browser.discovery.enabled", false);
+user_pref("browser.shell.checkDefaultBrowser", false);
+user_pref("browser.newtabpage.activity-stream.asrouter.userprefs.cfr.addons", false);
+user_pref("browser.newtabpage.activity-stream.asrouter.userprefs.cfr.features", false);
+user_pref("browser.preferences.moreFromMozilla", false);
+user_pref("browser.aboutConfig.showWarning", false);
+user_pref("browser.startup.homepage_override.mstone", "ignore");
+user_pref("browser.aboutwelcome.enabled", false);
+user_pref("browser.profiles.enabled", true);
 
-/* 0360: disable Captive Portal detection
- * [1] https://www.eff.org/deeplinks/2017/08/how-captive-portals-interfere-wireless-security-and-privacy ***/
-user_pref("captivedetect.canonicalURL", "");
-user_pref("network.captive-portal-service.enabled", false);
-/* disable Network Connectivity checks
- * [1] https://bugzilla.mozilla.org/1460537 ***/
-user_pref("network.connectivity-service.enabled", false);
+/** THEME ADJUSTMENTS ***/
+user_pref("toolkit.legacyUserProfileCustomizations.stylesheets", true);
+user_pref("browser.compactmode.show", true);
+user_pref("browser.privateWindowSeparation.enabled", false); // WINDOWS
 
-/*** [GEOLOCATION / LANGUAGE / LOCALE ***/
+/** AI ***/
+user_pref("browser.ai.control.default", "blocked");
+user_pref("browser.ml.enable", false);
+user_pref("browser.ml.chat.enabled", false);
+user_pref("browser.ml.chat.menu", false);
+user_pref("browser.tabs.groups.smart.enabled", false);
+user_pref("browser.ml.linkPreview.enabled", false);
 
-/* use Mozilla geolocation service instead of Google.*/
-user_pref("geo.provider.network.url", "https://location.services.mozilla.com/v1/geolocate?key=%MOZILLA_API_KEY%");
-/* disable using the OS's geolocation service ***/
-user_pref("geo.provider.ms-windows-location", false); // [WINDOWS]
-user_pref("geo.provider.use_corelocation", false); // [MAC]
-user_pref("geo.provider.use_gpsd", false); // [LINUX]
-user_pref("geo.provider.use_geoclue", false); // [FF102+] [LINUX]
+/** FULLSCREEN NOTICE ***/
+user_pref("full-screen-api.transition-duration.enter", "0 0");
+user_pref("full-screen-api.transition-duration.leave", "0 0");
+user_pref("full-screen-api.warning.timeout", 0);
+
+/** URL BAR ***/
+user_pref("browser.urlbar.trending.featureGate", false);
+
+/** NEW TAB PAGE ***/
+user_pref("browser.newtabpage.activity-stream.default.sites", "");
+user_pref("browser.newtabpage.activity-stream.showSponsoredTopSites", false);
+user_pref("browser.newtabpage.activity-stream.feeds.section.topstories", false);
+user_pref("browser.newtabpage.activity-stream.showSponsored", false);
+user_pref("browser.newtabpage.activity-stream.showSponsoredCheckboxes", false);
+
+/** DOWNLOADS ***/
+user_pref("browser.download.manager.addToRecentDocs", false);
+
+/** PDF ***/
+user_pref("browser.download.open_pdf_attachments_inline", true);
+
+/** TAB BEHAVIOR ***/
+user_pref("browser.bookmarks.openInTabClosesMenu", false);
+user_pref("browser.menu.showViewImageInfo", true);
+user_pref("findbar.highlightAll", true);
+user_pref("layout.word_select.eat_space_to_next_word", false);
+
+/****************************************************************************
+ * SECTION: SMOOTHFOX                                                       *
+****************************************************************************/
+// visit https://github.com/yokoffing/Betterfox/blob/main/Smoothfox.js
+// Enter your scrolling overrides below this line:
+// recommended for 60hz+ displays
+user_pref("apz.overscroll.enabled", true); // DEFAULT NON-LINUX
+user_pref("general.smoothScroll", true); // DEFAULT
+user_pref("mousewheel.default.delta_multiplier_y", 275); // 250-400; adjust this number to your liking
+// Firefox Nightly only:
+// [1] https://bugzilla.mozilla.org/show_bug.cgi?id=1846935
+user_pref("general.smoothScroll.msdPhysics.enabled", false); // [FF122+ Nightly]
+
+/****************************************************************************
+ * START: MY OVERRIDES                                                      *
+****************************************************************************/
+// visit https://github.com/yokoffing/Betterfox/wiki/Common-Overrides
+// visit https://github.com/yokoffing/Betterfox/wiki/Optional-Hardening
+// Enter your personal overrides below this line:
 
 
-// Integrated calculator at urlbar
-user_pref("browser.urlbar.suggest.calculator", true);
+/****************************************************************************
+ * END: BETTERFOX                                                           *
+****************************************************************************/
+
+/* set startup page
+ * 0=blank, 1=home, 2=last visited page, 3=resume previous session*/
+user_pref("browser.startup.page", 1);
+user_pref("browser.startup.homepage", "file:///home/z0mbi3/.local/share/startup-page/index.html");
