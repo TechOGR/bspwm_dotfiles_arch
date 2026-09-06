@@ -19,7 +19,7 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-readonly SCRIPT_VERSION="6.0.0"
+readonly SCRIPT_VERSION="7.0.0"
 readonly REPO_URL="https://github.com/TechOGR/bspwm_dotfiles_arch.git"
 readonly EWW_REPO="https://github.com/elkowar/eww"
 readonly EWW_VERSION="v0.6.0"
@@ -909,14 +909,36 @@ backup_one() {
 
     local relative
 
-    if [[ "$target" == "$HOME_DIR/"* ]]; then
-        relative="${target#$HOME_DIR/}"
-    else
-        relative="$(basename -- "$target")"
+    case "$target" in
+        "$HOME_DIR"/*)
+            relative="${target#"$HOME_DIR/"}"
+            ;;
+        *)
+            relative="${target#/}"
+            ;;
+    esac
+
+    local backup_target="$BACKUP_DIR/$relative"
+
+    if [[ -e "$backup_target" || -L "$backup_target" ]]; then
+        return 0
     fi
 
-    mkdir -p "$BACKUP_DIR/$(dirname -- "$relative")"
-    cp -a -- "$target" "$BACKUP_DIR/$relative"
+    mkdir -p "$(dirname -- "$backup_target")"
+    cp -a -- "$target" "$backup_target"
+}
+
+backup_repo_config_entries() {
+    local entry name
+
+    shopt -s nullglob dotglob
+    for entry in "$REPO_DIR/config"/*; do
+        name="$(basename -- "$entry")"
+        if [[ -e "$CONFIG_DIR/$name" || -L "$CONFIG_DIR/$name" ]]; then
+            backup_one "$CONFIG_DIR/$name"
+        fi
+    done
+    shopt -u nullglob dotglob
 }
 
 create_backup() {
@@ -924,31 +946,25 @@ create_backup() {
 
     mkdir -p "$BACKUP_DIR"
 
-    local targets=(
-        "$HOME/.config/bspwm"
-        "$HOME/.config/sxhkd"
-        "$HOME/.config/polybar"
-        "$HOME/.config/picom"
-        "$HOME/.config/rofi"
-        "$HOME/.config/jgmenu"
-        "$HOME/.config/kitty"
-        "$HOME/.config/dunst"
-        "$HOME/.config/xsettingsd"
-        "$HOME/.config/gtk-3.0"
-        "$HOME/.config/gtk-4.0"
-        "$HOME/.config/eww"
-        "$HOME/.config/mpd"
-        "$HOME/.config/ncmpcpp"
-        "$HOME/.zshrc"
-        "$HOME/.xinitrc"
-        "$HOME/.xprofile"
-    )
+    # The repository mirrors ~/.config recursively. Back up every top-level
+    # entry that this repository can replace, including nested paths such as:
+    #   config/bspwm/eww      -> ~/.config/bspwm/eww
+    #   config/bspwm/rices    -> ~/.config/bspwm/rices
+    #   config/bspwm/config   -> ~/.config/bspwm/config
+    backup_repo_config_entries
 
-    local item
-
-    for item in "${targets[@]}"; do
-        backup_one "$item"
+    local home_item
+    shopt -s nullglob dotglob
+    for home_item in "$REPO_DIR/home"/.* "$REPO_DIR/home"/*; do
+        [[ -e "$home_item" || -L "$home_item" ]] || continue
+        case "$(basename -- "$home_item")" in
+            .|..) continue ;;
+        esac
+        if [[ -e "$HOME/$(basename -- "$home_item")" || -L "$HOME/$(basename -- "$home_item")" ]]; then
+            backup_one "$HOME/$(basename -- "$home_item")"
+        fi
     done
+    shopt -u nullglob dotglob
 
     cat > "$BACKUP_DIR/backup.info" <<INFO
 TechOGR BSPWM backup
@@ -962,28 +978,48 @@ INFO
     ok "Backup creado en $BACKUP_DIR"
 }
 
-deploy_directory() {
-    local src="$1"
-    local dest="$2"
+deploy_config_tree() {
+    local src="$REPO_DIR/config"
+    local dest="$CONFIG_DIR"
+    local entry name
 
-    [[ -d "$src" ]] || return 0
+    [[ -d "$src" ]] || fatal "No existe config/ en el repositorio."
 
-    mkdir -p "$(dirname -- "$dest")"
-    backup_one "$dest"
     mkdir -p "$dest"
 
-    rsync -a --delete "$src/" "$dest/"
+    shopt -s nullglob dotglob
+    for entry in "$src"/*; do
+        name="$(basename -- "$entry")"
+
+        if [[ -d "$entry" ]]; then
+            mkdir -p "$dest/$name"
+            rsync -a -- "$entry/" "$dest/$name/"
+        elif [[ -f "$entry" || -L "$entry" ]]; then
+            install -Dm644 "$entry" "$dest/$name"
+        fi
+    done
+    shopt -u nullglob dotglob
 }
 
-deploy_file() {
-    local src="$1"
-    local dest="$2"
+deploy_home_tree() {
+    local src
+    local name
 
-    [[ -f "$src" || -L "$src" ]] || return 0
+    shopt -s nullglob dotglob
+    for src in "$REPO_DIR/home"/.* "$REPO_DIR/home"/*; do
+        [[ -e "$src" || -L "$src" ]] || continue
 
-    mkdir -p "$(dirname -- "$dest")"
-    backup_one "$dest"
-    install -Dm644 "$src" "$dest"
+        name="$(basename -- "$src")"
+        [[ "$name" != "." && "$name" != ".." ]] || continue
+
+        if [[ -f "$src" || -L "$src" ]]; then
+            install -Dm644 "$src" "$HOME/$name"
+        elif [[ -d "$src" ]]; then
+            mkdir -p "$HOME/$name"
+            rsync -a -- "$src/" "$HOME/$name/"
+        fi
+    done
+    shopt -u nullglob dotglob
 }
 
 deploy_merge() {
@@ -994,21 +1030,13 @@ deploy_merge() {
 
     mkdir -p "$dest"
 
-    while IFS= read -r -d '' file; do
-        local relative
-        local target
-
-        relative="${file#$src/}"
-        target="$dest/$relative"
-
-        mkdir -p "$(dirname -- "$target")"
-        backup_one "$target"
-        install -Dm644 "$file" "$target"
-    done < <(find "$src" -type f -print0)
+    # Merge without --delete. The repository owns only the files it ships;
+    # unrelated user files are never removed by the installer.
+    rsync -a -- "$src/" "$dest/"
 }
 
 install_dotfiles() {
-    step "Instalando configuraciones de TechOGR"
+    step "Instalando la estructura real del repositorio"
 
     mkdir -p \
         "$CONFIG_DIR" \
@@ -1016,43 +1044,35 @@ install_dotfiles() {
         "$DATA_DIR/applications" \
         "$DATA_DIR/fonts"
 
-    shopt -s nullglob dotglob
+    # IMPORTANT: config/ maps 1:1 to ~/.config.
+    # This is the key layout of this repository.
+    # Therefore config/bspwm/eww becomes ~/.config/bspwm/eww,
+    # NOT ~/.config/eww.
+    deploy_config_tree
 
-    local src
-    local name
+    deploy_home_tree
 
-    for src in "$REPO_DIR/config"/*; do
-        [[ -d "$src" ]] || continue
-
-        name="$(basename -- "$src")"
-        deploy_directory "$src" "$CONFIG_DIR/$name"
-    done
-
-    for src in "$REPO_DIR/home"/.* "$REPO_DIR/home"/*; do
-        [[ -e "$src" || -L "$src" ]] || continue
-
-        name="$(basename -- "$src")"
-
-        [[ "$name" == "." || "$name" == ".." ]] && continue
-
-        if [[ -f "$src" || -L "$src" ]]; then
-            deploy_file "$src" "$HOME/$name"
-        fi
-    done
-
-    deploy_merge "$REPO_DIR/misc/bin" "$LOCAL_BIN"
-    deploy_merge "$REPO_DIR/misc/applications" "$DATA_DIR/applications"
-    deploy_merge "$REPO_DIR/misc/fonts" "$DATA_DIR/fonts"
-
-    if [[ -d "$REPO_DIR/misc/wallpapers" ]]; then
-        deploy_merge "$REPO_DIR/misc/wallpapers" "$HOME/Wallpapers"
-    elif [[ -d "$REPO_DIR/Wallpapers" ]]; then
-        deploy_merge "$REPO_DIR/Wallpapers" "$HOME/Wallpapers"
+    if [[ -d "$REPO_DIR/misc/bin" ]]; then
+        deploy_merge "$REPO_DIR/misc/bin" "$LOCAL_BIN"
     fi
 
-    shopt -u nullglob dotglob
+    if [[ -d "$REPO_DIR/misc/applications" ]]; then
+        deploy_merge "$REPO_DIR/misc/applications" "$DATA_DIR/applications"
+    fi
 
-    ok "Configuraciones instaladas"
+    if [[ -d "$REPO_DIR/misc/fonts" ]]; then
+        deploy_merge "$REPO_DIR/misc/fonts" "$DATA_DIR/fonts"
+    fi
+
+    # The repository currently stores wallpapers at the root: Wallpapers/.
+    # Keep misc/wallpapers supported too for future changes.
+    if [[ -d "$REPO_DIR/Wallpapers" ]]; then
+        deploy_merge "$REPO_DIR/Wallpapers" "$HOME/Wallpapers"
+    elif [[ -d "$REPO_DIR/misc/wallpapers" ]]; then
+        deploy_merge "$REPO_DIR/misc/wallpapers" "$HOME/Wallpapers"
+    fi
+
+    ok "Configuraciones instaladas respetando la estructura del repositorio"
 }
 
 # -----------------------------------------------------------------------------
@@ -1066,20 +1086,27 @@ fix_permissions() {
         find "$LOCAL_BIN" -type f -exec chmod +x {} +
     fi
 
-    if [[ -f "$CONFIG_DIR/bspwm/bspwmrc" ]]; then
-        chmod +x "$CONFIG_DIR/bspwm/bspwmrc"
-    fi
-
+    # All executable BSPWM helper scripts live under ~/.config/bspwm/bin.
     if [[ -d "$CONFIG_DIR/bspwm/bin" ]]; then
         find "$CONFIG_DIR/bspwm/bin" -type f -exec chmod +x {} +
     fi
 
-    if [[ -d "$CONFIG_DIR/polybar" ]]; then
-        find "$CONFIG_DIR/polybar" -type f -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
+    [[ -f "$CONFIG_DIR/bspwm/bspwmrc" ]] && chmod +x "$CONFIG_DIR/bspwm/bspwmrc"
+
+    # Bar.bash scripts are sourced by Theme.sh, not executed directly, but
+    # executable permission is harmless and keeps the shipped rice usable.
+    if [[ -d "$CONFIG_DIR/bspwm/rices" ]]; then
+        find "$CONFIG_DIR/bspwm/rices" \
+            -type f \
+            \( -name '*.sh' -o -name '*.bash' \) \
+            -exec chmod +x {} +
     fi
 
-    if [[ -d "$CONFIG_DIR/eww" ]]; then
-        find "$CONFIG_DIR/eww" -type f -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
+    # Eww helper scripts, when present, are executable.
+    if [[ -d "$CONFIG_DIR/bspwm/eww" ]]; then
+        find "$CONFIG_DIR/bspwm/eww" \
+            -type f -name '*.sh' \
+            -exec chmod +x {} + 2>/dev/null || true
     fi
 
     ok "Permisos aplicados"
@@ -1092,8 +1119,6 @@ patch_virtual_monitor() {
 
     if grep -Eq '^[[:space:]]*xrandr --output Virtual-1 --mode 1920x1080 --rate 60[[:space:]]*$' "$file"; then
         step "Haciendo segura la configuración Virtual-1"
-
-        backup_one "$file"
 
         sed -i \
             's@^[[:space:]]*xrandr --output Virtual-1 --mode 1920x1080 --rate 60[[:space:]]*$@if xrandr --query 2>/dev/null | grep -q "^Virtual-1 connected"; then xrandr --output Virtual-1 --mode 1920x1080 --rate 60; fi@' \
@@ -1240,8 +1265,6 @@ patch_zsh_update_alias() {
     if grep -qE '^alias update="paru -Syu' "$zshrc"; then
         step "Eliminando dependencia innecesaria de paru en el alias update"
 
-        backup_one "$zshrc"
-
         sed -i \
             's/^alias update="paru -Syu[^\"]*"/alias update="sudo pacman -Syu"/' \
             "$zshrc"
@@ -1269,24 +1292,29 @@ refresh_fonts() {
 # -----------------------------------------------------------------------------
 
 validate_installation() {
-    step "Validando instalación"
+    step "Validando instalación contra la estructura real del repositorio"
 
-    local required_files=(
+    local required_paths=(
         "$CONFIG_DIR/bspwm/bspwmrc"
+        "$CONFIG_DIR/bspwm/bin"
         "$CONFIG_DIR/bspwm/config/sxhkdrc"
-        "$CONFIG_DIR/polybar"
-        "$CONFIG_DIR/rofi"
+        "$CONFIG_DIR/bspwm/config/picom/picom.conf"
+        "$CONFIG_DIR/bspwm/config/rofi-themes"
+        "$CONFIG_DIR/bspwm/eww"
+        "$CONFIG_DIR/bspwm/eww/eww.yuck"
+        "$CONFIG_DIR/bspwm/rices"
+        "$CONFIG_DIR/bspwm/rices/emilia"
+        "$CONFIG_DIR/bspwm/rices/emilia/Bar.bash"
+        "$CONFIG_DIR/bspwm/rices/emilia/config.ini"
+        "$CONFIG_DIR/bspwm/.rice"
         "$HOME/.zshrc"
+        "$HOME/Wallpapers"
     )
-
-    if (( NO_EWW == 0 )); then
-        required_files+=("$CONFIG_DIR/eww")
-    fi
 
     local failed=0
     local item
 
-    for item in "${required_files[@]}"; do
+    for item in "${required_paths[@]}"; do
         if [[ -e "$item" ]]; then
             ok "Existe: $item"
         else
@@ -1294,6 +1322,20 @@ validate_installation() {
             failed=1
         fi
     done
+
+    # Verify the actual repository layout instead of looking for directories
+    # that this repo does not contain (for example ~/.config/eww or ~/.config/polybar).
+    if [[ -d "$CONFIG_DIR/bspwm/eww" ]]; then
+        ok "Eww config: $CONFIG_DIR/bspwm/eww"
+    fi
+
+    if [[ -d "$CONFIG_DIR/bspwm/rices" ]]; then
+        ok "Rices: $CONFIG_DIR/bspwm/rices"
+    fi
+
+    if [[ -f "$CONFIG_DIR/bspwm/rices/emilia/config.ini" ]]; then
+        ok "Polybar config: $CONFIG_DIR/bspwm/rices/emilia/config.ini"
+    fi
 
     local commands=(
         bspwm
@@ -1315,7 +1357,6 @@ validate_installation() {
     fi
 
     local cmd
-
     for cmd in "${commands[@]}"; do
         if command_exists "$cmd"; then
             ok "Disponible: $cmd"
@@ -1328,13 +1369,14 @@ validate_installation() {
     if command_exists wal; then
         ok "Disponible: wal (Pywal)"
     else
-        warn "wal no está disponible. Pywal no pudo ser instalado desde los repositorios actuales."
+        warn "wal no está disponible; Pywal puede requerir instalación separada en este sistema."
     fi
 
     if (( failed == 0 )); then
-        ok "Validación principal completada"
+        ok "Validación principal completada correctamente"
     else
-        warn "La instalación terminó con componentes faltantes. Revisa $LOG_FILE"
+        warn "La estructura del rice no quedó completa. Revisa $LOG_FILE"
+        return 1
     fi
 }
 
