@@ -1,6 +1,0 @@
-2026/09/05-07:48:51.808 903 Reusing MANIFEST /home/onelcrack/.config/BraveSoftware/Brave-Browser/Default/IndexedDB/https_music.youtube.com_0.indexeddb.leveldb/MANIFEST-000001
-2026/09/05-07:48:51.808 903 Recovering log #20
-2026/09/05-07:48:51.872 903 Reusing old log /home/onelcrack/.config/BraveSoftware/Brave-Browser/Default/IndexedDB/https_music.youtube.com_0.indexeddb.leveldb/000020.log 
-2026/09/05-07:49:18.290 8f8 Level-0 table #25: started
-2026/09/05-07:49:18.301 8f8 Level-0 table #25: 2030740 bytes OK
-2026/09/05-07:49:18.303 8f8 Delete type=0 #20

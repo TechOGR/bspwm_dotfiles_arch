@@ -1,6 +1,0 @@
-2026/09/05-08:29:14.605 6a7 Creating DB /home/onelcrack/.config/BraveSoftware/Brave-Browser/Default/WebStorage/15/IndexedDB/indexeddb.leveldb since it was missing.
-2026/09/05-08:29:14.607 6a7 Reusing MANIFEST /home/onelcrack/.config/BraveSoftware/Brave-Browser/Default/WebStorage/15/IndexedDB/indexeddb.leveldb/MANIFEST-000001
-2026/09/05-08:40:56.431 6a8 Level-0 table #5: started
-2026/09/05-08:40:56.433 6a8 Level-0 table #5: 26231 bytes OK
-2026/09/05-08:40:56.435 6a8 Delete type=0 #3
-2026/09/05-08:40:56.435 6a8 Manual compaction at level-0 from (begin) .. (end); will stop at (end)
