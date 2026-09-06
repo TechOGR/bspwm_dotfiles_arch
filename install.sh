@@ -10,7 +10,8 @@
 #   - Safe package installation with conflict handling
 #   - Never install rust and rustup in the same pacman transaction
 #   - Build Eww v0.6.0 with its upstream Rust toolchain (1.76.0)
-#   - Never run cargo tree or mutate Cargo.lock
+#   - Never use cargo tree for dependency detection
+#   - Never modify Cargo.lock to guess/fix dependency versions
 #   - Automatic backups before replacing dotfiles
 #   - Hardware-safe BSPWM monitor setup
 #   - Recoverable failures and detailed logs
@@ -19,12 +20,13 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-readonly SCRIPT_VERSION="8.1.0"
+readonly SCRIPT_VERSION="5.0.0"
 readonly REPO_URL="https://github.com/TechOGR/bspwm_dotfiles_arch.git"
 readonly EWW_REPO="https://github.com/elkowar/eww"
 readonly EWW_VERSION="v0.6.0"
 readonly EWW_TARBALL="https://github.com/elkowar/eww/archive/refs/tags/${EWW_VERSION}.tar.gz"
 readonly EWW_RUST_VERSION="1.76.0"
+readonly RUSTUP_BASE_URL="https://static.rust-lang.org/rustup/dist"
 
 readonly HOME_DIR="$HOME"
 readonly CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
@@ -42,8 +44,12 @@ readonly EWW_ERROR_FILE="$STATE_DIR/eww-build-$TIMESTAMP.log"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_DIR="$SCRIPT_DIR"
 
-# Rust for Eww is installed directly from the official standalone Rust archive.
-# The system Rust package is never modified.
+# A private Rust toolchain is used only when the system does not already have
+# rustup. This avoids making pacman install rustup beside Arch's rust package.
+RUST_STATE_DIR="$STATE_DIR/rust"
+RUSTUP_HOME_LOCAL="$RUST_STATE_DIR/rustup"
+CARGO_HOME_LOCAL="$RUST_STATE_DIR/cargo"
+RUSTUP_BIN_LOCAL="$CARGO_HOME_LOCAL/bin/rustup"
 
 SUDO_KEEPALIVE_PID=""
 TEMP_DIR=""
@@ -502,9 +508,9 @@ install_dependencies() {
 
     # IMPORTANT:
     # - rust is intentionally NOT here
-    # - no Rust package is required here
+    # - rustup is intentionally NOT here
     # Eww gets a dedicated isolated Rust toolchain below.
-    # Eww gets its own standalone compiler below.
+    # This makes the installer immune to rust/rustup pacman conflicts.
 
     pacman_install_safe \
         base-devel \
@@ -603,6 +609,16 @@ install_dependencies() {
         ttf-firacode-nerd \
         ttf-nerd-fonts-symbols
 
+    # pywal is currently an official Arch Extra package, but derivatives can
+    # temporarily have stale/missing repositories. It is not allowed to abort
+    # the complete rice installation.
+    if pkg_available python-pywal; then
+        pacman_install_safe python-pywal
+    else
+        warn "python-pywal no está disponible en los repositorios configurados."
+        warn "La instalación continúa; el comando 'wal' puede faltar hasta instalar Pywal."
+    fi
+
     ok "Dependencias principales procesadas"
 }
 
@@ -637,126 +653,112 @@ install_fzf_tab() {
 }
 
 # -----------------------------------------------------------------------------
-# Private Rust toolchain / Eww
+# Rust / Eww toolchain
 # -----------------------------------------------------------------------------
 
-# Eww v0.6.0 was released with Rust 1.76.0. We install that exact standalone
-# Standalone Rust distribution isolated under the user state directory.
-# No rustup is used and the system Rust installation is never modified.
+rustup_target_triple() {
+    local arch
+    arch="$(uname -m)"
 
-rust_target_triple() {
-    case "$(uname -m)" in
-        x86_64)
-            printf '%s\n' 'x86_64-unknown-linux-gnu'
-            ;;
-        aarch64)
-            printf '%s\n' 'aarch64-unknown-linux-gnu'
-            ;;
-        i686)
-            printf '%s\n' 'i686-unknown-linux-gnu'
-            ;;
-        armv7l|armv7)
-            printf '%s\n' 'armv7-unknown-linux-gnueabihf'
-            ;;
-        *)
-            return 1
-            ;;
+    case "$arch" in
+        x86_64) printf '%s\n' 'x86_64-unknown-linux-gnu' ;;
+        aarch64) printf '%s\n' 'aarch64-unknown-linux-gnu' ;;
+        armv7l|armv7) printf '%s\n' 'armv7-unknown-linux-gnueabihf' ;;
+        i686) printf '%s\n' 'i686-unknown-linux-gnu' ;;
+        *) return 1 ;;
     esac
 }
 
-install_private_rust() {
-    local target
-    local rust_root="$STATE_DIR/rust-$EWW_RUST_VERSION"
-    local prefix="$rust_root/toolchain"
-    local archive="$rust_root/rust-$EWW_RUST_VERSION.tar.xz"
-    local extracted="$rust_root/source"
-    local tar_root
+ensure_rustup_local() {
+    mkdir -p "$RUSTUP_HOME_LOCAL" "$CARGO_HOME_LOCAL/bin" "$RUST_STATE_DIR"
 
-    if [[ -x "$prefix/bin/cargo" && -x "$prefix/bin/rustc" ]]; then
-        export EWW_CARGO="$prefix/bin/cargo"
-        export EWW_RUSTC="$prefix/bin/rustc"
-        ok "Rust privado $EWW_RUST_VERSION ya está instalado"
+    if [[ -x "$RUSTUP_BIN_LOCAL" ]]; then
+        printf '%s\n' "$RUSTUP_BIN_LOCAL"
         return 0
     fi
 
-    target="$(rust_target_triple)" || {
-        fatal "Arquitectura $(uname -m) no está soportada para Rust $EWW_RUST_VERSION."
+    local target
+    target="$(rustup_target_triple)" || {
+        fatal "Arquitectura $(uname -m) no soportada por el bootstrap automático de rustup."
     }
 
-    step "Instalando Rust $EWW_RUST_VERSION aislado para Eww"
+    local installer="$RUST_STATE_DIR/rustup-init"
 
-    rm -rf -- "$rust_root"
-    mkdir -p "$extracted"
+    step "Preparando Rust aislado para Eww"
 
-    local url="https://static.rust-lang.org/dist/rust-${EWW_RUST_VERSION}-${target}.tar.xz"
+    info "No se instalará rustup mediante pacman."
+    info "El toolchain de Eww se mantendrá separado del Rust del sistema."
 
-    info "Descargando: $url"
-
-    if ! curl -fL --retry 5 --retry-delay 2 \
-        --connect-timeout 15 \
-        --max-time 1200 \
-        "$url" \
-        -o "$archive"; then
-        fatal "No se pudo descargar Rust $EWW_RUST_VERSION para $target."
+    if ! curl -fL --retry 3 --retry-delay 2 \
+        "$RUSTUP_BASE_URL/$target/rustup-init" \
+        -o "$installer"; then
+        fatal "No se pudo descargar rustup-init."
     fi
 
-    [[ -s "$archive" ]] || fatal "El archivo de Rust descargado está vacío."
+    chmod +x "$installer"
 
-    step "Extrayendo Rust $EWW_RUST_VERSION"
+    RUSTUP_HOME="$RUSTUP_HOME_LOCAL" \
+    CARGO_HOME="$CARGO_HOME_LOCAL" \
+    "$installer" \
+        -y \
+        --profile minimal \
+        --default-toolchain none \
+        --no-modify-path
 
-    tar -xJf "$archive" -C "$extracted"
+    rm -f -- "$installer"
 
-    tar_root="$(find "$extracted" -mindepth 1 -maxdepth 1 -type d -name 'rust-*' -print -quit)"
+    [[ -x "$RUSTUP_BIN_LOCAL" ]] || fatal "rustup local no quedó instalado correctamente."
 
-    [[ -n "$tar_root" && -d "$tar_root" ]] || {
-        fatal "No se pudo localizar el árbol de Rust $EWW_RUST_VERSION después de extraerlo."
-    }
-
-    [[ -x "$tar_root/install.sh" ]] || {
-        fatal "El paquete de Rust no contiene su instalador oficial."
-    }
-
-    step "Instalando Rust en $prefix"
-
-    # The official standalone installer supports a user-owned prefix and does
-    # The system Rust installation is not modified.
-    if ! (cd "$tar_root" && ./install.sh \
-        --prefix="$prefix" \
-        --disable-ldconfig \
-        --without=rust-docs); then
-        fatal "No se pudo instalar el toolchain privado Rust $EWW_RUST_VERSION."
-    fi
-
-    rm -f -- "$archive"
-
-    [[ -x "$prefix/bin/cargo" ]] || fatal "No se encontró cargo tras instalar Rust $EWW_RUST_VERSION."
-    [[ -x "$prefix/bin/rustc" ]] || fatal "No se encontró rustc tras instalar Rust $EWW_RUST_VERSION."
-
-    export EWW_CARGO="$prefix/bin/cargo"
-    export EWW_RUSTC="$prefix/bin/rustc"
-
-    ok "Rust $EWW_RUST_VERSION instalado sin rustup"
+    printf '%s\n' "$RUSTUP_BIN_LOCAL"
 }
 
-prepare_eww_rust() {
-    step "Preparando toolchain para Eww"
+ensure_eww_rust() {
+    step "Preparando toolchain Rust para Eww $EWW_VERSION"
 
-    # Do not use the system Rust. The standalone toolchain is isolated and
-    # selected only for this Eww build.
-    install_private_rust
+    local rustup_bin=""
+    local rustup_home=""
+    local cargo_home=""
 
-    local actual
-    actual="$($EWW_RUSTC --version 2>/dev/null || true)"
+    if command_exists rustup; then
+        rustup_bin="$(command -v rustup)"
+        rustup_home="${RUSTUP_HOME:-$HOME/.rustup}"
+        cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+        ok "Se utilizará el rustup existente: $rustup_bin"
+    else
+        rustup_bin="$(ensure_rustup_local)"
+        rustup_home="$RUSTUP_HOME_LOCAL"
+        cargo_home="$CARGO_HOME_LOCAL"
+        ok "Se utilizará rustup aislado: $rustup_bin"
+    fi
 
-    [[ "$actual" == rustc\ $EWW_RUST_VERSION* ]] || {
-        fatal "El rustc privado no corresponde a Rust $EWW_RUST_VERSION: ${actual:-desconocido}"
-    }
+    if ! RUSTUP_HOME="$rustup_home" CARGO_HOME="$cargo_home" \
+        "$rustup_bin" toolchain install "$EWW_RUST_VERSION" \
+        --profile minimal \
+        --component rust-src; then
+        fatal "No se pudo instalar el toolchain Rust $EWW_RUST_VERSION para Eww."
+    fi
 
-    ok "Toolchain Eww: $actual"
+    export TECHOGR_RUSTUP="$rustup_bin"
+    export TECHOGR_RUSTUP_HOME="$rustup_home"
+    export TECHOGR_CARGO_HOME="$cargo_home"
+
+    ok "Rust $EWW_RUST_VERSION preparado"
+}
+
+rust_cargo() {
+    RUSTUP_HOME="$TECHOGR_RUSTUP_HOME" \
+    CARGO_HOME="$TECHOGR_CARGO_HOME" \
+    "$TECHOGR_RUSTUP" run "$EWW_RUST_VERSION" cargo "$@"
+}
+
+rustc_version() {
+    RUSTUP_HOME="$TECHOGR_RUSTUP_HOME" \
+    CARGO_HOME="$TECHOGR_CARGO_HOME" \
+    "$TECHOGR_RUSTUP" run "$EWW_RUST_VERSION" rustc --version
 }
 
 # -----------------------------------------------------------------------------
-# Eww source
+# Eww
 # -----------------------------------------------------------------------------
 
 prepare_eww_source() {
@@ -765,45 +767,37 @@ prepare_eww_source() {
     local extract_root="$BUILD_DIR/eww-source"
 
     rm -rf -- "$source_root" "$extract_root"
-    mkdir -p "$BUILD_DIR" "$extract_root"
+    mkdir -p "$BUILD_DIR"
 
     step "Descargando Eww $EWW_VERSION"
 
-    if ! curl -fL --retry 5 --retry-delay 2 \
-        --connect-timeout 15 \
-        --max-time 1200 \
-        "$EWW_TARBALL" \
-        -o "$archive"; then
+    if ! curl -fL --retry 3 --retry-delay 2 "$EWW_TARBALL" -o "$archive"; then
         fatal "No se pudo descargar Eww $EWW_VERSION."
     fi
 
-    [[ -s "$archive" ]] || fatal "El archivo de Eww descargado está vacío."
+    mkdir -p "$extract_root"
 
     tar -xzf "$archive" -C "$extract_root"
 
     local extracted
     extracted="$(find "$extract_root" -mindepth 1 -maxdepth 1 -type d -print -quit)"
 
-    [[ -n "$extracted" && -d "$extracted" ]] || {
-        fatal "No se pudo extraer Eww $EWW_VERSION."
-    }
+    [[ -n "$extracted" && -d "$extracted" ]] || fatal "No se pudo extraer Eww $EWW_VERSION."
 
     mv -- "$extracted" "$source_root"
+
     rm -f -- "$archive"
 
-    [[ -f "$source_root/Cargo.lock" ]] || fatal "Eww $EWW_VERSION no contiene Cargo.lock."
-    [[ -f "$source_root/rust-toolchain.toml" ]] || fatal "Eww $EWW_VERSION no contiene rust-toolchain.toml."
-    [[ -f "$source_root/Cargo.toml" ]] || fatal "Eww $EWW_VERSION no contiene Cargo.toml."
+    [[ -f "$source_root/Cargo.lock" ]] || fatal "El release de Eww no contiene Cargo.lock."
+    [[ -f "$source_root/rust-toolchain.toml" ]] || fatal "El release de Eww no contiene rust-toolchain.toml."
 
-    ok "Fuente Eww $EWW_VERSION preparada"
+    ok "Fuente de Eww preparada"
 }
 
 build_eww() {
     local source_root="$BUILD_DIR/eww"
 
     [[ -d "$source_root" ]] || fatal "No existe el árbol fuente de Eww."
-    [[ -x "${EWW_CARGO:-}" ]] || fatal "Cargo privado de Eww no está disponible."
-    [[ -x "${EWW_RUSTC:-}" ]] || fatal "Rustc privado de Eww no está disponible."
 
     step "Compilando Eww $EWW_VERSION para X11"
 
@@ -811,46 +805,38 @@ build_eww() {
 
     pushd "$source_root" >/dev/null
 
-    info "Rust: $($EWW_RUSTC --version)"
-    info "Cargo: $($EWW_CARGO --version)"
-    info "Cargo.lock oficial: sí"
-    info "Modo locked: sí"
-    info "Backend: x11"
+    info "Toolchain esperado por upstream: Rust $EWW_RUST_VERSION"
+    info "Toolchain efectivo: $(rustc_version)"
+    info "Se utilizará Cargo.lock oficial."
+    info "No se ejecutará cargo tree."
+    info "No se actualizarán ni sustituirán crates automáticamente."
 
-    # Completely isolate Cargo/Rust from the user's global toolchain.
-    export PATH="$(dirname "$EWW_CARGO"):$PATH"
-    export RUSTC="$EWW_RUSTC"
-    export CARGO="$EWW_CARGO"
-
-    # Keep Cargo's cache in the installer state directory. This makes the
-    # installer resumable without polluting ~/.cargo with the legacy toolchain.
-    export CARGO_HOME="$STATE_DIR/cargo"
-    mkdir -p "$CARGO_HOME"
-
-    # Eww v0.6.0 already ships a tested lockfile. Never update it here.
-    if "$EWW_CARGO" build \
+    # Eww's release explicitly contains rust-toolchain.toml with 1.76.0.
+    # We nevertheless invoke the exact toolchain through rustup so the build
+    # does not depend on the user's global Rust version.
+    if rust_cargo build \
         --release \
         --locked \
         --no-default-features \
         --features x11 \
         >"$EWW_ERROR_FILE" 2>&1; then
         popd >/dev/null
-        ok "Eww compilado correctamente"
         return 0
     fi
 
     popd >/dev/null
 
-    warn "La compilación de Eww falló."
-    warn "Log: $EWW_ERROR_FILE"
+    warn "La primera compilación de Eww falló."
+    warn "Log completo: $EWW_ERROR_FILE"
 
-    # No speculative cargo-tree/cargo-update logic. Print the useful tail so the
-    # actual compiler failure is visible immediately, while keeping the full log.
-    printf '\n%b\n' "${YELLOW}----- Últimas líneas del error de Eww -----${RESET}"
-    tail -n 80 "$EWW_ERROR_FILE" || true
-    printf '%b\n\n' "${YELLOW}-------------------------------------------${RESET}"
+    # Known historical issue: Eww 0.6.0 and the time crate can fail with a
+    # modern system compiler. We already use upstream's pinned 1.76.0, so we
+    # DO NOT mutate Cargo.lock or run cargo tree as a guess.
+    if grep -Eiq 'time|rust-version|requires.*rustc|MSRV|edition[[:space:]]+2021|error\[E0' "$EWW_ERROR_FILE"; then
+        warn "El log contiene un error de Rust/dependencias. Se conserva intacto para diagnóstico."
+    fi
 
-    fatal "No se pudo compilar Eww $EWW_VERSION con Rust $EWW_RUST_VERSION."
+    fatal "Eww $EWW_VERSION no pudo compilarse con el toolchain oficial $EWW_RUST_VERSION. Revisa $EWW_ERROR_FILE"
 }
 
 install_eww() {
@@ -862,28 +848,25 @@ install_eww() {
     step "Instalando Eww $EWW_VERSION"
 
     if command_exists eww; then
-        local existing
-        existing="$(eww --version 2>/dev/null || true)"
-        ok "Eww ya está instalado: ${existing:-desconocido}"
+        local version
+        version="$(eww --version 2>/dev/null || true)"
+        ok "Eww ya está instalado: ${version:-desconocido}"
         return 0
     fi
 
-    prepare_eww_rust
+    ensure_eww_rust
     prepare_eww_source
     build_eww
 
     local binary="$BUILD_DIR/eww/target/release/eww"
 
-    [[ -x "$binary" ]] || fatal "La compilación finalizó sin generar Eww."
+    [[ -x "$binary" ]] || fatal "Cargo terminó sin generar el binario Eww."
 
     root_run install -Dm755 "$binary" /usr/local/bin/eww
 
     command_exists eww || fatal "Eww no aparece en PATH después de la instalación."
 
-    local installed_version
-    installed_version="$(eww --version 2>/dev/null || true)"
-
-    ok "Eww instalado: ${installed_version:-$EWW_VERSION}"
+    ok "Eww instalado: $(eww --version 2>/dev/null || echo "$EWW_VERSION")"
 }
 
 # -----------------------------------------------------------------------------
@@ -917,13 +900,16 @@ create_backup() {
     local targets=(
         "$HOME/.config/bspwm"
         "$HOME/.config/sxhkd"
+        "$HOME/.config/polybar"
         "$HOME/.config/picom"
+        "$HOME/.config/rofi"
         "$HOME/.config/jgmenu"
         "$HOME/.config/kitty"
         "$HOME/.config/dunst"
         "$HOME/.config/xsettingsd"
         "$HOME/.config/gtk-3.0"
         "$HOME/.config/gtk-4.0"
+        "$HOME/.config/eww"
         "$HOME/.config/mpd"
         "$HOME/.config/ncmpcpp"
         "$HOME/.zshrc"
@@ -997,120 +983,49 @@ deploy_merge() {
 install_dotfiles() {
     step "Instalando configuraciones de TechOGR"
 
-    mkdir -p "$CONFIG_DIR" "$LOCAL_BIN" "$DATA_DIR/applications" "$DATA_DIR/fonts"
+    mkdir -p \
+        "$CONFIG_DIR" \
+        "$LOCAL_BIN" \
+        "$DATA_DIR/applications" \
+        "$DATA_DIR/fonts"
 
-    # The repository's config/ tree maps directly to ~/.config/.
-    # Do NOT create or expect ~/.config/eww, ~/.config/polybar or ~/.config/rofi.
-    # This rice keeps those components inside ~/.config/bspwm/.
-    rsync -a --exclude='.git' "$REPO_DIR/config/" "$CONFIG_DIR/"
+    shopt -s nullglob dotglob
 
-    if [[ -f "$REPO_DIR/home/.zshrc" ]]; then
-        backup_one "$HOME/.zshrc"
-        install -Dm644 "$REPO_DIR/home/.zshrc" "$HOME/.zshrc"
-    fi
+    local src
+    local name
 
-    [[ -d "$REPO_DIR/misc/bin" ]] && rsync -a "$REPO_DIR/misc/bin/" "$LOCAL_BIN/"
-    [[ -d "$REPO_DIR/misc/applications" ]] && rsync -a "$REPO_DIR/misc/applications/" "$DATA_DIR/applications/"
-    [[ -d "$REPO_DIR/misc/fonts" ]] && rsync -a "$REPO_DIR/misc/fonts/" "$DATA_DIR/fonts/"
+    for src in "$REPO_DIR/config"/*; do
+        [[ -d "$src" ]] || continue
 
-    ok "config/ -> $CONFIG_DIR"
-}
+        name="$(basename -- "$src")"
+        deploy_directory "$src" "$CONFIG_DIR/$name"
+    done
 
-current_rice() {
-    [[ -f "$CONFIG_DIR/bspwm/.rice" ]] || return 1
-    tr -d '[:space:]' < "$CONFIG_DIR/bspwm/.rice"
-}
+    for src in "$REPO_DIR/home"/.* "$REPO_DIR/home"/*; do
+        [[ -e "$src" || -L "$src" ]] || continue
 
-prepare_rice_assets() {
-    step "Preparando rice y wallpapers"
+        name="$(basename -- "$src")"
 
-    local rice
-    rice="$(current_rice)" || fatal "No se pudo leer .rice"
+        [[ "$name" == "." || "$name" == ".." ]] && continue
 
-    local rice_dir="$CONFIG_DIR/bspwm/rices/$rice"
-    local rice_walls="$rice_dir/walls"
-    local user_walls="$HOME/Imágenes/Wallpapers"
-    local theme_file="$rice_dir/theme-config.bash"
-
-    [[ -d "$rice_dir" ]] || fatal "No existe el rice '$rice'."
-
-    mkdir -p "$rice_walls" "$user_walls"
-
-    # Root Wallpapers/ is the source of truth for the bundled wallpapers.
-    rsync -a "$REPO_DIR/Wallpapers/" "$rice_walls/"
-    rsync -a "$REPO_DIR/Wallpapers/" "$user_walls/"
-
-    # The shipped Emilia theme points at ~/Imágenes/Wallpapers.
-    if [[ -f "$theme_file" ]]; then
-        sed -i "s|^CUSTOM_DIR=.*|CUSTOM_DIR=\"$user_walls\"|" "$theme_file" || true
-        if [[ -f "$user_walls/noche_car_man.jpg" ]]; then
-            sed -i "s|^DEFAULT_WALL=.*|DEFAULT_WALL=\"$user_walls/noche_car_man.jpg\"|" "$theme_file" || true
+        if [[ -f "$src" || -L "$src" ]]; then
+            deploy_file "$src" "$HOME/$name"
         fi
+    done
+
+    deploy_merge "$REPO_DIR/misc/bin" "$LOCAL_BIN"
+    deploy_merge "$REPO_DIR/misc/applications" "$DATA_DIR/applications"
+    deploy_merge "$REPO_DIR/misc/fonts" "$DATA_DIR/fonts"
+
+    if [[ -d "$REPO_DIR/misc/wallpapers" ]]; then
+        deploy_merge "$REPO_DIR/misc/wallpapers" "$HOME/Wallpapers"
+    elif [[ -d "$REPO_DIR/Wallpapers" ]]; then
+        deploy_merge "$REPO_DIR/Wallpapers" "$HOME/Wallpapers"
     fi
 
-    ok "Rice activo: $rice"
-    ok "Eww: $CONFIG_DIR/bspwm/eww"
-    ok "Rices: $CONFIG_DIR/bspwm/rices"
-    ok "Walls: $rice_walls"
-}
+    shopt -u nullglob dotglob
 
-prepare_jgmenu() {
-    step "Preparando jgmenu"
-
-    local dir="$CONFIG_DIR/jgmenu"
-    local conf="$dir/jgmenurc"
-    local prepend="$dir/prepend.csv"
-
-    mkdir -p "$dir"
-
-    if [[ ! -f "$conf" ]] && command_exists jgmenu_run; then
-        jgmenu_run init >/dev/null 2>&1 || true
-    fi
-
-    if [[ ! -f "$conf" ]]; then
-        cat > "$conf" <<'EOF_JGMENU'
-at_pointer = 1
-stay_alive = 0
-csv_cmd = pmenu
-menu_width = 420
-menu_padding_top = 8
-menu_padding_right = 8
-menu_padding_bottom = 8
-menu_padding_left = 8
-menu_radius = 8
-item_height = 30
-item_padding_x = 8
-item_radius = 5
-icon_size = 22
-icon_text_spacing = 8
-font = JetBrainsMono Nerd Font 10
-color_menu_bg = #1a1b26
-color_menu_fg = #c0caf5
-color_menu_border = #222330
-color_norm_bg = #1a1b26
-color_norm_fg = #c0caf5
-color_sel_bg = #222330
-color_sel_fg = #7aa2f7
-EOF_JGMENU
-    fi
-
-    [[ -f "$prepend" ]] || : > "$prepend"
-    ok "jgmenu preparado: $dir"
-}
-
-initialize_rice_runtime() {
-    step "Inicializando Theme.sh"
-
-    local theme="$CONFIG_DIR/bspwm/bin/Theme.sh"
-    [[ -f "$theme" ]] || return 0
-    chmod +x "$theme"
-
-    # Theme.sh creates/updates runtime-dependent pieces used by the rice.
-    if "$theme"; then
-        ok "Theme.sh ejecutado"
-    else
-        warn "Theme.sh devolvió un código de error; se continúa con la validación."
-    fi
+    ok "Configuraciones instaladas"
 }
 
 # -----------------------------------------------------------------------------
@@ -1120,29 +1035,45 @@ initialize_rice_runtime() {
 fix_permissions() {
     step "Aplicando permisos de ejecución"
 
-    [[ -d "$LOCAL_BIN" ]] && find "$LOCAL_BIN" -type f -exec chmod +x {} + 2>/dev/null || true
-    [[ -d "$CONFIG_DIR/bspwm/bin" ]] && find "$CONFIG_DIR/bspwm/bin" -type f -exec chmod +x {} + 2>/dev/null || true
-    [[ -d "$CONFIG_DIR/bspwm/config/modules" ]] && find "$CONFIG_DIR/bspwm/config/modules" -type f -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
-    [[ -d "$CONFIG_DIR/bspwm/rices" ]] && find "$CONFIG_DIR/bspwm/rices" -type f \( -name '*.sh' -o -name '*.bash' \) -exec chmod +x {} + 2>/dev/null || true
-    [[ -d "$CONFIG_DIR/bspwm/eww" ]] && find "$CONFIG_DIR/bspwm/eww" -type f -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
-    [[ -f "$CONFIG_DIR/bspwm/bspwmrc" ]] && chmod +x "$CONFIG_DIR/bspwm/bspwmrc"
-    [[ -f "$HOME/.xinitrc" ]] && chmod +x "$HOME/.xinitrc"
-    [[ -f "$HOME/.xprofile" ]] && chmod +x "$HOME/.xprofile"
+    if [[ -d "$LOCAL_BIN" ]]; then
+        find "$LOCAL_BIN" -type f -exec chmod +x {} +
+    fi
+
+    if [[ -f "$CONFIG_DIR/bspwm/bspwmrc" ]]; then
+        chmod +x "$CONFIG_DIR/bspwm/bspwmrc"
+    fi
+
+    if [[ -d "$CONFIG_DIR/bspwm/bin" ]]; then
+        find "$CONFIG_DIR/bspwm/bin" -type f -exec chmod +x {} +
+    fi
+
+    if [[ -d "$CONFIG_DIR/polybar" ]]; then
+        find "$CONFIG_DIR/polybar" -type f -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
+    fi
+
+    if [[ -d "$CONFIG_DIR/eww" ]]; then
+        find "$CONFIG_DIR/eww" -type f -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
+    fi
 
     ok "Permisos aplicados"
 }
 
 patch_virtual_monitor() {
     local file="$CONFIG_DIR/bspwm/bspwmrc"
+
     [[ -f "$file" ]] || return 0
 
-    if grep -Eq '^[[:space:]]*xrandr --output Virtual-1 ' "$file"; then
-        backup_one "$file"
-        sed -i '/^[[:space:]]*xrandr --output Virtual-1 /d' "$file"
-        ok "Eliminada la salida fija Virtual-1; MonitorSetup queda a cargo del monitor."
-    fi
+    if grep -Eq '^[[:space:]]*xrandr --output Virtual-1 --mode 1920x1080 --rate 60[[:space:]]*$' "$file"; then
+        step "Haciendo segura la configuración Virtual-1"
 
-    sed -i 's|\.config/eww|.config/bspwm/eww|g' "$file"
+        backup_one "$file"
+
+        sed -i \
+            's@^[[:space:]]*xrandr --output Virtual-1 --mode 1920x1080 --rate 60[[:space:]]*$@if xrandr --query 2>/dev/null | grep -q "^Virtual-1 connected"; then xrandr --output Virtual-1 --mode 1920x1080 --rate 60; fi@' \
+            "$file"
+
+        ok "Virtual-1 ahora es condicional"
+    fi
 }
 
 # -----------------------------------------------------------------------------
@@ -1311,49 +1242,53 @@ refresh_fonts() {
 # -----------------------------------------------------------------------------
 
 validate_installation() {
-    step "Validando instalación con las rutas reales del repositorio"
-
-    local rice
-    rice="$(current_rice)" || return 1
+    step "Validando instalación"
 
     local required_files=(
         "$CONFIG_DIR/bspwm/bspwmrc"
-        "$CONFIG_DIR/bspwm/.rice"
-        "$CONFIG_DIR/bspwm/bin/Theme.sh"
-        "$CONFIG_DIR/bspwm/bin/MonitorSetup"
         "$CONFIG_DIR/bspwm/config/sxhkdrc"
-        "$CONFIG_DIR/bspwm/config/picom/picom.conf"
-        "$CONFIG_DIR/bspwm/config/rofi-themes"
-        "$CONFIG_DIR/bspwm/eww"
-        "$CONFIG_DIR/bspwm/eww/eww.yuck"
-        "$CONFIG_DIR/bspwm/eww/eww.scss"
-        "$CONFIG_DIR/bspwm/rices/$rice"
-        "$CONFIG_DIR/bspwm/rices/$rice/config.ini"
-        "$CONFIG_DIR/bspwm/rices/$rice/Bar.bash"
-        "$CONFIG_DIR/bspwm/rices/$rice/theme-config.bash"
-        "$CONFIG_DIR/bspwm/rices/$rice/walls"
-        "$CONFIG_DIR/jgmenu/jgmenurc"
-        "$CONFIG_DIR/jgmenu/prepend.csv"
-        "$HOME/Imágenes/Wallpapers/noche_car_man.jpg"
+        "$CONFIG_DIR/polybar"
+        "$CONFIG_DIR/rofi"
         "$HOME/.zshrc"
     )
 
-    local failed=0 item
+    if (( NO_EWW == 0 )); then
+        required_files+=("$CONFIG_DIR/eww")
+    fi
+
+    local failed=0
+    local item
+
     for item in "${required_files[@]}"; do
         if [[ -e "$item" ]]; then
-            ok "$item"
+            ok "Existe: $item"
         else
-            warn "FALTA: $item"
+            warn "Falta: $item"
             failed=1
         fi
     done
 
     local commands=(
-        bspwm sxhkd polybar picom rofi jgmenu eww dunst kitty zsh nvim thunar
-        xdotool xprop xrandr feh xsettingsd clipcatd lxpolkit
+        bspwm
+        sxhkd
+        polybar
+        picom
+        rofi
+        jgmenu
+        dunst
+        kitty
+        zsh
+        nvim
+        thunar
+        clipcatd
     )
 
+    if (( NO_EWW == 0 )); then
+        commands+=(eww)
+    fi
+
     local cmd
+
     for cmd in "${commands[@]}"; do
         if command_exists "$cmd"; then
             ok "Disponible: $cmd"
@@ -1363,7 +1298,17 @@ validate_installation() {
         fi
     done
 
-    return "$failed"
+    if command_exists wal; then
+        ok "Disponible: wal (Pywal)"
+    else
+        warn "wal no está disponible. Pywal no pudo ser instalado desde los repositorios actuales."
+    fi
+
+    if (( failed == 0 )); then
+        ok "Validación principal completada"
+    else
+        warn "La instalación terminó con componentes faltantes. Revisa $LOG_FILE"
+    fi
 }
 
 # -----------------------------------------------------------------------------
@@ -1376,9 +1321,7 @@ print_summary() {
     printf '%b\n' "${GREEN}${BOLD}╚══════════════════════════════════════════════════════════════╝${RESET}"
     printf '\n'
     printf '  Rice:       TechOGR BSPWM\n'
-    printf '  Config:     %s\n' "$CONFIG_DIR/bspwm"
-    printf '  Eww:        %s\n' "$CONFIG_DIR/bspwm/eww"
-    printf '  Rices:      %s\n' "$CONFIG_DIR/bspwm/rices"
+    printf '  Config:     %s\n' "$CONFIG_DIR"
     printf '  Backup:     %s\n' "$BACKUP_DIR"
     printf '  Log:        %s\n' "$LOG_FILE"
     printf '  Eww log:    %s\n' "$EWW_ERROR_FILE"
@@ -1443,9 +1386,6 @@ main() {
     install_eww
     create_backup
     install_dotfiles
-    prepare_rice_assets
-    prepare_jgmenu
-    initialize_rice_runtime
     fix_permissions
     patch_virtual_monitor
     setup_x_session
