@@ -18,7 +18,7 @@
 
 set -uo pipefail
 
-SCRIPT_VERSION="7.0.0"
+SCRIPT_VERSION="7.1.0"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_URL="https://github.com/TechOGR/bspwm_dotfiles_arch.git"
 LOG_FILE="$HOME/.techogr_install.log"
@@ -130,6 +130,47 @@ install_repo_pkg() {
     FAILED_OPTIONAL+=("$pkg")
     printf '  %-34s %swarn%s\n' "$pkg" "$YELLOW" "$RESET"
     return 1
+}
+
+run_with_progress() {
+    # Visual progress for long-running commands.
+    # Full command output is preserved in the installer log; the terminal shows
+    # a live spinner, elapsed time and the latest output line so long builds do
+    # not look frozen.
+    local label="$1"
+    shift
+
+    local started pid rc=0 elapsed mins secs spinner_index=0 latest=""
+    local -a spinner=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+    started=$(date +%s)
+
+    "$@" >>"$LOG_FILE" 2>&1 &
+    pid=$!
+
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep 1
+        elapsed=$(( $(date +%s) - started ))
+        mins=$(( elapsed / 60 ))
+        secs=$(( elapsed % 60 ))
+        latest=$(tail -n 1 "$LOG_FILE" 2>/dev/null | tr '\r' ' ' | sed 's/[[:space:]]\+/ /g')
+        [[ ${#latest} -gt 70 ]] && latest="${latest:0:67}..."
+
+        printf '\r %s[%s]%s %-34s %s%s%s  %02d:%02d' \
+            "$CYAN" "${spinner[$spinner_index]}" "$RESET" "$label" "$DIM" "$latest" "$RESET" "$mins" "$secs"
+
+        spinner_index=$(( (spinner_index + 1) % ${#spinner[@]} ))
+    done
+
+    wait "$pid" || rc=$?
+    printf '\r\033[2K'
+
+    if (( rc == 0 )); then
+        printf ' %s[SUCCESS]%s %s completado.\n' "$GREEN" "$RESET" "$label"
+        return 0
+    fi
+
+    printf ' %s[ERROR]%s %s falló (código %d).\n' "$RED" "$RESET" "$label" "$rc"
+    return "$rc"
 }
 
 install_aur_pkg() {
@@ -395,16 +436,26 @@ install_eww() {
         return 0
     fi
 
-    # Eww on this rice is an expected component, not a cosmetic optional one.
-    # Reproduce the working installation sequence: base build tools, rustup,
-    # stable toolchain, then AUR eww.
+    printf '\n%s%s  EWW • instalación con progreso visual%s\n' "$MAGENTA" "$BOLD" "$RESET"
+    printf '%s  La compilación puede tardar varios minutos. Verás actividad mientras trabaja;\n' "$DIM"
+    printf '  el detalle completo se guarda en: %s%s%s\n\n' "$CYAN" "$LOG_FILE" "$RESET"
+
+    # This follows the sequence proven to work on the user's Arch installation:
+    # base-devel -> rustup -> stable -> yay -S eww.
+    info "Comprobando herramientas base para Eww..."
+    local base_eww_deps=(base-devel)
+    local dep
+    for dep in "${base_eww_deps[@]}"; do
+        install_repo_pkg "$dep" yes || true
+    done
+    ((${#FAILED_REQUIRED[@]} == 0)) || return 1
+
     if ! prepare_rustup_for_eww; then
         FAILED_REQUIRED+=("rustup/Eww toolchain")
         return 1
     fi
 
     local eww_deps=(pkgconf gtk3 gtk-layer-shell pango gdk-pixbuf2 cairo glib2 dbus libdbusmenu-gtk3)
-    local dep
     for dep in "${eww_deps[@]}"; do
         install_repo_pkg "$dep" yes || true
     done
@@ -413,35 +464,52 @@ install_eww() {
     export RUSTUP_TOOLCHAIN=stable
     export RUST_BACKTRACE=1
 
-    # First try the exact route known to work on this rice.
-    if [[ -n "$AUR_HELPER" ]]; then
-        info "Instalando Eww desde AUR con $AUR_HELPER usando Rust stable..."
-        if RUSTUP_TOOLCHAIN=stable "$AUR_HELPER" -S --needed eww >>"$LOG_FILE" 2>&1; then
-            hash -r 2>/dev/null || true
-            if command_exists eww; then
-                success "Eww instalado correctamente desde AUR."
-                return 0
-            fi
-        fi
-        warn "El paquete AUR de Eww no pudo finalizar; se probará compilación directa con el mismo toolchain."
+    if ! command_exists "$AUR_HELPER"; then
+        error "No hay un AUR helper disponible para instalar Eww."
+        FAILED_REQUIRED+=("AUR helper/Eww")
+        return 1
     fi
 
-    # Upstream fallback. This is deliberately after rustup+stable, not before.
+    # Ensure stable is actually active before asking yay to build Eww.
+    if ! rustup default stable >>"$LOG_FILE" 2>&1; then
+        error "No se pudo seleccionar Rust stable para Eww."
+        FAILED_REQUIRED+=("rust stable/Eww")
+        return 1
+    fi
+
+    printf '\n%s╭────────────────────────────────────────────────────────────╮%s\n' "$BLUE" "$RESET"
+    printf '%s│%s %s%s EWW %s•%s AUR + Rust stable%s                          %s│%s\n' \
+        "$BLUE" "$RESET" "$BOLD" "$MAGENTA" "$CYAN" "$MAGENTA" "$RESET" "$BLUE" "$RESET"
+    printf '%s╰────────────────────────────────────────────────────────────╯%s\n' "$BLUE" "$RESET"
+
+    if run_with_progress "Descargando y compilando Eww desde AUR" \
+        env RUSTUP_TOOLCHAIN=stable "$AUR_HELPER" -S --needed --noconfirm eww; then
+        export PATH="/usr/local/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+        hash -r 2>/dev/null || true
+        if command_exists eww; then
+            success "Eww instalado correctamente desde AUR."
+            return 0
+        fi
+        warn "yay terminó, pero el binario eww no aparece en PATH."
+    else
+        warn "El paquete AUR de Eww no pudo finalizar. Se intentará compilación directa."
+    fi
+
+    # Upstream fallback. Kept for systems where the current AUR recipe fails.
     local build_root="$HOME/.local/state/techogr-bspwm/build"
     local build_dir="$build_root/eww-source"
     local eww_repo="https://github.com/elkowar/eww.git"
     mkdir -p "$build_root"
     rm -rf -- "$build_dir"
 
-    info "Clonando la fuente oficial de Eww como fallback..."
-    if ! git clone --depth=1 "$eww_repo" "$build_dir" >>"$LOG_FILE" 2>&1; then
-        warn "No se pudo clonar Eww desde GitHub."
-        FAILED_REQUIRED+=("eww")
+    if ! run_with_progress "Clonando la fuente oficial de Eww" \
+        git clone --depth=1 "$eww_repo" "$build_dir"; then
+        FAILED_REQUIRED+=("eww-source")
         return 1
     fi
 
-    info "Compilando Eww para X11 con Rust stable..."
-    if ! (cd "$build_dir" && RUSTUP_TOOLCHAIN=stable cargo build --release --no-default-features --features x11 --locked) >>"$LOG_FILE" 2>&1; then
+    if ! run_with_progress "Compilando Eww para X11 con Rust stable" \
+        bash -c 'cd "$1" && RUSTUP_TOOLCHAIN=stable cargo build --release --no-default-features --features x11 --locked' _ "$build_dir"; then
         warn "La compilación directa de Eww falló. Revisa $LOG_FILE."
         FAILED_REQUIRED+=("eww")
         return 1
@@ -449,13 +517,13 @@ install_eww() {
 
     local built="$build_dir/target/release/eww"
     if [[ ! -x "$built" ]]; then
-        warn "Cargo terminó pero no produjo $built."
+        error "Cargo terminó pero no produjo $built."
         FAILED_REQUIRED+=("eww")
         return 1
     fi
 
-    if ! sudo install -Dm755 "$built" /usr/local/bin/eww >>"$LOG_FILE" 2>&1; then
-        warn "No se pudo instalar el binario de Eww en /usr/local/bin."
+    if ! run_with_progress "Instalando el binario Eww en /usr/local/bin" \
+        sudo install -Dm755 "$built" /usr/local/bin/eww; then
         FAILED_REQUIRED+=("eww")
         return 1
     fi
@@ -463,7 +531,7 @@ install_eww() {
     export PATH="/usr/local/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
     hash -r 2>/dev/null || true
     if command_exists eww; then
-        success "Eww compilado e instalado en /usr/local/bin/eww."
+        success "Eww compilado e instalado correctamente en /usr/local/bin/eww."
         return 0
     fi
 
