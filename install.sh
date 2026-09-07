@@ -548,9 +548,6 @@ copy_repository_content() {
     if [[ -d "$SCRIPT_DIR/misc/startup-page" ]]; then
         rsync -a --delete "$SCRIPT_DIR/misc/startup-page/" "$HOME/.local/share/startup-page/" >>"$LOG_FILE" 2>&1 || fatal "No se pudo desplegar misc/startup-page."
     fi
-    if [[ -d "$SCRIPT_DIR/misc/firefox" ]]; then
-        rsync -a --delete "$SCRIPT_DIR/misc/firefox/" "$HOME/.local/share/TechOGR/firefox/" >>"$LOG_FILE" 2>&1 || fatal "No se pudo desplegar misc/firefox."
-    fi
 
     # 5. The repository has a root kitty/ directory as well as config/kitty.
     #    config/kitty is canonical. If root kitty differs, report it but do not
