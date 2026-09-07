@@ -379,7 +379,7 @@ install_packages() {
         brightnessctl pamixer playerctl alsa-utils
         dbus polkit-gnome lxsession
         mpd mpc ncmpcpp mpv
-        zsh zsh-autosuggestions zsh-syntax-highlighting
+        zsh zsh-autosuggestions zsh-syntax-highlighting fzf
         yazi zathura zathura-pdf-mupdf
         clipcat
         ttf-jetbrains-mono-nerd ttf-font-awesome noto-fonts-emoji
@@ -413,6 +413,19 @@ install_packages() {
             FAILED_OPTIONAL+=("brave-bin")
         fi
     fi
+
+    # fzf-tab is an AUR zsh completion plugin used by the repository's zsh setup.
+    if is_pkg_installed fzf-tab; then
+        success "fzf-tab ya está instalado."
+    else
+        info "Instalando fzf-tab desde AUR..."
+        if run_with_live_progress "AUR → fzf-tab" "$AUR_HELPER" -S --needed --noconfirm fzf-tab; then
+            success "fzf-tab instalado correctamente."
+        else
+            warn "No se pudo instalar fzf-tab desde AUR; se registró el fallo y se continúa."
+            FAILED_OPTIONAL+=("fzf-tab")
+        fi
+    fi
 }
 
 install_lockscreen() {
@@ -434,14 +447,17 @@ install_lockscreen() {
         install_pkg i3lock yes || true
     fi
 
-    # Let the repository's own screenlocker module use its intended commands.
-    if command_exists betterlockscreen; then
-        local sample=""
-        sample="$(find "$HOME/Imágenes/Wallpapers" "$HOME/Pictures/Wallpapers" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) 2>/dev/null | head -n1 || true)"
-        if [[ -n "$sample" ]]; then
-            info "Generando caché inicial de Betterlockscreen..."
-            run_with_live_progress "Betterlockscreen cache" betterlockscreen -u "$sample" --blur 0.5 || warn "No se pudo generar la caché del lockscreen."
+    # Use the repository's exact default wallpaper for the lockscreen as well.
+    local wallpaper="$HOME/Imágenes/Wallpapers/noche_car_man.jpg"
+    if command_exists betterlockscreen && [[ -f "$wallpaper" ]]; then
+        info "Preparando Betterlockscreen con el wallpaper predeterminado del rice..."
+        if run_with_live_progress "Betterlockscreen → wallpaper" betterlockscreen -u "$wallpaper" --blur 0.5; then
+            success "Lockscreen sincronizado con noche_car_man.jpg."
+        else
+            warn "No se pudo generar la caché de Betterlockscreen con el wallpaper predeterminado."
         fi
+    elif [[ ! -f "$wallpaper" ]]; then
+        warn "No se encontró el wallpaper predeterminado para el lockscreen: $wallpaper"
     fi
     success "Lockscreen preparado."
 }
@@ -567,6 +583,24 @@ copy_repository_content() {
     success "Contenido de TechOGR desplegado sin modificar archivos versionados."
 }
 
+deploy_repository_home() {
+    step "10.5/12 · Aplicando archivos de home/ del repositorio"
+
+    # The user's HOME directory already exists. We only deploy the CONTENTS
+    # of this repository's home/ directory, after packages such as zsh and
+    # fzf-tab are installed, so .zshrc can be loaded with its dependencies.
+    if [[ ! -d "$SCRIPT_DIR/home" ]]; then
+        warn "No existe home/ en el repositorio; se omite."
+        return 0
+    fi
+
+    if rsync -a -- "$SCRIPT_DIR/home/" "$HOME/" >>"$LOG_FILE" 2>&1; then
+        success "Contenido de home/ aplicado exactamente a $HOME."
+    else
+        fatal "No se pudo desplegar el contenido de home/."
+    fi
+}
+
 install_pacman_hook() {
     [[ -f "$SCRIPT_DIR/misc/polybar-update.hook" ]] || return 0
     sudo install -Dm644 "$SCRIPT_DIR/misc/polybar-update.hook" /etc/pacman.d/hooks/polybar-update.hook || \
@@ -613,6 +647,19 @@ EOF_BSPWM
 user-session=bspwm
 greeter-session=lightdm-gtk-greeter
 EOF_DM
+
+        # Give LightDM the exact same default wallpaper as the TechOGR rice.
+        local wallpaper="$HOME/Imágenes/Wallpapers/noche_car_man.jpg"
+        if [[ -f "$wallpaper" ]]; then
+            sudo install -d -m755 /etc/lightdm/lightdm-gtk-greeter.conf.d
+            {
+                printf '%s\n' '[greeter]'
+                printf 'background=%s\n' "$wallpaper"
+            } | sudo tee /etc/lightdm/lightdm-gtk-greeter.conf.d/50-techogr-background.conf >/dev/null
+            success "Fondo de LightDM sincronizado con noche_car_man.jpg."
+        else
+            warn "El wallpaper predeterminado aún no existe; LightDM conservará su fondo actual."
+        fi
     fi
     success "Sesión BSPWM registrada en /usr/share/xsessions/bspwm.desktop."
 }
@@ -726,6 +773,7 @@ main() {
     install_lockscreen
     create_backup
     copy_repository_content
+    deploy_repository_home
     install_pacman_hook
     setup_display_manager
     configure_services
