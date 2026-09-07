@@ -291,6 +291,112 @@ install_aur_helper() {
     success "yay instalado y listo para el usuario $USER."
 }
 
+install_eww() {
+    step "5.1/11 - Instalación robusta de Eww para X11"
+
+    if command_exists eww; then
+        success "Eww ya está instalado: $(eww --version 2>/dev/null | head -n1 || printf '%s' 'versión disponible')"
+        return 0
+    fi
+
+    # Primero intentamos el paquete AUR, que es la vía más sencilla cuando el
+    # PKGBUILD del momento es compatible con el sistema del usuario.
+    if [[ -n "$AUR_HELPER" ]]; then
+        info "Intentando instalar Eww desde AUR (${AUR_HELPER})..."
+        if "$AUR_HELPER" -S --needed --noconfirm eww >>"$LOG_FILE" 2>&1; then
+            if command_exists eww; then
+                success "Eww instalado correctamente desde AUR."
+                return 0
+            fi
+        fi
+        warn "El paquete AUR de Eww no pudo instalarse. Se usará compilación desde el código fuente."
+    fi
+
+    # Fallback estable: compilar Eww directamente con el backend X11.
+    # Eww es un proyecto Rust y su documentación recomienda cargo build para
+    # compilarlo; para este rice no necesitamos Wayland.
+    local build_dir="$HOME/.local/state/techogr-bspwm/build/eww-source"
+    local eww_repo="https://github.com/elkowar/eww.git"
+    # rust ya incluye cargo en Arch; no lo tratamos como un paquete separado.
+    # Esto evita instalaciones redundantes y reduce los conflictos rust/rustup.
+    local eww_deps=(pkgconf gtk3 gtk-layer-shell pango gdk-pixbuf2 cairo glib2 dbus libdbusmenu-gtk3)
+    local dep
+
+    info "Preparando dependencias de compilación de Eww..."
+
+    if ! command_exists cargo; then
+        if command_exists rustup; then
+            info "rustup detectado; activando toolchain stable para Eww..."
+            rustup toolchain install stable --profile minimal >>"$LOG_FILE" 2>&1 || true
+            rustup default stable >>"$LOG_FILE" 2>&1 || true
+        else
+            install_repo_pkg rust yes || true
+        fi
+    fi
+
+    for dep in "${eww_deps[@]}"; do
+        if is_pkg_installed "$dep"; then
+            continue
+        fi
+        if ! install_repo_pkg "$dep" yes; then
+            warn "No se pudo instalar la dependencia de Eww: $dep"
+        fi
+    done
+
+    # cargo puede ser proporcionado por rust o por rustup.
+    command_exists cargo || {
+        warn "cargo no está disponible; Eww no podrá compilarse en este intento."
+        FAILED_OPTIONAL+=("eww")
+        return 1
+    }
+
+    mkdir -p "$(dirname -- "$build_dir")"
+    rm -rf -- "$build_dir"
+
+    info "Clonando Eww desde upstream..."
+    if ! git clone --depth=1 --filter=blob:none "$eww_repo" "$build_dir" >>"$LOG_FILE" 2>&1; then
+        warn "No se pudo clonar Eww desde GitHub."
+        FAILED_OPTIONAL+=("eww")
+        return 1
+    fi
+
+    info "Compilando Eww con backend X11 (cargo build --release)..."
+    if ! (
+        cd "$build_dir" &&
+        cargo build --release --no-default-features --features x11
+    ) >>"$LOG_FILE" 2>&1; then
+        warn "La compilación de Eww falló. Revisa $LOG_FILE para el error de Rust/dependencias."
+        FAILED_OPTIONAL+=("eww")
+        return 1
+    fi
+
+    [[ -x "$build_dir/target/release/eww" ]] || {
+        warn "La compilación terminó sin generar target/release/eww."
+        FAILED_OPTIONAL+=("eww")
+        return 1
+    }
+
+    install -Dm755 "$build_dir/target/release/eww" "$HOME/.local/bin/eww" || {
+        warn "No se pudo instalar Eww en ~/.local/bin/eww."
+        FAILED_OPTIONAL+=("eww")
+        return 1
+    }
+
+    if ! command_exists eww; then
+        warn "Eww quedó instalado pero ~/.local/bin no está en PATH durante esta ejecución."
+        export PATH="$HOME/.local/bin:$PATH"
+    fi
+
+    if command_exists eww; then
+        success "Eww compilado e instalado en ~/.local/bin/eww."
+        return 0
+    fi
+
+    warn "No fue posible verificar el binario de Eww."
+    FAILED_OPTIONAL+=("eww")
+    return 1
+}
+
 install_packages() {
     step "5/11 - Paquetes X11, BSPWM, audio, utilidades y estética"
 
@@ -339,10 +445,10 @@ install_packages() {
     install_aur_pkg betterlockscreen no || true
     install_aur_pkg brave-bin no || true
 
-    # eww is optional because its AUR build toolchain can differ between Arch
-    # derivatives. The BSPWM session is guarded against its absence.
-    if ! command_exists eww; then
-        install_aur_pkg eww no || true
+    # Eww recibe un tratamiento especial: AUR primero y, si el PKGBUILD
+    # falla por cambios de toolchain, compilación directa con backend X11.
+    if ! install_eww; then
+        warn "Eww no pudo instalarse en esta ejecución; el resto del rice continuará funcionando."
     fi
 
     # Fallback for a derivative exposing a native "brave" package.
@@ -356,6 +462,9 @@ install_packages() {
     if is_pkg_installed networkmanager; then
         sudo systemctl enable --now NetworkManager.service >>"$LOG_FILE" 2>&1 || warn "NetworkManager no pudo iniciarse; se conservará la configuración existente."
     fi
+
+    # Asegurar el binario local durante el resto de la ejecución.
+    export PATH="$HOME/.local/bin:$PATH"
 
     success "Paquetes principales instalados. Los elementos AUR opcionales no bloquean el rice."
 }
