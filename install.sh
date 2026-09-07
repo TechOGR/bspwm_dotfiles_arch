@@ -1,1193 +1,735 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # TechOGR BSPWM Dotfiles Installer
+# Version 8.0.0
 # Arch Linux / CachyOS / EndeavourOS / Garuda / BlackArch / Manjaro / derivatives
-# ==============================================================================
-# Run as a normal user:
+#
+# IMPORTANT:
+#   This installer deploys ONLY the files present in THIS repository.
+#   It does not clone gh0stzk/dotfiles or copy files from any other dotfiles repo.
+#   Managed configuration files are copied as-is and are NEVER patched in place.
+#
+# Run:
 #   chmod +x install.sh
 #   ./install.sh
-#
-# Design goals:
-#   - Never run the installer itself as root.
-#   - Use sudo only where system files/services require it.
-#   - Preserve the repository's real config layout under ~/.config/bspwm/.
-#   - Back up existing user configuration before overwriting it.
-#   - Treat AUR-only/optional components as non-fatal.
-#   - Avoid destructive "fixes" such as deleting pacman locks blindly.
 # ==============================================================================
 
-set -uo pipefail
+set -Eeuo pipefail
 
-SCRIPT_VERSION="7.1.0"
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+SCRIPT_VERSION="8.0.0"
 REPO_URL="https://github.com/TechOGR/bspwm_dotfiles_arch.git"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+HOME="${HOME:?HOME is not set}"
 LOG_FILE="$HOME/.techogr_install.log"
 BACKUP_ROOT="$HOME/.dotfiles_backup"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 BACKUP_DIR="$BACKUP_ROOT/backup_$TIMESTAMP"
 AUR_HELPER=""
-DM_NAME=""
+SUDO_KEEPALIVE_PID=""
+
 FAILED_REQUIRED=()
 FAILED_OPTIONAL=()
-CURRENT_STEP=0
-TOTAL_STEPS=12
 
 # ------------------------------- Colors --------------------------------------
 if [[ -t 1 ]]; then
-    RESET=$'\e[0m'; BOLD=$'\e[1m'; DIM=$'\e[2m'
-    RED=$'\e[31m'; GREEN=$'\e[32m'; YELLOW=$'\e[33m'
-    BLUE=$'\e[34m'; MAGENTA=$'\e[35m'; CYAN=$'\e[36m'
+    RESET=$'\e[0m'
+    BOLD=$'\e[1m'
+    DIM=$'\e[2m'
+    RED=$'\e[31m'
+    GREEN=$'\e[32m'
+    YELLOW=$'\e[33m'
+    BLUE=$'\e[34m'
+    MAGENTA=$'\e[35m'
+    CYAN=$'\e[36m'
+    WHITE=$'\e[37m'
+    BG_BLUE=$'\e[44m'
 else
-    RESET=''; BOLD=''; DIM=''; RED=''; GREEN=''; YELLOW=''; BLUE=''; MAGENTA=''; CYAN=''
+    RESET=''; BOLD=''; DIM=''; RED=''; GREEN=''; YELLOW=''; BLUE=''; MAGENTA=''; CYAN=''; WHITE=''; BG_BLUE=''
 fi
 
-mkdir -p "$(dirname -- "$LOG_FILE")" 2>/dev/null || true
-touch "$LOG_FILE" 2>/dev/null || {
-    printf '%s\n' "ERROR: cannot write log file: $LOG_FILE" >&2
-    exit 1
-}
+mkdir -p -- "$(dirname -- "$LOG_FILE")"
+printf '=== TechOGR BSPWM Installer %s - %s ===\n' "$SCRIPT_VERSION" "$(date)" > "$LOG_FILE"
 
+# ------------------------------- Logging -------------------------------------
 log() {
     printf '%s [%s] %s\n' "$(date '+%F %T')" "$1" "$2" >> "$LOG_FILE"
 }
 
 info() {
-    printf ' %s[INFO]%s    %s\n' "$CYAN" "$RESET" "$1"
+    printf '  %s➜%s %s\n' "$CYAN" "$RESET" "$1"
     log INFO "$1"
 }
 
 success() {
-    printf ' %s[SUCCESS]%s %s\n' "$GREEN" "$RESET" "$1"
+    printf '  %s✔%s %s\n' "$GREEN" "$RESET" "$1"
     log SUCCESS "$1"
 }
 
 warn() {
-    printf ' %s[WARNING]%s %s\n' "$YELLOW" "$RESET" "$1"
+    printf '  %s⚠%s %s\n' "$YELLOW" "$RESET" "$1"
     log WARNING "$1"
 }
 
 error() {
-    printf ' %s[ERROR]%s   %s\n' "$RED" "$RESET" "$1" >&2
+    printf '  %s✖%s %s\n' "$RED" "$RESET" "$1" >&2
     log ERROR "$1"
 }
 
 step() {
-    local label="$1"
-    CURRENT_STEP=$((CURRENT_STEP + 1))
-    local width=32 filled=0 pct=0
-    (( TOTAL_STEPS > 0 )) && pct=$(( CURRENT_STEP * 100 / TOTAL_STEPS ))
-    (( pct > 100 )) && pct=100
-    filled=$(( pct * width / 100 ))
-    local empty=$(( width - filled ))
-    local bar=""
-    (( filled > 0 )) && bar+=$(printf '%*s' "$filled" '' | tr ' ' '█')
-    (( empty > 0 )) && bar+=$(printf '%*s' "$empty" '' | tr ' ' '░')
-    printf '\n%s╭────────────────────────────────────────────────────────────╮%s\n' "$BLUE" "$RESET"
-    printf '%s│%s %s%sPaso %02d/%02d%s  %-39s %s│%s\n' "$BLUE" "$RESET" "$BOLD" "$MAGENTA" "$CURRENT_STEP" "$TOTAL_STEPS" "$RESET" "$label" "$BLUE" "$RESET"
-    printf '%s│%s %s%s%s %3d%%  %s│%s\n' "$BLUE" "$RESET" "$CYAN" "$bar" "$RESET" "$pct" "$BLUE" "$RESET"
-    printf '%s╰────────────────────────────────────────────────────────────╯%s\n' "$BLUE" "$RESET"
-    log STEP "$label"
+    printf '\n%s%s╭─ %s%s\n' "$MAGENTA" "$BOLD" "$1" "$RESET"
+    printf '%s%s│%s\n' "$MAGENTA" "$BOLD" "$RESET"
+    log STEP "$1"
 }
 
 fatal() {
     error "$1"
-    error "Log: $LOG_FILE"
+    error "Consulta el log: $LOG_FILE"
     exit 1
 }
 
-run_quiet() {
-    # Run a command and capture all output in the installer log.
-    "$@" >>"$LOG_FILE" 2>&1
+command_exists() { command -v "$1" >/dev/null 2>&1; }
+is_pkg_installed() { pacman -Qq "$1" >/dev/null 2>&1; }
+
+# ------------------------------- UI -------------------------------------------
+print_banner() {
+    clear 2>/dev/null || true
+    printf '%s%s' "$CYAN" "$BOLD"
+    cat <<'BANNER'
+   ████████╗███████╗ ██████╗██╗  ██╗ ██████╗  ██████╗ ██████╗
+   ╚══██╔══╝██╔════╝██╔════╝██║  ██║██╔═══██╗██╔════╝ ██╔══██╗
+      ██║   █████╗  ██║     ███████║██║   ██║██║  ███╗██████╔╝
+      ██║   ██╔══╝  ██║     ██╔══██║██║   ██║██║   ██║██╔══██╗
+      ██║   ███████╗╚██████╗██║  ██║╚██████╔╝╚██████╔╝██║  ██║
+      ╚═╝   ╚══════╝ ╚═════╝╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝
+BANNER
+    printf '%sTechOGR BSPWM Dotfiles Installer v%s%s\n' "$BLUE" "$SCRIPT_VERSION" "$RESET"
+    printf '%sExact repository deployment • X11 • Eww • LightDM • AUR%s\n\n' "$DIM" "$RESET"
 }
 
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
+section_progress() {
+    local current="$1" total="$2" title="$3"
+    local width=46 filled=0 empty=0 i bar
+    (( filled = current * width / total ))
+    (( empty = width - filled ))
+    bar=""
+    for ((i=0; i<filled; i++)); do bar+='█'; done
+    for ((i=0; i<empty; i++)); do bar+='░'; done
+    printf '\n %s%s[%02d/%02d]%s %s\n' "$BOLD" "$CYAN" "$current" "$total" "$RESET" "$title"
+    printf ' %s%s%s %3d%%\n' "$GREEN" "$bar" "$RESET" "$(( current * 100 / total ))"
 }
 
-is_pkg_installed() {
-    pacman -Qq "$1" >/dev/null 2>&1
-}
-
-install_repo_pkg() {
-    local pkg="$1" required="${2:-yes}"
-    if is_pkg_installed "$pkg"; then
-        printf '  %-34s %sinstalled%s\n' "$pkg" "$GREEN" "$RESET"
-        return 0
-    fi
-
-    printf '  %-34s installing...\n' "$pkg"
-    if sudo pacman -S --needed --noconfirm "$pkg" >>"$LOG_FILE" 2>&1; then
-        printf '  %-34s %sOK%s\n' "$pkg" "$GREEN" "$RESET"
-        return 0
-    fi
-
-    if [[ "$required" == yes ]]; then
-        FAILED_REQUIRED+=("$pkg")
-        printf '  %-34s %sFAILED%s\n' "$pkg" "$RED" "$RESET"
-        return 1
-    fi
-
-    FAILED_OPTIONAL+=("$pkg")
-    printf '  %-34s %swarn%s\n' "$pkg" "$YELLOW" "$RESET"
-    return 1
-}
-
-run_with_progress() {
-    # Visual progress for long-running commands.
-    # Full command output is preserved in the installer log; the terminal shows
-    # a live spinner, elapsed time and the latest output line so long builds do
-    # not look frozen.
+# Render progress for a long-running command while preserving full output in the log.
+run_with_live_progress() {
     local label="$1"
     shift
+    local tmp rc start now elapsed last line spinner index=0
+    tmp="$(mktemp)"
+    start="$(date +%s)"
+    "$@" >"$tmp" 2>&1 &
+    local pid=$!
 
-    local started pid rc=0 elapsed mins secs spinner_index=0 latest=""
-    local -a spinner=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
-    started=$(date +%s)
-
-    "$@" >>"$LOG_FILE" 2>&1 &
-    pid=$!
-
+    spinner=( '⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏' )
     while kill -0 "$pid" 2>/dev/null; do
-        sleep 1
-        elapsed=$(( $(date +%s) - started ))
-        mins=$(( elapsed / 60 ))
-        secs=$(( elapsed % 60 ))
-        latest=$(tail -n 1 "$LOG_FILE" 2>/dev/null | tr '\r' ' ' | sed 's/[[:space:]]\+/ /g')
-        [[ ${#latest} -gt 70 ]] && latest="${latest:0:67}..."
-
-        printf '\r %s[%s]%s %-34s %s%s%s  %02d:%02d' \
-            "$CYAN" "${spinner[$spinner_index]}" "$RESET" "$label" "$DIM" "$latest" "$RESET" "$mins" "$secs"
-
-        spinner_index=$(( (spinner_index + 1) % ${#spinner[@]} ))
+        elapsed=$(( $(date +%s) - start ))
+        last="$(tail -n 1 "$tmp" 2>/dev/null | tr -d '\r' | cut -c1-78)"
+        printf '\r  %s%s%s %s  %02dm%02ds  %-78s' "$CYAN" "${spinner[$index]}" "$RESET" "$label" "$((elapsed/60))" "$((elapsed%60))" "$last"
+        index=$(( (index + 1) % ${#spinner[@]} ))
+        sleep 0.25
     done
-
-    wait "$pid" || rc=$?
-    printf '\r\033[2K'
-
-    if (( rc == 0 )); then
-        printf ' %s[SUCCESS]%s %s completado.\n' "$GREEN" "$RESET" "$label"
-        return 0
-    fi
-
-    printf ' %s[ERROR]%s %s falló (código %d).\n' "$RED" "$RESET" "$label" "$rc"
+    wait "$pid"; rc=$?
+    printf '\r%*s\r' 150 ''
+    cat "$tmp" >> "$LOG_FILE"
+    rm -f -- "$tmp"
     return "$rc"
 }
 
-install_aur_pkg() {
-    local pkg="$1" required="${2:-no}"
-    if is_pkg_installed "$pkg"; then
-        printf '  AUR %-30s %sinstalled%s\n' "$pkg" "$GREEN" "$RESET"
-        return 0
-    fi
-
-    [[ -n "$AUR_HELPER" ]] || {
-        [[ "$required" == yes ]] && FAILED_REQUIRED+=("AUR:$pkg") || FAILED_OPTIONAL+=("AUR:$pkg")
-        return 1
-    }
-
-    printf '  AUR %-30s installing...\n' "$pkg"
-    if "$AUR_HELPER" -S --needed --noconfirm "$pkg" >>"$LOG_FILE" 2>&1; then
-        printf '  AUR %-30s %sOK%s\n' "$pkg" "$GREEN" "$RESET"
-        return 0
-    fi
-
-    if [[ "$required" == yes ]]; then
-        FAILED_REQUIRED+=("AUR:$pkg")
-        printf '  AUR %-30s %sFAILED%s\n' "$pkg" "$RED" "$RESET"
-        return 1
-    fi
-
-    FAILED_OPTIONAL+=("AUR:$pkg")
-    printf '  AUR %-30s %swarn%s\n' "$pkg" "$YELLOW" "$RESET"
-    return 1
-}
-
-# --------------------------- Global error trap --------------------------------
-on_error() {
+# --------------------------- Cleanup / signals -------------------------------
+cleanup() {
     local rc=$?
-    log ERROR "Unexpected command failure near line ${BASH_LINENO[0]:-unknown}, status=$rc"
-}
-trap 'on_error' ERR
-
-print_banner() {
-    if [[ -t 1 && -n "${TERM:-}" ]]; then
-        clear 2>/dev/null || true
+    if [[ -n "$SUDO_KEEPALIVE_PID" ]] && kill -0 "$SUDO_KEEPALIVE_PID" 2>/dev/null; then
+        kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
     fi
-    printf '%s%s' "$CYAN" "$BOLD"
-    cat <<'BANNER'
-╔══════════════════════════════════════════════════════════════════╗
-║                                                                  ║
-║   ████████╗███████╗ ██████╗██╗  ██╗ ██████╗  ██████╗ ██████╗    ║
-║   ╚══██╔══╝██╔════╝██╔════╝██║  ██║██╔═══██╗██╔════╝ ██╔══██╗   ║
-║      ██║   █████╗  ██║     ███████║██║   ██║██║  ███╗██████╔╝   ║
-║      ██║   ██╔══╝  ██║     ██╔══██║██║   ██║██║   ██║██╔══██╗   ║
-║      ██║   ███████╗╚██████╗██║  ██║╚██████╔╝╚██████╔╝██║  ██║   ║
-║      ╚═╝   ╚══════╝ ╚═════╝╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝   ║
-║                                                                  ║
-╚══════════════════════════════════════════════════════════════════╝
-BANNER
-    printf '%s%sTechOGR • BSPWM Dotfiles Installer v%s%s\n' "$BLUE" "$BOLD" "$SCRIPT_VERSION" "$RESET"
-    printf '%sArch family • X11 • BSPWM • Eww • LightDM • AUR%s\n\n' "$DIM" "$RESET"
-    printf '%s %s %s\n\n' "$CYAN" '╭────────────────────────────────────────────────────────────╮' "$RESET"
-    printf '%s │ %sInstalación limpia, segura y fiel al repositorio%s │%s\n' "$CYAN" "$BOLD" "$RESET" "$CYAN"
-    printf '%s │ %s• backups antes de reemplazar configuraciones%s        │%s\n' "$CYAN" "$DIM" "$RESET" "$CYAN"
-    printf '%s │ %s• dotfiles copiados sin alterar su contenido%s         │%s\n' "$CYAN" "$DIM" "$RESET" "$CYAN"
-    printf '%s │ %s• componentes opcionales aislados de fallos%s         │%s\n' "$CYAN" "$DIM" "$RESET" "$CYAN"
-    printf '%s ╰────────────────────────────────────────────────────────────╯ %s\n\n' "$CYAN" "$RESET"
-    log INFO "Installer v$SCRIPT_VERSION started from $SCRIPT_DIR"
+    if (( rc != 0 )); then
+        error "La instalación terminó con código $rc."
+        printf '  %sLog:%s %s\n' "$YELLOW" "$RESET" "$LOG_FILE"
+    fi
+    exit "$rc"
 }
+trap cleanup EXIT
 
+on_err() {
+    local rc=$?
+    log ERROR "Unexpected error near line ${BASH_LINENO[0]:-unknown}, status=$rc"
+    return "$rc"
+}
+trap on_err ERR
+
+# ---------------------------- Privileges -------------------------------------
 check_execution() {
-    step "1/12 - Verificación de ejecución y herramientas básicas"
-
-    [[ "$EUID" -ne 0 ]] || fatal "No ejecutes este instalador como root. Usa ./install.sh como usuario normal."
-    [[ -n "${HOME:-}" && -d "$HOME" ]] || fatal "HOME no es válido."
-    [[ -f "$SCRIPT_DIR/install.sh" ]] || fatal "No se encontró install.sh en $SCRIPT_DIR."
-
-    local required_cmds=(pacman sudo systemctl awk sed grep find install cp mv rm mkdir tar date uname id)
-    local missing=()
-    local cmd
-    for cmd in "${required_cmds[@]}"; do
-        command_exists "$cmd" || missing+=("$cmd")
-    done
-
-    ((${#missing[@]} == 0)) || fatal "Faltan comandos básicos: ${missing[*]}"
+    step "1/12 · Comprobación del entorno"
+    [[ "$EUID" -ne 0 ]] || fatal "No ejecutes install.sh como root. Usa ./install.sh."
+    [[ -d "$HOME" ]] || fatal "HOME no es válido."
+    [[ -f "$SCRIPT_DIR/install.sh" ]] || fatal "install.sh no se encuentra en el directorio del repositorio."
+    command_exists sudo || fatal "sudo no está instalado."
+    command_exists pacman || fatal "pacman no está disponible; este instalador requiere Arch Linux o un derivado."
+    command_exists systemctl || fatal "systemctl no está disponible; se requiere systemd."
 
     sudo -v || fatal "No fue posible autenticar sudo."
-    success "Ejecutando correctamente como usuario: $USER"
+    while true; do
+        sleep 45
+        sudo -n true || break
+    done 2>/dev/null &
+    SUDO_KEEPALIVE_PID=$!
+
+    success "Ejecutando como usuario normal: $USER"
 }
 
 check_arch() {
-    step "2/12 - Detección de Arch Linux y estado de pacman"
-
-    [[ -r /etc/os-release ]] || fatal "No existe /etc/os-release."
+    step "2/12 · Detección de Arch Linux"
+    [[ -r /etc/os-release ]] || fatal "/etc/os-release no existe."
     # shellcheck disable=SC1091
     source /etc/os-release
 
-    local id_lower="${ID,,}" like_lower="${ID_LIKE,,}"
-    local arch_family=false
-    [[ "$id_lower" == arch || "$id_lower" == cachyos || "$id_lower" == endeavouros || \
-       "$id_lower" == garuda || "$id_lower" == blackarch || "$id_lower" == manjaro || \
-       "$id_lower" == arcolinux || "$like_lower" == *arch* ]] && arch_family=true
+    local id="${ID,,}" like="${ID_LIKE,,}"
+    [[ "$(uname -m)" == "x86_64" ]] || fatal "Arquitectura no soportada: $(uname -m)."
+    [[ "$id" == arch || "$id" == cachyos || "$id" == endeavouros || "$id" == garuda || \
+       "$id" == blackarch || "$id" == manjaro || "$id" == arcolinux || "$like" == *arch* ]] || \
+       fatal "'$NAME' no parece ser una distribución basada en Arch Linux."
 
-    $arch_family || fatal "La distribución '$NAME' no parece pertenecer a la familia Arch Linux."
-    [[ "$(uname -m)" == x86_64 ]] || fatal "Este rice está preparado para x86_64; arquitectura detectada: $(uname -m)."
-
-    info "Distribución: ${NAME:-desconocida} (${VERSION_ID:-?})"
+    info "Distribución: ${NAME:-Arch Linux}"
     info "Kernel: $(uname -r)"
 
-    # Never remove pacman db.lck blindly. If a package process is active, abort.
     if [[ -e /var/lib/pacman/db.lck ]]; then
-        local active_pkg_proc=false p
+        local active=false p
         for p in pacman makepkg yay paru; do
-            if pgrep -x "$p" >/dev/null 2>&1; then
-                active_pkg_proc=true
-                break
-            fi
+            if pgrep -x "$p" >/dev/null 2>&1; then active=true; break; fi
         done
-
-        if $active_pkg_proc; then
-            fatal "pacman/AUR está ejecutándose y existe /var/lib/pacman/db.lck. Espera a que termine y vuelve a ejecutar el instalador."
+        if [[ "$active" == true ]]; then
+            fatal "pacman/AUR está ejecutándose y existe el lock /var/lib/pacman/db.lck."
         fi
-
-        warn "Existe /var/lib/pacman/db.lck pero no se detecta un proceso activo. No se eliminará automáticamente."
-        read -r -p " ¿Quieres eliminar este lock huérfano? [s/N]: " answer
-        if [[ "$answer" =~ ^[sS]$ ]]; then
-            sudo rm -f /var/lib/pacman/db.lck || fatal "No se pudo eliminar el lock huérfano de pacman."
-            success "Lock huérfano eliminado por decisión del usuario."
-        else
-            fatal "No se puede continuar con un lock de pacman presente."
-        fi
+        warn "Existe un lock huérfano de pacman."
+        read -r -p "  ¿Eliminarlo? [s/N]: " answer
+        [[ "$answer" =~ ^[sS]$ ]] || fatal "No se puede continuar con el lock presente."
+        sudo rm -f /var/lib/pacman/db.lck || fatal "No se pudo eliminar el lock de pacman."
     fi
 
-    info "Actualizando base de paquetes con pacman -Syu..."
-    if ! sudo pacman -Syu --noconfirm >>"$LOG_FILE" 2>&1; then
-        fatal "No se pudo completar la actualización del sistema con pacman -Syu."
+    command_exists curl || sudo pacman -S --needed --noconfirm curl >>"$LOG_FILE" 2>&1 || true
+    if ! curl -fsS --connect-timeout 5 https://archlinux.org >/dev/null 2>&1; then
+        fatal "No se detectó conexión funcional hacia archlinux.org."
     fi
+    success "Sistema Arch-family y conectividad comprobados."
+}
 
-    success "Sistema Arch-family detectado y pacman operativo."
+# ----------------------------- Packages -------------------------------------
+install_pkg() {
+    local pkg="$1" required="${2:-yes}"
+    if is_pkg_installed "$pkg"; then return 0; fi
+    if sudo pacman -S --needed --noconfirm "$pkg" >>"$LOG_FILE" 2>&1; then return 0; fi
+    if [[ "$required" == yes ]]; then FAILED_REQUIRED+=("$pkg"); else FAILED_OPTIONAL+=("$pkg"); fi
+    return 1
 }
 
 install_base_deps() {
-    step "3/12 - Dependencias base y compilación AUR"
-    local pkgs=(base-devel git curl ca-certificates rsync)
+    step "3/12 · Dependencias base"
+    local pkgs=(base-devel git rsync curl ca-certificates unzip xdg-utils xdg-user-dirs fontconfig)
     local pkg
     for pkg in "${pkgs[@]}"; do
-        install_repo_pkg "$pkg" yes || true
+        if install_pkg "$pkg" yes; then
+            printf '  %-30s %s✔%s\n' "$pkg" "$GREEN" "$RESET"
+        else
+            printf '  %-30s %s✖%s\n' "$pkg" "$RED" "$RESET"
+        fi
     done
-    ((${#FAILED_REQUIRED[@]} == 0)) || fatal "No se pudieron instalar dependencias base: ${FAILED_REQUIRED[*]}"
-    success "base-devel, git y utilidades requeridas están disponibles."
+    ((${#FAILED_REQUIRED[@]} == 0)) || fatal "Dependencias base faltantes: ${FAILED_REQUIRED[*]}"
+    success "Dependencias base disponibles."
 }
 
 install_aur_helper() {
-    step "4/12 - Detección / instalación del AUR helper"
-
-    if command_exists yay; then
-        AUR_HELPER="yay"
-    elif command_exists paru; then
-        AUR_HELPER="paru"
-    fi
+    step "4/12 · Configuración de AUR"
+    if command_exists yay; then AUR_HELPER="yay"; fi
+    if [[ -z "$AUR_HELPER" ]] && command_exists paru; then AUR_HELPER="paru"; fi
 
     if [[ -n "$AUR_HELPER" ]]; then
         success "AUR helper detectado: $AUR_HELPER"
         return 0
     fi
 
-    info "No se encontró yay ni paru; instalando yay-bin para el usuario actual."
-    local build_dir="$(mktemp -d -p /tmp techogr-yay.XXXXXX)"
-    local keep_dir=false
-
-    if ! git clone --depth=1 https://aur.archlinux.org/yay-bin.git "$build_dir/yay-bin" >>"$LOG_FILE" 2>&1; then
-        keep_dir=true
-        [[ "$keep_dir" == true ]] && warn "No se pudo clonar yay-bin. Directorio temporal: $build_dir"
-        rm -rf "$build_dir"
-        fatal "No se pudo obtener yay-bin desde AUR."
+    info "No se encontró yay/paru. Instalando yay-bin para $USER."
+    local tmp="$(mktemp -d -p /tmp techogr-yay.XXXXXX)"
+    if ! git clone --depth=1 https://aur.archlinux.org/yay-bin.git "$tmp/yay-bin" >>"$LOG_FILE" 2>&1; then
+        rm -rf -- "$tmp"
+        fatal "No se pudo clonar yay-bin desde AUR."
     fi
-
-    if ! (cd "$build_dir/yay-bin" && makepkg -si --noconfirm) >>"$LOG_FILE" 2>&1; then
-        keep_dir=true
-        warn "La compilación de yay-bin falló. Revisa el log para el error exacto."
-        rm -rf "$build_dir"
-        fatal "No se pudo instalar yay."
+    if ! (cd "$tmp/yay-bin" && makepkg -si --noconfirm) >>"$LOG_FILE" 2>&1; then
+        rm -rf -- "$tmp"
+        fatal "No se pudo compilar/instalar yay-bin."
     fi
-
-    rm -rf "$build_dir"
-    command_exists yay || fatal "yay terminó de compilar pero no aparece en PATH."
+    rm -rf -- "$tmp"
+    command_exists yay || fatal "yay no quedó disponible en PATH."
     AUR_HELPER="yay"
-    success "yay instalado y listo para el usuario $USER."
+    success "yay instalado correctamente."
 }
 
-prepare_rustup_for_eww() {
-    info "Preparando Rust mediante rustup para compilar/instalar Eww..."
+prepare_rust_for_eww() {
+    step "5/12 · Preparando Rust stable para Eww"
 
-    export PATH="$HOME/.cargo/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
-    hash -r 2>/dev/null || true
+    # Exactly the sequence that works reliably on Arch for Eww:
+    #   1) base-devel
+    #   2) rustup (replacing rust if pacman reports the conflict)
+    #   3) rustup default stable
+    #
+    # Every pacman call is non-interactive so the installer cannot appear frozen
+    # waiting for an invisible confirmation.
 
-    # If rustup is already present, use it directly.
-    if command_exists rustup; then
-        info "rustup ya está instalado. Seleccionando toolchain stable..."
-    else
-        # The Arch rustup package is in the official repositories.
-        if is_pkg_installed rust; then
-            warn "Se detectó el paquete 'rust' del sistema, que entra en conflicto con 'rustup'."
-            printf '\n%s%s Eww necesita rustup en esta instalación.%s\n' "$YELLOW" "$BOLD" "$RESET"
-            printf ' %sEsto sustituirá el paquete rust por rustup y después activará stable.%s\n' "$DIM" "$RESET"
-            read -r -p " ¿Deseas sustituir rust por rustup? [S/n]: " answer
-            answer="${answer:-S}"
-            if [[ "$answer" =~ ^[sSyY]$ ]]; then
-                # Remove only the Arch rust package. If something actually
-                # depends on it, pacman will refuse and we stop before touching it.
-                if ! sudo pacman -R rust --noconfirm >>"$LOG_FILE" 2>&1; then
-                    error "No se pudo sustituir rust por rustup automáticamente."
-                    warn "No se eliminaron dependencias adicionales. Revisa el log: $LOG_FILE"
-                    return 1
-                fi
-                success "Paquete rust sustituido por rustup."
-            else
-                warn "Se mantendrá rust. Eww se intentará instalar con el toolchain existente."
-            fi
-        fi
-
-        if ! command_exists rustup; then
-            if ! sudo pacman -S --needed rustup >>"$LOG_FILE" 2>&1; then
-                error "No se pudo instalar rustup desde los repositorios oficiales."
-                return 1
-            fi
-            success "rustup instalado desde los repositorios oficiales."
+    if ! command_exists rustup; then
+        info "Instalando rustup (si existe rust, pacman resolverá el conflicto automáticamente)..."
+        if ! run_with_live_progress "pacman → rustup" sudo pacman -S --needed --noconfirm rustup; then
+            fatal "No se pudo instalar rustup. Revisa $LOG_FILE."
         fi
     fi
 
-    export PATH="$HOME/.cargo/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
-    hash -r 2>/dev/null || true
+    export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 
-    command_exists rustup || return 1
+    command_exists rustup || fatal "rustup no está disponible después de su instalación."
 
-    # Arch's rustup package deliberately ships without an active toolchain.
-    # This is the key step needed before building/installing Eww.
-    if ! rustup default stable >>"$LOG_FILE" 2>&1; then
-        warn "rustup default stable falló; intentando instalar el toolchain stable primero."
-        rustup toolchain install stable >>"$LOG_FILE" 2>&1 || return 1
-        rustup default stable >>"$LOG_FILE" 2>&1 || return 1
+    if ! rustup toolchain list 2>/dev/null | grep -q '^stable'; then
+        info "Instalando toolchain Rust stable (perfil minimal)..."
+        if ! run_with_live_progress "rustup → stable" rustup toolchain install stable --profile minimal; then
+            fatal "No se pudo instalar el toolchain Rust stable."
+        fi
     fi
 
-    # Refresh PATH for cargo/rustc exposed by rustup and verify the active toolchain.
-    if [[ -f "$HOME/.cargo/env" ]]; then
-        # shellcheck disable=SC1090
-        source "$HOME/.cargo/env"
-    fi
-    export PATH="$HOME/.cargo/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
-    hash -r 2>/dev/null || true
+    info "Seleccionando Rust stable como toolchain predeterminado..."
+    rustup default stable >>"$LOG_FILE" 2>&1 || fatal "No se pudo seleccionar Rust stable."
 
-    if command_exists cargo && command_exists rustc; then
-        success "Rust stable activo: $(rustc --version 2>/dev/null || printf '%s' 'desconocido')"
-        return 0
-    fi
-
-    error "rustup está instalado, pero cargo/rustc no quedaron disponibles."
-    return 1
+    command_exists cargo || fatal "Cargo no está disponible después de preparar Rust stable."
+    success "Rust stable + Cargo están listos."
 }
 
 install_eww() {
-    export PATH="$HOME/.cargo/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
-    hash -r 2>/dev/null || true
+    step "6/12 · Instalación de Eww"
+    export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 
     if command_exists eww; then
-        success "Eww ya está disponible: $(eww --version 2>/dev/null | head -n1 || printf '%s' 'versión instalada')"
+        success "Eww ya está instalado: $(eww --version 2>/dev/null | head -n1 || echo 'versión disponible')"
         return 0
     fi
 
-    printf '\n%s%s  EWW • instalación con progreso visual%s\n' "$MAGENTA" "$BOLD" "$RESET"
-    printf '%s  La compilación puede tardar varios minutos. Verás actividad mientras trabaja;\n' "$DIM"
-    printf '  el detalle completo se guarda en: %s%s%s\n\n' "$CYAN" "$LOG_FILE" "$RESET"
+    prepare_rust_for_eww
 
-    # This follows the sequence proven to work on the user's Arch installation:
-    # base-devel -> rustup -> stable -> yay -S eww.
-    info "Comprobando herramientas base para Eww..."
-    local base_eww_deps=(base-devel)
+    # Dependencies used by Eww's X11 build.
+    local deps=(pkgconf gtk3 gtk-layer-shell pango gdk-pixbuf2 cairo glib2 dbus libdbusmenu-gtk3)
     local dep
-    for dep in "${base_eww_deps[@]}"; do
-        install_repo_pkg "$dep" yes || true
+    info "Instalando dependencias de compilación de Eww..."
+    for dep in "${deps[@]}"; do
+        install_pkg "$dep" yes || true
     done
-    ((${#FAILED_REQUIRED[@]} == 0)) || return 1
+    ((${#FAILED_REQUIRED[@]} == 0)) || fatal "No se pudieron instalar dependencias de Eww: ${FAILED_REQUIRED[*]}"
 
-    if ! prepare_rustup_for_eww; then
-        FAILED_REQUIRED+=("rustup/Eww toolchain")
-        return 1
-    fi
-
-    local eww_deps=(pkgconf gtk3 gtk-layer-shell pango gdk-pixbuf2 cairo glib2 dbus libdbusmenu-gtk3)
-    for dep in "${eww_deps[@]}"; do
-        install_repo_pkg "$dep" yes || true
-    done
-    ((${#FAILED_REQUIRED[@]} == 0)) || return 1
-
-    export RUSTUP_TOOLCHAIN=stable
-    export RUST_BACKTRACE=1
-
-    if ! command_exists "$AUR_HELPER"; then
-        error "No hay un AUR helper disponible para instalar Eww."
-        FAILED_REQUIRED+=("AUR helper/Eww")
-        return 1
-    fi
-
-    # Ensure stable is actually active before asking yay to build Eww.
-    if ! rustup default stable >>"$LOG_FILE" 2>&1; then
-        error "No se pudo seleccionar Rust stable para Eww."
-        FAILED_REQUIRED+=("rust stable/Eww")
-        return 1
-    fi
-
-    printf '\n%s╭────────────────────────────────────────────────────────────╮%s\n' "$BLUE" "$RESET"
-    printf '%s│%s %s%s EWW %s•%s AUR + Rust stable%s                          %s│%s\n' \
-        "$BLUE" "$RESET" "$BOLD" "$MAGENTA" "$CYAN" "$MAGENTA" "$RESET" "$BLUE" "$RESET"
-    printf '%s╰────────────────────────────────────────────────────────────╯%s\n' "$BLUE" "$RESET"
-
-    if run_with_progress "Descargando y compilando Eww desde AUR" \
-        env RUSTUP_TOOLCHAIN=stable "$AUR_HELPER" -S --needed --noconfirm eww; then
-        export PATH="/usr/local/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
-        hash -r 2>/dev/null || true
-        if command_exists eww; then
-            success "Eww instalado correctamente desde AUR."
-            return 0
+    if [[ -n "$AUR_HELPER" ]]; then
+        info "Instalando Eww desde AUR con $AUR_HELPER + Rust stable..."
+        if run_with_live_progress "AUR → eww" "$AUR_HELPER" -S --needed --noconfirm eww; then
+            command_exists eww || export PATH="$HOME/.local/bin:$PATH"
+            if command_exists eww; then
+                success "Eww instalado correctamente desde AUR."
+                return 0
+            fi
         fi
-        warn "yay terminó, pero el binario eww no aparece en PATH."
-    else
-        warn "El paquete AUR de Eww no pudo finalizar. Se intentará compilación directa."
+        warn "La instalación AUR de eww falló. Se probará eww-git como respaldo."
+
+        if run_with_live_progress "AUR → eww-git" "$AUR_HELPER" -S --needed --noconfirm eww-git; then
+            if command_exists eww; then
+                success "Eww instalado correctamente mediante eww-git."
+                return 0
+            fi
+        fi
     fi
 
-    # Upstream fallback. Kept for systems where the current AUR recipe fails.
-    local build_root="$HOME/.local/state/techogr-bspwm/build"
-    local build_dir="$build_root/eww-source"
-    local eww_repo="https://github.com/elkowar/eww.git"
-    mkdir -p "$build_root"
+    # Last-resort source build. Still uses the same Rust stable prepared above.
+    info "AUR no pudo instalar Eww; compilando desde upstream con backend X11."
+    local build_dir="$HOME/.local/state/techogr-bspwm/build/eww-source"
+    mkdir -p -- "$(dirname -- "$build_dir")"
     rm -rf -- "$build_dir"
 
-    if ! run_with_progress "Clonando la fuente oficial de Eww" \
-        git clone --depth=1 "$eww_repo" "$build_dir"; then
-        FAILED_REQUIRED+=("eww-source")
-        return 1
+    if ! run_with_live_progress "Git → Eww upstream" git clone --depth=1 https://github.com/elkowar/eww.git "$build_dir"; then
+        fatal "No se pudo descargar Eww desde upstream."
     fi
 
-    if ! run_with_progress "Compilando Eww para X11 con Rust stable" \
-        bash -c 'cd "$1" && RUSTUP_TOOLCHAIN=stable cargo build --release --no-default-features --features x11 --locked' _ "$build_dir"; then
-        warn "La compilación directa de Eww falló. Revisa $LOG_FILE."
-        FAILED_REQUIRED+=("eww")
-        return 1
+    if ! run_with_live_progress "Cargo → Eww X11" bash -lc "cd \"$build_dir\" && cargo build --release --no-default-features --features x11"; then
+        fatal "No se pudo compilar Eww. Revisa $LOG_FILE."
     fi
 
-    local built="$build_dir/target/release/eww"
-    if [[ ! -x "$built" ]]; then
-        error "Cargo terminó pero no produjo $built."
-        FAILED_REQUIRED+=("eww")
-        return 1
-    fi
-
-    if ! run_with_progress "Instalando el binario Eww en /usr/local/bin" \
-        sudo install -Dm755 "$built" /usr/local/bin/eww; then
-        FAILED_REQUIRED+=("eww")
-        return 1
-    fi
-
-    export PATH="/usr/local/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
-    hash -r 2>/dev/null || true
-    if command_exists eww; then
-        success "Eww compilado e instalado correctamente en /usr/local/bin/eww."
-        return 0
-    fi
-
-    FAILED_REQUIRED+=("eww")
-    return 1
+    [[ -x "$build_dir/target/release/eww" ]] || fatal "La compilación terminó sin generar el binario Eww."
+    install -Dm755 "$build_dir/target/release/eww" "$HOME/.local/bin/eww"
+    command_exists eww || export PATH="$HOME/.local/bin:$PATH"
+    command_exists eww || fatal "Eww no aparece después de instalar el binario."
+    success "Eww compilado e instalado en ~/.local/bin/eww."
 }
 
 install_packages() {
-    step "5/12 - Paquetes X11, BSPWM, audio, utilidades y estética"
+    step "7/12 · Paquetes del entorno TechOGR"
 
-    # Required official repository packages. Keep this list conservative and
-    # avoid lib32/vendor packages that are absent when optional repos are disabled.
+    # This list is based on commands referenced by THIS repository's config tree.
+    # No packages from another dotfiles repository are added here.
     local official=(
         xorg-server xorg-xinit xorg-xrandr xorg-xrdb xorg-xsetroot xorg-xset
         xorg-xprop xorg-xinput xorg-xauth xorg-xdpyinfo xorg-xwininfo
-        xdotool xclip xsettingsd hsetroot
         bspwm sxhkd polybar rofi picom dunst libnotify jgmenu
-        kitty feh imagemagick jq brightnessctl maim
-        xdg-utils xdg-user-dirs fontconfig
-        ttf-jetbrains-mono-nerd noto-fonts-emoji papirus-icon-theme
+        kitty feh imagemagick jq maim xdotool xdo xclip xsettingsd hsetroot
+        brightnessctl pamixer playerctl alsa-utils
+        dbus polkit-gnome lxsession
+        mpd mpc ncmpcpp mpv
+        zsh zsh-autosuggestions zsh-syntax-highlighting
+        yazi zathura zathura-pdf-mupdf
+        clipcat
+        ttf-jetbrains-mono-nerd ttf-font-awesome noto-fonts-emoji
+        papirus-icon-theme
         xss-lock
-        pipewire pipewire-pulse pipewire-alsa wireplumber
-        pamixer playerctl alsa-utils
-        dbus polkit-gnome lxsession accountsservice
+        rsync
     )
-
-    # Network stack used by the rice's Rofi/network applets.
-    # If a user already has another network manager, NetworkManager is not made
-    # a hard dependency; the applet is optional.
-    local optional_official=(networkmanager network-manager-applet)
-
+    local optional=(networkmanager network-manager-applet pavucontrol)
     local pkg
+
     for pkg in "${official[@]}"; do
-        install_repo_pkg "$pkg" yes || true
+        install_pkg "$pkg" yes || true
     done
-    for pkg in "${optional_official[@]}"; do
-        install_repo_pkg "$pkg" no || true
-    done
-
-    # Python/Pywal is optional: the current Arch package exists in Extra, but is
-    # not required by the rice's startup path, so its status must not break setup.
-    if ! is_pkg_installed python-pywal; then
-        install_repo_pkg python-pywal no || true
-    fi
-
-    if ((${#FAILED_REQUIRED[@]} > 0)); then
-        fatal "Paquetes oficiales críticos que fallaron: ${FAILED_REQUIRED[*]}"
-    fi
-
-    # Requested AUR software. betterlockscreen normally brings i3lock-color as
-    # part of its dependency chain. Do NOT install i3lock-color and i3lock as
-    # competing explicit targets at the same time.
-    install_aur_pkg betterlockscreen no || true
-    install_aur_pkg brave-bin no || true
-
-    # Eww recibe un tratamiento especial: AUR primero y, si el PKGBUILD
-    # falla por cambios de toolchain, compilación directa con backend X11.
-    if ! install_eww; then
-        fatal "Eww no pudo instalarse. La instalación se detiene para no dejar el rice incompleto."
-    fi
-
-    # Fallback for a derivative exposing a native "brave" package.
-    if ! command_exists brave-browser && ! command_exists brave; then
-        if pacman -Si brave >/dev/null 2>&1; then
-            install_repo_pkg brave no || true
-        fi
-    fi
-
-    # NetworkManager should only be enabled when it was actually installed.
-    if is_pkg_installed networkmanager; then
-        sudo systemctl enable --now NetworkManager.service >>"$LOG_FILE" 2>&1 || warn "NetworkManager no pudo iniciarse; se conservará la configuración existente."
-    fi
-
-    # Asegurar el binario local durante el resto de la ejecución.
-    export PATH="$HOME/.local/bin:$PATH"
-
-    success "Paquetes principales instalados. Los elementos AUR opcionales no bloquean el rice."
-}
-
-backup_user_configs() {
-    step "6/12 - Copia de seguridad de configuraciones existentes"
-
-    mkdir -p "$BACKUP_DIR" || fatal "No se pudo crear $BACKUP_DIR"
-
-    local targets=(
-        .config/bspwm
-        .config/alacritty
-        .config/dunst
-        .config/jgmenu
-        .config/kitty
-        .config/gtk-3.0
-        .config/gtk-4.0
-        .config/nvim
-        .config/yazi
-        .config/zsh
-        .zshrc
-        .xprofile
-        .xinitrc
-        .dmrc
-        .config/mimeapps.list
-    )
-
-    local rel item copied=0
-    for rel in "${targets[@]}"; do
-        item="$HOME/$rel"
-        if [[ -e "$item" || -L "$item" ]]; then
-            mkdir -p "$BACKUP_DIR/$(dirname -- "$rel")"
-            if cp -a "$item" "$BACKUP_DIR/$rel" >>"$LOG_FILE" 2>&1; then
-                copied=$((copied + 1))
-            else
-                warn "No se pudo respaldar: $item"
-            fi
-        fi
+    for pkg in "${optional[@]}"; do
+        install_pkg "$pkg" no || true
     done
 
-    cat > "$BACKUP_DIR/restore.sh" <<EOF_RESTORE
-#!/usr/bin/env bash
-set -u
-BACKUP_DIR="\$(cd -- "\$(dirname -- "\${BASH_SOURCE[0]}")" && pwd -P)"
-HOME_DIR="\$HOME"
-restore_one() {
-    local rel="\$1"
-    [[ -e "\$BACKUP_DIR/\$rel" || -L "\$BACKUP_DIR/\$rel" ]] || return 0
-    mkdir -p "\$HOME_DIR/\$(dirname -- "\$rel")"
-    rm -rf "\$HOME_DIR/\$rel"
-    cp -a "\$BACKUP_DIR/\$rel" "\$HOME_DIR/\$rel"
-}
-$(printf 'restore_one %q\n' "${targets[@]}")
-echo "Restauración completada desde: \$BACKUP_DIR"
-EOF_RESTORE
-    chmod +x "$BACKUP_DIR/restore.sh"
+    ((${#FAILED_REQUIRED[@]} == 0)) || fatal "Paquetes obligatorios faltantes: ${FAILED_REQUIRED[*]}"
+    success "Paquetes oficiales instalados."
 
-    success "Backup creado: $BACKUP_DIR ($copied elementos respaldados)"
-}
-
-copy_tree_if_exists() {
-    local src="$1" dst="$2"
-    [[ -d "$src" ]] || return 0
-    mkdir -p "$dst"
-    cp -a "$src/." "$dst/" >>"$LOG_FILE" 2>&1 || {
-        warn "No se pudo copiar completamente $src -> $dst"
-        return 1
-    }
-    return 0
-}
-
-copy_exact() {
-    local src="$1" dst="$2"
-    [[ -e "$src" || -L "$src" ]] || return 0
-    mkdir -p "$(dirname -- "$dst")"
-    rm -rf -- "$dst"
-    cp -a -- "$src" "$dst" >>"$LOG_FILE" 2>&1 || {
-        warn "No se pudo desplegar exactamente: $src -> $dst"
-        return 1
-    }
-    return 0
-}
-
-copy_tree_merge() {
-    local src="$1" dst="$2"
-    [[ -d "$src" ]] || return 0
-    mkdir -p "$dst"
-    cp -a -- "$src/." "$dst/" >>"$LOG_FILE" 2>&1 || {
-        warn "No se pudo copiar completamente: $src -> $dst"
-        return 1
-    }
-    return 0
-}
-
-setup_configs() {
-    step "7/12 - Dotfiles — despliegue exacto del repositorio"
-
-    mkdir -p "$HOME/.config" "$HOME/.local/bin" "$HOME/.local/share/applications" "$HOME/.local/share/fonts" "$HOME/Pictures/Wallpapers"
-
-    local rc=0 src name dst
-
-    # IMPORTANT: sync each repository-owned top-level config separately.
-    # We deliberately do NOT run --delete against the whole ~/.config, because
-    # that would remove unrelated configurations belonging to the user.
-    if [[ -d "$SCRIPT_DIR/config" ]]; then
-        info "Sincronizando configuraciones administradas por el repositorio..."
-        while IFS= read -r -d '' src; do
-            name="${src##*/}"
-            dst="$HOME/.config/$name"
-            if [[ -d "$src" ]]; then
-                mkdir -p "$dst"
-                if ! rsync -a --delete "$src/" "$dst/" >>"$LOG_FILE" 2>&1; then
-                    warn "No se pudo replicar exactamente config/$name."
-                    rc=1
-                fi
-            else
-                rm -rf -- "$dst"
-                if ! cp -a -- "$src" "$dst" >>"$LOG_FILE" 2>&1; then
-                    warn "No se pudo copiar exactamente config/$name."
-                    rc=1
-                fi
-            fi
-        done < <(find "$SCRIPT_DIR/config" -mindepth 1 -maxdepth 1 -print0 | sort -z)
-    fi
-
-    # home/* is also synchronized one entry at a time. Never use --delete on
-    # "$HOME/" itself: the source contains only repository-managed entries and
-    # deleting at the home-root would be destructive.
-    if [[ -d "$SCRIPT_DIR/home" ]]; then
-        info "Sincronizando archivos administrados de home/..."
-        while IFS= read -r -d '' src; do
-            name="${src##*/}"
-            dst="$HOME/$name"
-            if [[ -d "$src" ]]; then
-                mkdir -p "$dst"
-                if ! rsync -a --delete "$src/" "$dst/" >>"$LOG_FILE" 2>&1; then
-                    warn "No se pudo replicar exactamente home/$name."
-                    rc=1
-                fi
-            else
-                rm -rf -- "$dst"
-                if ! cp -a -- "$src" "$dst" >>"$LOG_FILE" 2>&1; then
-                    warn "No se pudo copiar exactamente home/$name."
-                    rc=1
-                fi
-            fi
-        done < <(find "$SCRIPT_DIR/home" -mindepth 1 -maxdepth 1 -print0 | sort -z)
-    fi
-
-    # Wallpapers and misc payloads intentionally do NOT delete unrelated user files.
-    if [[ -d "$SCRIPT_DIR/Wallpapers" ]]; then
-        rsync -a "$SCRIPT_DIR/Wallpapers/" "$HOME/Pictures/Wallpapers/" >>"$LOG_FILE" 2>&1 || rc=1
-    fi
-
-    for pair in \
-        "$SCRIPT_DIR/misc/applications|$HOME/.local/share/applications" \
-        "$SCRIPT_DIR/misc/asciiart|$HOME/.local/share/techogr/asciiart" \
-        "$SCRIPT_DIR/misc/bin|$HOME/.local/bin" \
-        "$SCRIPT_DIR/misc/firefox|$HOME/.local/share/techogr/firefox" \
-        "$SCRIPT_DIR/misc/fonts|$HOME/.local/share/fonts" \
-        "$SCRIPT_DIR/misc/startup-page|$HOME/.local/share/techogr/startup-page"; do
-        src="${pair%%|*}"
-        dst="${pair#*|}"
-        if [[ -d "$src" ]]; then
-            mkdir -p "$dst"
-            rsync -a "$src/" "$dst/" >>"$LOG_FILE" 2>&1 || rc=1
-        fi
-    done
-
-    # Pacman hook is system-level repository content: preserve bytes exactly.
-    local hook="$SCRIPT_DIR/misc/polybar-update.hook"
-    if [[ -f "$hook" ]]; then
-        sudo install -d -m 755 /etc/pacman.d/hooks
-        if [[ -f /etc/pacman.d/hooks/polybar-update.hook ]]; then
-            mkdir -p "$BACKUP_DIR/system"
-            sudo cp -a /etc/pacman.d/hooks/polybar-update.hook "$BACKUP_DIR/system/polybar-update.hook" 2>>"$LOG_FILE" || true
-        fi
-        sudo install -m 644 "$hook" /etc/pacman.d/hooks/polybar-update.hook >>"$LOG_FILE" 2>&1 || rc=1
-    fi
-
-    # Repository systemd user files are copied exactly. We only reload the user
-    # manager; we do not start/enable timers here because runtime state is not
-    # part of the repository content and can create misleading verification diffs.
-    if [[ -d "$HOME/.config/systemd/user" ]] && command_exists systemctl; then
-        systemctl --user daemon-reload >>"$LOG_FILE" 2>&1 || warn "No hay bus systemd --user disponible ahora; las unidades sí fueron copiadas."
-    fi
-
-    command_exists update-desktop-database && update-desktop-database "$HOME/.local/share/applications" >>"$LOG_FILE" 2>&1 || true
-    command_exists fc-cache && fc-cache -f >>"$LOG_FILE" 2>&1 || true
-
-    (( rc == 0 )) || fatal "Uno o más árboles de dotfiles no pudieron copiarse exactamente."
-    success "Configuraciones del repositorio desplegadas exactamente, sin modificar archivos ajenos."
-}
-
-patch_session_safety() {
-    step "8/12 - Entorno X11 — soporte extra sin tocar los dotfiles"
-
-    # This function intentionally DOES NOT modify ~/.config/bspwm/*.
-    # Repository-managed files must remain exact. Environment/service helpers live
-    # outside the repository instead.
-    cat > "$HOME/.xprofile" <<'EOF_XPROFILE'
-#!/bin/sh
-# TechOGR session environment (installer-managed, not repository-managed)
-export PATH="/usr/local/bin:$HOME/.local/bin:$HOME/.config/bspwm/bin:$PATH"
-export XDG_CURRENT_DESKTOP='bspwm'
-export DESKTOP_SESSION='bspwm'
-export XDG_SESSION_TYPE='x11'
-export XCURSOR_SIZE="${XCURSOR_SIZE:-24}"
-export _JAVA_AWT_WM_NONREPARENTING="${_JAVA_AWT_WM_NONREPARENTING:-1}"
-
-[ -f "$HOME/.Xresources" ] && command -v xrdb >/dev/null 2>&1 && xrdb -merge "$HOME/.Xresources"
-
-# Keep the original bspwmrc untouched while making helper services available.
-if command -v xss-lock >/dev/null 2>&1 && command -v "$HOME/.local/bin/techogr_lock" >/dev/null 2>&1; then
-    pkill -x xss-lock >/dev/null 2>&1 || true
-    xss-lock --transfer-sleep-lock -- "$HOME/.local/bin/techogr_lock" >/dev/null 2>&1 &
-fi
-EOF_XPROFILE
-    chmod 644 "$HOME/.xprofile"
-
-    cat > "$HOME/.xinitrc" <<'EOF_XINITRC'
-#!/bin/sh
-[ -f "$HOME/.xprofile" ] && . "$HOME/.xprofile"
-exec bspwm
-EOF_XINITRC
-    chmod 755 "$HOME/.xinitrc"
-
-    success "Entorno X11 preparado sin modificar ningún archivo administrado por el repositorio."
-}
-
-configure_picom() {
-    local conf="$HOME/.config/bspwm/config/picom/picom.conf"
-    if [[ -f "$conf" ]]; then
-        info "Picom: se conserva exactamente el archivo del repositorio ($conf)."
+    # Brave: prefer brave-bin from AUR. If an official/derivative brave package exists,
+    # use it before falling back to the AUR binary package.
+    if command_exists brave-browser || command_exists brave; then
+        success "Brave ya está disponible."
+    elif is_pkg_installed brave; then
+        success "Brave ya está instalado."
     else
-        warn "No se encontró $conf; se mantiene el sistema sin inventar una configuración nueva."
-    fi
-}
-
-configure_browser_default() {
-    local brave_desktop=""
-    if [[ -f /usr/share/applications/brave-browser.desktop ]]; then
-        brave_desktop="brave-browser.desktop"
-    elif [[ -f /usr/share/applications/brave-browser-stable.desktop ]]; then
-        brave_desktop="brave-browser-stable.desktop"
-    fi
-
-    if [[ -n "$brave_desktop" ]] && command_exists xdg-settings; then
-        xdg-settings set default-web-browser "$brave_desktop" >>"$LOG_FILE" 2>&1 || true
-        xdg-mime default "$brave_desktop" x-scheme-handler/http >>"$LOG_FILE" 2>&1 || true
-        xdg-mime default "$brave_desktop" x-scheme-handler/https >>"$LOG_FILE" 2>&1 || true
-        xdg-mime default "$brave_desktop" text/html >>"$LOG_FILE" 2>&1 || true
-        success "Brave configurado como navegador predeterminado ($brave_desktop)."
-    else
-        warn "Brave no quedó instalado; no se modificará el navegador predeterminado."
-    fi
-}
-
-install_display_manager() {
-    step "10/12 - Display Manager y sesión BSPWM"
-
-    # Always install the X session entry. This works with LightDM, GDM, SDDM,
-    # Ly, etc., and is the real requirement for a selectable bspwm session.
-    sudo install -d -m 755 /usr/share/xsessions
-    sudo tee /usr/share/xsessions/bspwm.desktop >/dev/null <<'EOF_BSPWM_DESKTOP'
-[Desktop Entry]
-Name=bspwm
-Comment=Binary Space Partitioning Window Manager
-Exec=/usr/bin/bspwm
-TryExec=/usr/bin/bspwm
-Type=XSession
-DesktopNames=bspwm
-EOF_BSPWM_DESKTOP
-    sudo chmod 644 /usr/share/xsessions/bspwm.desktop
-
-    # Detect an already-running display manager and preserve it.
-    local dm_target=""
-    if [[ -e /etc/systemd/system/display-manager.service ]]; then
-        dm_target="$(readlink -f /etc/systemd/system/display-manager.service 2>/dev/null || true)"
-        DM_NAME="$(basename -- "$dm_target" .service)"
-    fi
-
-    if systemctl is-active --quiet display-manager.service; then
-        [[ -n "$DM_NAME" ]] || DM_NAME="existing-display-manager"
-        success "Display Manager activo detectado: $DM_NAME. No se reemplazará."
-        return 0
-    fi
-
-    local known_enabled=""
-    local dm
-    for dm in gdm sddm lxdm ly greetd lightdm; do
-        if systemctl is-enabled --quiet "$dm.service" 2>/dev/null; then
-            known_enabled="$dm"
-            break
+        info "Instalando Brave desde AUR..."
+        if ! run_with_live_progress "AUR → brave-bin" "$AUR_HELPER" -S --needed --noconfirm brave-bin; then
+            warn "No se pudo instalar brave-bin; el resto del rice puede continuar."
+            FAILED_OPTIONAL+=("brave-bin")
         fi
-    done
-
-    if [[ -n "$known_enabled" ]]; then
-        DM_NAME="$known_enabled"
-        warn "Existe un Display Manager habilitado ($known_enabled), pero no está activo ahora. No se deshabilitará automáticamente."
-        return 0
     fi
-
-    # No DM: install and configure LightDM.
-    local dm_pkgs=(lightdm lightdm-gtk-greeter)
-    local pkg
-    for pkg in "${dm_pkgs[@]}"; do
-        install_repo_pkg "$pkg" yes || true
-    done
-    ((${#FAILED_REQUIRED[@]} == 0)) || fatal "No se pudo instalar el Display Manager: ${FAILED_REQUIRED[*]}"
-
-    sudo install -d -m 755 /etc/lightdm
-    sudo cp -an /etc/lightdm/lightdm.conf /etc/lightdm/lightdm.conf.techogr-original 2>/dev/null || true
-    sudo cp -an /etc/lightdm/lightdm-gtk-greeter.conf /etc/lightdm/lightdm-gtk-greeter.conf.techogr-original 2>/dev/null || true
-
-    sudo tee /etc/lightdm/lightdm.conf >/dev/null <<'EOF_LIGHTDM'
-[LightDM]
-run-directory=/run/lightdm
-
-[Seat:*]
-greeter-session=lightdm-gtk-greeter
-user-session=bspwm
-session-wrapper=/etc/lightdm/Xsession
-allow-guest=false
-allow-user-switching=true
-EOF_LIGHTDM
-    sudo chmod 644 /etc/lightdm/lightdm.conf
-
-    # Modern dark GTK greeter. Background uses a copied repository wallpaper when available.
-    local login_bg="/usr/share/backgrounds/techogr/login.jpg"
-    local first_wall=""
-    first_wall="$(find "$HOME/Pictures/Wallpapers" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) -print -quit 2>/dev/null || true)"
-    if [[ -n "$first_wall" ]]; then
-        sudo install -d -m 755 /usr/share/backgrounds/techogr
-        case "${first_wall##*.}" in
-            png|PNG) login_bg="/usr/share/backgrounds/techogr/login.png" ;;
-            jpg|JPG|jpeg|JPEG) login_bg="/usr/share/backgrounds/techogr/login.jpg" ;;
-            *) login_bg="/usr/share/backgrounds/techogr/login.jpg" ;;
-        esac
-        sudo install -m 644 "$first_wall" "$login_bg"
-    fi
-
-    sudo tee /etc/lightdm/lightdm-gtk-greeter.conf >/dev/null <<EOF_GREETER
-[greeter]
-theme-name = Adwaita
-icon-theme-name = Papirus-Dark
-font-name = JetBrains Mono Nerd Font 10
-background = ${login_bg}
-hide-user-image = false
-clock-format = %A %d %B  •  %H:%M
-indicators = ~host;~spacer;~clock;~spacer;~session;~language;~a11y;~power
-position = 50%,center 50%,center
-EOF_GREETER
-    sudo chmod 644 /etc/lightdm/lightdm-gtk-greeter.conf
-
-    # Xsession exists in the LightDM package. Only create a fallback if absent.
-    if [[ ! -x /etc/lightdm/Xsession ]]; then
-        sudo tee /etc/lightdm/Xsession >/dev/null <<'EOF_XSESSION'
-#!/bin/sh
-# Minimal fallback wrapper for LightDM on Arch-family systems.
-set +e
-[ -f /etc/profile ] && . /etc/profile
-[ -f "$HOME/.profile" ] && . "$HOME/.profile"
-[ -f "$HOME/.xprofile" ] && . "$HOME/.xprofile"
-exec "$@"
-EOF_XSESSION
-        sudo chmod 755 /etc/lightdm/Xsession
-    fi
-
-    sudo systemctl enable lightdm.service >>"$LOG_FILE" 2>&1 || fatal "No se pudo habilitar lightdm.service."
-    DM_NAME="lightdm"
-
-    # Make BSPWM the saved LightDM session for this user.
-    cat > "$HOME/.dmrc" <<'EOF_DMRC'
-[Desktop]
-Session=bspwm
-EOF_DMRC
-    chmod 644 "$HOME/.dmrc"
-
-    success "LightDM habilitado con LightDM GTK Greeter y BSPWM como sesión predeterminada."
 }
 
-setup_lockscreen() {
-    step "9/12 - Lockscreen — fondo, fallback y bloqueo automático"
+install_lockscreen() {
+    step "8/12 · Lockscreen"
+    # Prefer betterlockscreen + i3lock-color. Fall back to i3lock.
+    local lock_ok=false
+    if command_exists betterlockscreen; then lock_ok=true; fi
+    if [[ "$lock_ok" == false ]]; then
+        if run_with_live_progress "AUR → betterlockscreen" "$AUR_HELPER" -S --needed --noconfirm betterlockscreen; then
+            command_exists betterlockscreen && lock_ok=true
+        fi
+    fi
 
-    local lock_script="$HOME/.local/bin/techogr_lock"
-    cat > "$lock_script" <<'EOF_LOCK'
-#!/usr/bin/env bash
-set -u
+    if [[ "$lock_ok" == false ]] && ! command_exists i3lock-color; then
+        run_with_live_progress "AUR → i3lock-color" "$AUR_HELPER" -S --needed --noconfirm i3lock-color || true
+    fi
 
-if command -v betterlockscreen >/dev/null 2>&1; then
-    exec betterlockscreen -l dimblur
-fi
+    if [[ "$lock_ok" == false ]] && ! command_exists betterlockscreen && ! command_exists i3lock-color; then
+        install_pkg i3lock yes || true
+    fi
 
-if command -v i3lock-color >/dev/null 2>&1; then
-    exec i3lock-color \
-        --inside-color=1a1b26cc \
-        --insidever-color=24283bcc \
-        --insidewrong-color=f7768ecc \
-        --ring-color=7aa2f7ff \
-        --ringver-color=9ece6aff \
-        --ringwrong-color=f7768eff \
-        --keyhl-color=bb9af7ff \
-        --bshl-color=f7768e \
-        --separator-color=00000000 \
-        --verif-color=c0caf5ff \
-        --wrong-color=f7768eff \
-        --time-color=c0caf5ff \
-        --date-color=a9b1d6ff \
-        --clock --indicator \
-        --ring-width=8
-fi
-
-if command -v i3lock >/dev/null 2>&1; then
-    exec i3lock -c 1a1b26
-fi
-
-echo "No se encontró un screen locker compatible (betterlockscreen/i3lock)." >&2
-exit 1
-EOF_LOCK
-    chmod 755 "$lock_script"
-    ln -sfn "$lock_script" "$HOME/.local/bin/lockscreen"
-
+    # Let the repository's own screenlocker module use its intended commands.
     if command_exists betterlockscreen; then
-        local wall=""
-        wall="$(find "$HOME/Pictures/Wallpapers" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) -print -quit 2>/dev/null || true)"
-        if [[ -n "$wall" ]]; then
-            info "Generando caché inicial de betterlockscreen..."
-            betterlockscreen -u "$wall" >>"$LOG_FILE" 2>&1 || warn "No se pudo generar la caché inicial; el fallback seguirá disponible."
+        local sample=""
+        sample="$(find "$HOME/Imágenes/Wallpapers" "$HOME/Pictures/Wallpapers" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) 2>/dev/null | head -n1 || true)"
+        if [[ -n "$sample" ]]; then
+            info "Generando caché inicial de Betterlockscreen..."
+            run_with_live_progress "Betterlockscreen cache" betterlockscreen -u "$sample" --blur 0.5 || warn "No se pudo generar la caché del lockscreen."
         fi
     fi
-
-    # Keybindings remain repository-owned and are therefore NEVER appended here.
-    success "Lockscreen preparado sin modificar sxhkdrc ni bspwmrc."
+    success "Lockscreen preparado."
 }
 
-verify_repo_integrity() {
-    step "11/12 - Integridad — comprobación exacta mediante checksum"
-    local mismatches=()
-    local src name dst tmp
+# ----------------------------- Backup / Deploy -------------------------------
+backup_path() {
+    local src="$1"
+    local rel="$2"
+    [[ -e "$src" || -L "$src" ]] || return 0
+    mkdir -p -- "$BACKUP_DIR/$(dirname -- "$rel")"
+    cp -a -- "$src" "$BACKUP_DIR/$rel"
+}
 
-    # Verify each repository-owned config entry separately. This guarantees exact
-    # contents for bspwm, kitty, systemd, etc. without treating unrelated user
-    # configurations as errors.
-    if [[ -d "$SCRIPT_DIR/config" ]]; then
-        while IFS= read -r -d '' src; do
-            name="${src##*/}"
-            dst="$HOME/.config/$name"
-            tmp="$(mktemp)"
-            if [[ -d "$src" ]]; then
-                if ! rsync -a --checksum --delete --dry-run --itemize-changes "$src/" "$dst/" >"$tmp" 2>>"$LOG_FILE"; then
-                    mismatches+=("config/$name (error de verificación)")
-                elif [[ -s "$tmp" ]]; then
-                    mismatches+=("config/$name")
-                fi
-            elif [[ ! -f "$dst" ]] || ! cmp -s "$src" "$dst"; then
-                mismatches+=("config/$name")
-            fi
-            rm -f "$tmp"
-        done < <(find "$SCRIPT_DIR/config" -mindepth 1 -maxdepth 1 -print0 | sort -z)
+create_backup() {
+    step "9/12 · Respaldo de configuraciones existentes"
+    mkdir -p -- "$BACKUP_DIR"
+
+    # Only back up locations that this repository manages.
+    local cfg_dirs=(
+        bspwm alacritty cava clipcat dunst geany ghostty gtk-3.0 gtk-4.0
+        jgmenu kitty mpd mpv ncmpcpp nvim paru st yazi zathura zsh
+    )
+    local cfg
+    for cfg in "${cfg_dirs[@]}"; do
+        backup_path "$HOME/.config/$cfg" ".config/$cfg"
+    done
+    backup_path "$HOME/.zshrc" ".zshrc"
+
+    # Old standalone paths that may have been installed by previous installers.
+    # They are backed up, not blindly deleted.
+    local legacy=(sxhkd polybar rofi picom)
+    for cfg in "${legacy[@]}"; do
+        backup_path "$HOME/.config/$cfg" ".config/$cfg"
+    done
+
+    cat > "$BACKUP_DIR/restore.sh" <<RESTORE
+#!/usr/bin/env bash
+set -e
+BACKUP_DIR="$(cd -- "$(dirname -- "\${BASH_SOURCE[0]}")" && pwd -P)"
+mkdir -p "\$HOME/.config"
+if [[ -d "\$BACKUP_DIR/.config" ]]; then
+    cp -a "\$BACKUP_DIR/.config/." "\$HOME/.config/"
+fi
+for f in .zshrc; do
+    [[ -e "\$BACKUP_DIR/\$f" ]] && cp -a "\$BACKUP_DIR/\$f" "\$HOME/\$f"
+done
+printf 'Restauración completada desde %s\n' "\$BACKUP_DIR"
+RESTORE
+    chmod +x "$BACKUP_DIR/restore.sh"
+    success "Backup creado: $BACKUP_DIR"
+}
+
+sync_tree() {
+    local src="$1" dst="$2" label="$3"
+    [[ -d "$src" ]] || { warn "$label no existe en el repositorio; se omitirá."; return 0; }
+    mkdir -p -- "$dst"
+    if ! rsync -a --delete -- "$src/" "$dst/" >>"$LOG_FILE" 2>&1; then
+        fatal "No se pudo desplegar $label desde el repositorio."
     fi
+    success "$label desplegado exactamente."
+}
 
-    # Verify each home entry separately; never compare/delete the entire $HOME tree.
+prepare_user_dirs() {
+    info "Creando directorios estándar XDG del usuario..."
+    xdg-user-dirs-update >>"$LOG_FILE" 2>&1 || true
+
+    # Always create both the configured Spanish names and common English aliases.
+    local dirs=(
+        "$HOME/Escritorio" "$HOME/Documentos" "$HOME/Imágenes" "$HOME/Música"
+        "$HOME/Vídeos" "$HOME/Descargas" "$HOME/Público" "$HOME/Plantillas"
+        "$HOME/Desktop" "$HOME/Documents" "$HOME/Pictures" "$HOME/Music"
+        "$HOME/Videos" "$HOME/Downloads" "$HOME/Public" "$HOME/Templates"
+    )
+    local d
+    for d in "${dirs[@]}"; do mkdir -p -- "$d"; done
+}
+
+copy_repository_content() {
+    step "10/12 · Despliegue exacto de TechOGR"
+
+    prepare_user_dirs
+    mkdir -p -- "$HOME/.config" "$HOME/.local/bin" "$HOME/.local/share/fonts" "$HOME/.local/share/applications"
+
+    # 1. config/ is the canonical source for ~/.config.
+    sync_tree "$SCRIPT_DIR/config" "$HOME/.config" "config/ → ~/.config"
+
+    # 2. home/ contains files intended for $HOME (currently .zshrc).
     if [[ -d "$SCRIPT_DIR/home" ]]; then
-        while IFS= read -r -d '' src; do
-            name="${src##*/}"
-            dst="$HOME/$name"
-            tmp="$(mktemp)"
-            if [[ -d "$src" ]]; then
-                if ! rsync -a --checksum --delete --dry-run --itemize-changes "$src/" "$dst/" >"$tmp" 2>>"$LOG_FILE"; then
-                    mismatches+=("home/$name (error de verificación)")
-                elif [[ -s "$tmp" ]]; then
-                    mismatches+=("home/$name")
-                fi
-            elif [[ ! -f "$dst" ]] || ! cmp -s "$src" "$dst"; then
-                mismatches+=("home/$name")
-            fi
-            rm -f "$tmp"
-        done < <(find "$SCRIPT_DIR/home" -mindepth 1 -maxdepth 1 -print0 | sort -z)
+        rsync -a --delete "$SCRIPT_DIR/home/" "$HOME/" >>"$LOG_FILE" 2>&1 || fatal "No se pudo desplegar home/."
+        success "home/ → $HOME desplegado exactamente."
     fi
 
-    if [[ -f "$SCRIPT_DIR/misc/polybar-update.hook" ]]; then
-        if ! sudo cmp -s "$SCRIPT_DIR/misc/polybar-update.hook" /etc/pacman.d/hooks/polybar-update.hook; then
-            mismatches+=("misc/polybar-update.hook")
+    # 3. Wallpapers are copied to the exact path used by the current repository
+    #    theme-config: ~/Imágenes/Wallpapers/noche_car_man.jpg.
+    if [[ -d "$SCRIPT_DIR/Wallpapers" ]]; then
+        mkdir -p -- "$HOME/Imágenes/Wallpapers"
+        rsync -a --delete "$SCRIPT_DIR/Wallpapers/" "$HOME/Imágenes/Wallpapers/" >>"$LOG_FILE" 2>&1 || fatal "No se pudo desplegar Wallpapers/."
+        mkdir -p -- "$HOME/Pictures/Wallpapers"
+        if [[ "$HOME/Pictures/Wallpapers" != "$HOME/Imágenes/Wallpapers" ]]; then
+            rsync -a --delete "$SCRIPT_DIR/Wallpapers/" "$HOME/Pictures/Wallpapers/" >>"$LOG_FILE" 2>&1 || true
         fi
+        success "Wallpapers/ desplegado en ~/Imágenes/Wallpapers y ~/Pictures/Wallpapers."
     fi
 
-    if ((${#mismatches[@]} == 0)); then
-        success "Integridad OK: todos los archivos administrados coinciden con el repositorio."
+    # 4. misc/ gets mapped according to the role of each directory in THIS repo.
+    if [[ -d "$SCRIPT_DIR/misc/bin" ]]; then
+        rsync -a --delete "$SCRIPT_DIR/misc/bin/" "$HOME/.local/bin/" >>"$LOG_FILE" 2>&1 || fatal "No se pudo desplegar misc/bin."
+    fi
+    if [[ -d "$SCRIPT_DIR/misc/fonts" ]]; then
+        rsync -a --delete "$SCRIPT_DIR/misc/fonts/" "$HOME/.local/share/fonts/" >>"$LOG_FILE" 2>&1 || fatal "No se pudo desplegar misc/fonts."
+    fi
+    if [[ -d "$SCRIPT_DIR/misc/applications" ]]; then
+        rsync -a --delete "$SCRIPT_DIR/misc/applications/" "$HOME/.local/share/applications/" >>"$LOG_FILE" 2>&1 || fatal "No se pudo desplegar misc/applications."
+    fi
+    if [[ -d "$SCRIPT_DIR/misc/asciiart" ]]; then
+        rsync -a --delete "$SCRIPT_DIR/misc/asciiart/" "$HOME/.local/share/asciiart/" >>"$LOG_FILE" 2>&1 || fatal "No se pudo desplegar misc/asciiart."
+    fi
+    if [[ -d "$SCRIPT_DIR/misc/startup-page" ]]; then
+        rsync -a --delete "$SCRIPT_DIR/misc/startup-page/" "$HOME/.local/share/startup-page/" >>"$LOG_FILE" 2>&1 || fatal "No se pudo desplegar misc/startup-page."
+    fi
+    if [[ -d "$SCRIPT_DIR/misc/firefox" ]]; then
+        rsync -a --delete "$SCRIPT_DIR/misc/firefox/" "$HOME/.local/share/TechOGR/firefox/" >>"$LOG_FILE" 2>&1 || fatal "No se pudo desplegar misc/firefox."
+    fi
+
+    # 5. The repository has a root kitty/ directory as well as config/kitty.
+    #    config/kitty is canonical. If root kitty differs, report it but do not
+    #    overwrite the canonical config with a second source of truth.
+    if [[ -d "$SCRIPT_DIR/kitty" && -d "$SCRIPT_DIR/config/kitty" ]]; then
+        if ! diff -qr -- "$SCRIPT_DIR/kitty" "$SCRIPT_DIR/config/kitty" >/dev/null 2>&1; then
+            warn "Se detectaron diferencias entre kitty/ y config/kitty del propio repo; se conserva config/kitty como fuente canónica."
+            log WARNING "Repository has two differing Kitty trees: kitty/ vs config/kitty"
+        else
+            info "kitty/ y config/kitty son idénticos; se evita copiar dos veces el mismo contenido."
+        fi
+    elif [[ -d "$SCRIPT_DIR/kitty" && ! -d "$SCRIPT_DIR/config/kitty" ]]; then
+        rsync -a --delete "$SCRIPT_DIR/kitty/" "$HOME/.config/kitty/" >>"$LOG_FILE" 2>&1 || fatal "No se pudo desplegar kitty/."
+    fi
+
+    fc-cache -r >>"$LOG_FILE" 2>&1 || true
+    success "Contenido de TechOGR desplegado sin modificar archivos versionados."
+}
+
+install_pacman_hook() {
+    [[ -f "$SCRIPT_DIR/misc/polybar-update.hook" ]] || return 0
+    sudo install -Dm644 "$SCRIPT_DIR/misc/polybar-update.hook" /etc/pacman.d/hooks/polybar-update.hook || \
+        fatal "No se pudo instalar misc/polybar-update.hook."
+    success "Hook de pacman instalado desde misc/polybar-update.hook."
+}
+
+# -------------------------- Sessions / Services ------------------------------
+setup_display_manager() {
+    step "11/12 · Display Manager / sesión BSPWM"
+
+    local active=""
+    if systemctl is-active --quiet display-manager.service; then
+        active="$(systemctl show -p Id --value display-manager.service 2>/dev/null || true)"
+    fi
+
+    if [[ -n "$active" ]]; then
+        success "Display Manager existente conservado: $active"
     else
-        error "Se detectaron diferencias tras el despliegue: ${mismatches[*]}"
-        warn "Detalle disponible en: $LOG_FILE"
-        fatal "La instalación no puede considerarse íntegra."
+        info "No hay Display Manager activo; instalando LightDM + GTK greeter."
+        install_pkg lightdm yes || true
+        install_pkg lightdm-gtk-greeter yes || true
+        ((${#FAILED_REQUIRED[@]} == 0)) || fatal "No se pudo instalar LightDM."
+        sudo systemctl enable lightdm.service >>"$LOG_FILE" 2>&1 || fatal "No se pudo habilitar LightDM."
+        success "LightDM habilitado."
+    fi
+
+    sudo install -Dm644 /dev/stdin /usr/share/xsessions/bspwm.desktop <<EOF_BSPWM
+[Desktop Entry]
+Name=BSPWM
+Comment=Binary Space Partitioning Window Manager
+Exec=bspwm
+TryExec=bspwm
+Type=Application
+DesktopNames=BSPWM
+EOF_BSPWM
+
+    # Do not overwrite an existing DM configuration when one is active.
+    # For a fresh LightDM install, select BSPWM as default session.
+    if systemctl is-enabled --quiet lightdm.service 2>/dev/null; then
+        sudo install -d -m755 /etc/lightdm/lightdm.conf.d
+        sudo tee /etc/lightdm/lightdm.conf.d/50-bspwm.conf >/dev/null <<'EOF_DM'
+[Seat:*]
+user-session=bspwm
+greeter-session=lightdm-gtk-greeter
+EOF_DM
+    fi
+    success "Sesión BSPWM registrada en /usr/share/xsessions/bspwm.desktop."
+}
+
+configure_services() {
+    info "Recargando unidades de usuario del repositorio..."
+    systemctl --user daemon-reload >>"$LOG_FILE" 2>&1 || true
+
+    if [[ -f "$HOME/.config/systemd/user/ArchUpdates.timer" ]]; then
+        systemctl --user enable --now ArchUpdates.timer >>"$LOG_FILE" 2>&1 || warn "ArchUpdates.timer no pudo iniciarse ahora."
+    fi
+
+    if is_pkg_installed mpd && [[ -f "$HOME/.config/mpd/mpd.conf" ]]; then
+        systemctl --user enable --now mpd.service >>"$LOG_FILE" 2>&1 || warn "MPD user service no pudo iniciarse."
+    fi
+
+    # Update XDG MIME cache after .desktop files.
+    if command_exists update-desktop-database; then
+        update-desktop-database "$HOME/.local/share/applications" >>"$LOG_FILE" 2>&1 || true
     fi
 }
 
-post_install_fixes() {
-    step "12/12 - Diagnóstico final - rutas, servicios y archivos críticos"
+set_default_browser() {
+    if ! command_exists xdg-settings; then return 0; fi
+    local desktop=""
+    if [[ -f /usr/share/applications/brave-browser.desktop ]]; then
+        desktop="brave-browser.desktop"
+    elif [[ -f /usr/share/applications/com.brave.Browser.desktop ]]; then
+        desktop="com.brave.Browser.desktop"
+    fi
 
-    configure_picom
-    configure_browser_default
+    if [[ -n "$desktop" ]]; then
+        xdg-settings set default-web-browser "$desktop" >>"$LOG_FILE" 2>&1 || true
+        xdg-mime default "$desktop" x-scheme-handler/http >>"$LOG_FILE" 2>&1 || true
+        xdg-mime default "$desktop" x-scheme-handler/https >>"$LOG_FILE" 2>&1 || true
+        xdg-mime default "$desktop" text/html >>"$LOG_FILE" 2>&1 || true
+        success "Brave configurado como navegador predeterminado."
+    else
+        warn "No se encontró el .desktop de Brave; se omitió el navegador predeterminado."
+    fi
+}
 
-    local checks=(
+configure_shell() {
+    if ! command_exists zsh; then return 0; fi
+    local zsh_path
+    zsh_path="$(command -v zsh)"
+    if ! grep -Fxq "$zsh_path" /etc/shells; then
+        echo "$zsh_path" | sudo tee -a /etc/shells >/dev/null
+    fi
+    if [[ "$(getent passwd "$USER" | cut -d: -f7)" != "$zsh_path" ]]; then
+        sudo chsh -s "$zsh_path" "$USER" >>"$LOG_FILE" 2>&1 || warn "No se pudo cambiar la shell predeterminada a Zsh."
+    fi
+}
+
+# --------------------------- Integrity checks ---------------------------------
+verify_repository_layout() {
+    step "12/12 · Verificación final"
+
+    local required=(
         "$HOME/.config/bspwm/bspwmrc"
         "$HOME/.config/bspwm/config/sxhkdrc"
-        "$HOME/.config/bspwm/bin/Theme.sh"
-        "$HOME/.config/bspwm/config/picom/picom.conf"
-        "$HOME/.local/bin/techogr_lock"
-        "/usr/share/xsessions/bspwm.desktop"
+        "$HOME/.config/bspwm/eww"
+        "$HOME/.config/bspwm/rices/emilia/walls"
     )
-
-    local path
-    for path in "${checks[@]}"; do
-        if [[ -e "$path" ]]; then
-            success "OK: $path"
-        else
-            warn "Falta: $path"
-        fi
+    local f
+    for f in "${required[@]}"; do
+        if [[ -e "$f" ]]; then success "Verificado: ${f#"$HOME/"}"; else warn "Falta: ${f#"$HOME/"}"; fi
     done
 
-    # Basic shell syntax check for our key shell scripts; do not execute them.
-    local script
-    for script in \
-        "$HOME/.config/bspwm/bspwmrc" \
-        "$HOME/.config/bspwm/bin/Theme.sh" \
-        "$HOME/.config/bspwm/bin/SetSysVars" \
-        "$HOME/.local/bin/techogr_lock"; do
-        if [[ -f "$script" ]] && ! bash -n "$script" >>"$LOG_FILE" 2>&1; then
-            warn "Sintaxis Bash sospechosa en: $script (revisa $LOG_FILE)"
-        fi
-    done
-
-    if command_exists bspwm; then success "bspwm está instalado."; else error "bspwm no está disponible en PATH."; fi
-    if command_exists sxhkd; then success "sxhkd está instalado."; else error "sxhkd no está disponible en PATH."; fi
-    if command_exists Xorg; then success "Xorg está instalado."; else error "Xorg no está disponible."; fi
-
-    if [[ "$DM_NAME" == lightdm ]]; then
-        if systemctl is-enabled --quiet lightdm.service; then
-            success "lightdm.service está habilitado."
-        else
-            error "lightdm.service NO está habilitado."
-        fi
+    if [[ -f "$HOME/Imágenes/Wallpapers/noche_car_man.jpg" ]]; then
+        success "Wallpaper por defecto encontrado: ~/Imágenes/Wallpapers/noche_car_man.jpg"
     else
-        info "Display Manager preservado: ${DM_NAME:-ninguno detectado}."
+        warn "No se encontró noche_car_man.jpg en ~/Imágenes/Wallpapers."
     fi
 
-    # No automatically force graphical.target when another display manager is in
-    # use; systemd target selection belongs to the existing system policy.
-    if [[ "$(systemctl get-default 2>/dev/null || true)" != "graphical.target" ]]; then
-        warn "El target por defecto no es graphical.target. No se modificará automáticamente porque podría ser una política del usuario."
+    if command_exists eww; then success "Eww operativo: $(command -v eww)"; else fatal "Eww no está operativo."
+    fi
+
+    # Warn, but do not mutate, repository files containing upstream credits.
+    # The current repository itself includes some gh0stzk-origin references; the
+    # installer deliberately leaves them untouched because the repository is the source of truth.
+    local upstream_hits
+    upstream_hits="$(grep -RIl --exclude-dir=.git 'gh0stzk/dotfiles\|Author: gh0stzk\|Copyright (C) 2021-2026 gh0stzk' "$SCRIPT_DIR/config" "$SCRIPT_DIR/misc" 2>/dev/null | head -n 8 || true)"
+    if [[ -n "$upstream_hits" ]]; then
+        warn "El repositorio contiene referencias a gh0stzk en archivos que se copian tal cual."
+        log WARNING "Current TechOGR repository contains upstream gh0stzk references; installer did not alter them."
     fi
 }
 
 show_summary() {
-    printf '\n%s%s══════════════════════════════════════════════════════════════%s\n' "$GREEN" "$BOLD" "$RESET"
-    printf '%s%s        TECHOGR BSPWM - INSTALACIÓN COMPLETADA%s\n' "$GREEN" "$BOLD" "$RESET"
-    printf '%s%s══════════════════════════════════════════════════════════════%s\n\n' "$GREEN" "$BOLD" "$RESET"
-
-    printf ' %s•%s Backup:      %s\n' "$CYAN" "$RESET" "$BACKUP_DIR"
-    printf ' %s•%s Log:         %s\n' "$CYAN" "$RESET" "$LOG_FILE"
-    printf ' %s•%s DisplayMgr:  %s\n' "$CYAN" "$RESET" "${DM_NAME:-preservado/ninguno}"
-    printf ' %s•%s Browser:     %s\n' "$CYAN" "$RESET" "$(command_exists brave-browser && echo Brave || command_exists brave && echo Brave || echo 'no instalado')"
-    printf ' %s•%s Lockscreen:   %s\n' "$CYAN" "$RESET" "$(command_exists betterlockscreen && echo betterlockscreen || command_exists i3lock-color && echo i3lock-color || echo i3lock)"
-    printf '\n %sRutas importantes:%s\n' "$CYAN" "$RESET"
-    printf '   ~/.config/bspwm/bspwmrc\n'
-    printf '   ~/.config/bspwm/config/sxhkdrc\n'
-    printf '   ~/.config/bspwm/config/picom/picom.conf\n'
-    printf '   ~/.config/bspwm/bin/*\n'
-    printf '\n %sIntegridad:%s     archivos del repositorio preservados sin parches automáticos\n' "$CYAN" "$RESET"
-    printf ' %sLockscreen:%s     helper generado fuera de ~/.config/bspwm\n' "$CYAN" "$RESET"
-
-    if ((${#FAILED_OPTIONAL[@]} > 0)); then
-        printf '\n%sOpcionales que no se instalaron:%s %s\n' "$YELLOW" "$RESET" "${FAILED_OPTIONAL[*]}"
-    fi
-
-    if ((${#FAILED_REQUIRED[@]} > 0)); then
-        printf '\n%sERROR: críticos fallidos:%s %s\n' "$RED" "$RESET" "${FAILED_REQUIRED[*]}"
-    fi
-
-    printf '\n%sReinicia la sesión o el equipo antes de probar el rice completo.%s\n' "$YELLOW" "$RESET"
-    printf '%sEl instalador NO reinicia automáticamente.%s\n' "$DIM" "$RESET"
+    printf '\n%s%s╔══════════════════════════════════════════════════════════════╗%s\n' "$GREEN" "$BOLD" "$RESET"
+    printf '%s%s║           TECHOGR BSPWM · INSTALACIÓN COMPLETADA             ║%s\n' "$GREEN" "$BOLD" "$RESET"
+    printf '%s%s╚══════════════════════════════════════════════════════════════╝%s\n\n' "$GREEN" "$BOLD" "$RESET"
+    printf '  %s✓%s Configuración: %s\n' "$GREEN" "$RESET" "$HOME/.config/bspwm"
+    printf '  %s✓%s Wallpapers:    %s\n' "$GREEN" "$RESET" "$HOME/Imágenes/Wallpapers"
+    printf '  %s✓%s Eww:            %s\n' "$GREEN" "$RESET" "$(command -v eww)"
+    printf '  %s✓%s Backup:         %s\n' "$GREEN" "$RESET" "$BACKUP_DIR"
+    printf '  %s✓%s Log:            %s\n\n' "$GREEN" "$RESET" "$LOG_FILE"
+    printf '  %sPróximo paso:%s cierra la sesión y selecciona %sBSPWM%s en tu Display Manager.\n' "$CYAN" "$RESET" "$BOLD" "$RESET"
+    printf '  %sPara restaurar tu configuración:%s %s/restore.sh%s\n\n' "$CYAN" "$RESET" "$BACKUP_DIR" "$RESET"
 }
 
 main() {
@@ -1196,14 +738,17 @@ main() {
     check_arch
     install_base_deps
     install_aur_helper
+    install_eww
     install_packages
-    backup_user_configs
-    setup_configs
-    patch_session_safety
-    setup_lockscreen
-    install_display_manager
-    verify_repo_integrity
-    post_install_fixes
+    install_lockscreen
+    create_backup
+    copy_repository_content
+    install_pacman_hook
+    setup_display_manager
+    configure_services
+    set_default_browser
+    configure_shell
+    verify_repository_layout
     show_summary
 }
 
