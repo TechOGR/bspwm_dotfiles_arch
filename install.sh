@@ -504,46 +504,32 @@ sync_tree() {
     success "$label desplegado exactamente."
 }
 
-prepare_user_dirs() {
-    info "Creando directorios estándar XDG del usuario..."
-    xdg-user-dirs-update >>"$LOG_FILE" 2>&1 || true
-
-    # Always create both the configured Spanish names and common English aliases.
-    local dirs=(
-        "$HOME/Escritorio" "$HOME/Documentos" "$HOME/Imágenes" "$HOME/Música"
-        "$HOME/Vídeos" "$HOME/Descargas" "$HOME/Público" "$HOME/Plantillas"
-        "$HOME/Desktop" "$HOME/Documents" "$HOME/Pictures" "$HOME/Music"
-        "$HOME/Videos" "$HOME/Downloads" "$HOME/Public" "$HOME/Templates"
-    )
-    local d
-    for d in "${dirs[@]}"; do mkdir -p -- "$d"; done
+prepare_wallpaper_dir() {
+    # Do not deploy or modify anything else under $HOME.
+    # The operating system already creates the user's home directory and its
+    # standard XDG folders. We only ensure the exact wallpaper path required
+    # by the TechOGR repository exists.
+    mkdir -p -- "$HOME/Imágenes/Wallpapers"
 }
 
 copy_repository_content() {
     step "10/12 · Despliegue exacto de TechOGR"
 
-    prepare_user_dirs
+    prepare_wallpaper_dir
     mkdir -p -- "$HOME/.config" "$HOME/.local/bin" "$HOME/.local/share/fonts" "$HOME/.local/share/applications"
 
     # 1. config/ is the canonical source for ~/.config.
     sync_tree "$SCRIPT_DIR/config" "$HOME/.config" "config/ → ~/.config"
 
-    # 2. home/ contains files intended for $HOME (currently .zshrc).
-    if [[ -d "$SCRIPT_DIR/home" ]]; then
-        rsync -a --delete "$SCRIPT_DIR/home/" "$HOME/" >>"$LOG_FILE" 2>&1 || fatal "No se pudo desplegar home/."
-        success "home/ → $HOME desplegado exactamente."
-    fi
+    # 2. Never deploy the repository's home/ directory into $HOME.
+    #    The user's home and standard folders are managed by the OS.
 
-    # 3. Wallpapers are copied to the exact path used by the current repository
+    # 2. Wallpapers are copied only to the exact path used by the repository
     #    theme-config: ~/Imágenes/Wallpapers/noche_car_man.jpg.
     if [[ -d "$SCRIPT_DIR/Wallpapers" ]]; then
         mkdir -p -- "$HOME/Imágenes/Wallpapers"
         rsync -a --delete "$SCRIPT_DIR/Wallpapers/" "$HOME/Imágenes/Wallpapers/" >>"$LOG_FILE" 2>&1 || fatal "No se pudo desplegar Wallpapers/."
-        mkdir -p -- "$HOME/Pictures/Wallpapers"
-        if [[ "$HOME/Pictures/Wallpapers" != "$HOME/Imágenes/Wallpapers" ]]; then
-            rsync -a --delete "$SCRIPT_DIR/Wallpapers/" "$HOME/Pictures/Wallpapers/" >>"$LOG_FILE" 2>&1 || true
-        fi
-        success "Wallpapers/ desplegado en ~/Imágenes/Wallpapers y ~/Pictures/Wallpapers."
+        success "Wallpapers/ desplegado únicamente en ~/Imágenes/Wallpapers."
     fi
 
     # 4. misc/ gets mapped according to the role of each directory in THIS repo.
