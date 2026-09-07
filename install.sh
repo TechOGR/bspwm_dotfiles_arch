@@ -18,7 +18,7 @@
 
 set -uo pipefail
 
-SCRIPT_VERSION="6.0.0"
+SCRIPT_VERSION="7.0.0"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_URL="https://github.com/TechOGR/bspwm_dotfiles_arch.git"
 LOG_FILE="$HOME/.techogr_install.log"
@@ -259,11 +259,9 @@ check_arch() {
         fi
     fi
 
-    info "Sincronizando repositorios (pacman -Sy)..."
-    # Use -Syy only if normal sync fails; do not force a partial upgrade.
-    if ! sudo pacman -Sy >>"$LOG_FILE" 2>&1; then
-        warn "pacman -Sy falló. Reintentando con -Syy..."
-        sudo pacman -Syy >>"$LOG_FILE" 2>&1 || fatal "No se pudo sincronizar pacman."
+    info "Actualizando base de paquetes con pacman -Syu..."
+    if ! sudo pacman -Syu --noconfirm >>"$LOG_FILE" 2>&1; then
+        fatal "No se pudo completar la actualización del sistema con pacman -Syu."
     fi
 
     success "Sistema Arch-family detectado y pacman operativo."
@@ -271,7 +269,7 @@ check_arch() {
 
 install_base_deps() {
     step "3/12 - Dependencias base y compilación AUR"
-    local pkgs=(base-devel git curl ca-certificates)
+    local pkgs=(base-devel git curl ca-certificates rsync)
     local pkg
     for pkg in "${pkgs[@]}"; do
         install_repo_pkg "$pkg" yes || true
@@ -318,87 +316,158 @@ install_aur_helper() {
     success "yay instalado y listo para el usuario $USER."
 }
 
+prepare_rustup_for_eww() {
+    info "Preparando Rust mediante rustup para compilar/instalar Eww..."
+
+    export PATH="$HOME/.cargo/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+    hash -r 2>/dev/null || true
+
+    # If rustup is already present, use it directly.
+    if command_exists rustup; then
+        info "rustup ya está instalado. Seleccionando toolchain stable..."
+    else
+        # The Arch rustup package is in the official repositories.
+        if is_pkg_installed rust; then
+            warn "Se detectó el paquete 'rust' del sistema, que entra en conflicto con 'rustup'."
+            printf '\n%s%s Eww necesita rustup en esta instalación.%s\n' "$YELLOW" "$BOLD" "$RESET"
+            printf ' %sEsto sustituirá el paquete rust por rustup y después activará stable.%s\n' "$DIM" "$RESET"
+            read -r -p " ¿Deseas sustituir rust por rustup? [S/n]: " answer
+            answer="${answer:-S}"
+            if [[ "$answer" =~ ^[sSyY]$ ]]; then
+                # Remove only the Arch rust package. If something actually
+                # depends on it, pacman will refuse and we stop before touching it.
+                if ! sudo pacman -R rust --noconfirm >>"$LOG_FILE" 2>&1; then
+                    error "No se pudo sustituir rust por rustup automáticamente."
+                    warn "No se eliminaron dependencias adicionales. Revisa el log: $LOG_FILE"
+                    return 1
+                fi
+                success "Paquete rust sustituido por rustup."
+            else
+                warn "Se mantendrá rust. Eww se intentará instalar con el toolchain existente."
+            fi
+        fi
+
+        if ! command_exists rustup; then
+            if ! sudo pacman -S --needed rustup >>"$LOG_FILE" 2>&1; then
+                error "No se pudo instalar rustup desde los repositorios oficiales."
+                return 1
+            fi
+            success "rustup instalado desde los repositorios oficiales."
+        fi
+    fi
+
+    export PATH="$HOME/.cargo/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+    hash -r 2>/dev/null || true
+
+    command_exists rustup || return 1
+
+    # Arch's rustup package deliberately ships without an active toolchain.
+    # This is the key step needed before building/installing Eww.
+    if ! rustup default stable >>"$LOG_FILE" 2>&1; then
+        warn "rustup default stable falló; intentando instalar el toolchain stable primero."
+        rustup toolchain install stable >>"$LOG_FILE" 2>&1 || return 1
+        rustup default stable >>"$LOG_FILE" 2>&1 || return 1
+    fi
+
+    # Refresh PATH for cargo/rustc exposed by rustup and verify the active toolchain.
+    if [[ -f "$HOME/.cargo/env" ]]; then
+        # shellcheck disable=SC1090
+        source "$HOME/.cargo/env"
+    fi
+    export PATH="$HOME/.cargo/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+    hash -r 2>/dev/null || true
+
+    if command_exists cargo && command_exists rustc; then
+        success "Rust stable activo: $(rustc --version 2>/dev/null || printf '%s' 'desconocido')"
+        return 0
+    fi
+
+    error "rustup está instalado, pero cargo/rustc no quedaron disponibles."
+    return 1
+}
+
 install_eww() {
-    export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
+    export PATH="$HOME/.cargo/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+    hash -r 2>/dev/null || true
 
     if command_exists eww; then
         success "Eww ya está disponible: $(eww --version 2>/dev/null | head -n1 || printf '%s' 'versión instalada')"
         return 0
     fi
 
-    if [[ -n "$AUR_HELPER" ]]; then
-        info "Probando Eww desde AUR con $AUR_HELPER..."
-        if "$AUR_HELPER" -S --needed --noconfirm eww >>"$LOG_FILE" 2>&1 && command_exists eww; then
-            success "Eww instalado correctamente desde AUR."
-            return 0
-        fi
-        warn "El paquete AUR de Eww no es compatible con el toolchain actual; activando fallback upstream."
+    # Eww on this rice is an expected component, not a cosmetic optional one.
+    # Reproduce the working installation sequence: base build tools, rustup,
+    # stable toolchain, then AUR eww.
+    if ! prepare_rustup_for_eww; then
+        FAILED_REQUIRED+=("rustup/Eww toolchain")
+        return 1
     fi
 
-    local build_dir="$HOME/.local/state/techogr-bspwm/build/eww-source"
-    local eww_repo="https://github.com/elkowar/eww.git"
     local eww_deps=(pkgconf gtk3 gtk-layer-shell pango gdk-pixbuf2 cairo glib2 dbus libdbusmenu-gtk3)
     local dep
-
     for dep in "${eww_deps[@]}"; do
-        if ! is_pkg_installed "$dep"; then
-            install_repo_pkg "$dep" yes || true
-        fi
+        install_repo_pkg "$dep" yes || true
     done
+    ((${#FAILED_REQUIRED[@]} == 0)) || return 1
 
-    if ! command_exists cargo; then
-        if command_exists rustup; then
-            info "Activando Rust stable mediante rustup..."
-            rustup toolchain install stable --profile minimal >>"$LOG_FILE" 2>&1 || true
-            rustup default stable >>"$LOG_FILE" 2>&1 || true
-        else
-            install_repo_pkg rust yes || true
+    export RUSTUP_TOOLCHAIN=stable
+    export RUST_BACKTRACE=1
+
+    # First try the exact route known to work on this rice.
+    if [[ -n "$AUR_HELPER" ]]; then
+        info "Instalando Eww desde AUR con $AUR_HELPER usando Rust stable..."
+        if RUSTUP_TOOLCHAIN=stable "$AUR_HELPER" -S --needed eww >>"$LOG_FILE" 2>&1; then
+            hash -r 2>/dev/null || true
+            if command_exists eww; then
+                success "Eww instalado correctamente desde AUR."
+                return 0
+            fi
         fi
+        warn "El paquete AUR de Eww no pudo finalizar; se probará compilación directa con el mismo toolchain."
     fi
 
-    command_exists cargo || {
-        warn "Cargo no está disponible; Eww no pudo compilarse."
-        FAILED_OPTIONAL+=("eww")
-        return 1
-    }
-
-    mkdir -p "$(dirname -- "$build_dir")"
+    # Upstream fallback. This is deliberately after rustup+stable, not before.
+    local build_root="$HOME/.local/state/techogr-bspwm/build"
+    local build_dir="$build_root/eww-source"
+    local eww_repo="https://github.com/elkowar/eww.git"
+    mkdir -p "$build_root"
     rm -rf -- "$build_dir"
 
-    info "Clonando la fuente oficial de Eww..."
-    if ! git clone --depth=1 https://github.com/elkowar/eww.git "$build_dir" >>"$LOG_FILE" 2>&1; then
+    info "Clonando la fuente oficial de Eww como fallback..."
+    if ! git clone --depth=1 "$eww_repo" "$build_dir" >>"$LOG_FILE" 2>&1; then
         warn "No se pudo clonar Eww desde GitHub."
-        FAILED_OPTIONAL+=("eww")
+        FAILED_REQUIRED+=("eww")
         return 1
     fi
 
-    info "Compilando Eww para X11..."
-    if ! (cd "$build_dir" && cargo build --release --no-default-features --features x11) >>"$LOG_FILE" 2>&1; then
-        warn "La compilación de Eww falló. Revisa $LOG_FILE."
-        FAILED_OPTIONAL+=("eww")
+    info "Compilando Eww para X11 con Rust stable..."
+    if ! (cd "$build_dir" && RUSTUP_TOOLCHAIN=stable cargo build --release --no-default-features --features x11 --locked) >>"$LOG_FILE" 2>&1; then
+        warn "La compilación directa de Eww falló. Revisa $LOG_FILE."
+        FAILED_REQUIRED+=("eww")
         return 1
     fi
 
     local built="$build_dir/target/release/eww"
-    [[ -x "$built" ]] || {
+    if [[ ! -x "$built" ]]; then
         warn "Cargo terminó pero no produjo $built."
-        FAILED_OPTIONAL+=("eww")
+        FAILED_REQUIRED+=("eww")
         return 1
-    }
-
-    # Install the fallback system-wide so the repository's ORIGINAL bspwmrc
-    # can call `eww` without changing its PATH or modifying its contents.
-    if sudo install -Dm755 "$built" /usr/local/bin/eww >>"$LOG_FILE" 2>&1; then
-        hash -r 2>/dev/null || true
-        export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
-        if command_exists eww; then
-            success "Eww compilado e instalado en /usr/local/bin/eww."
-            return 0
-        fi
     fi
 
-    warn "No se pudo colocar el binario de Eww en /usr/local/bin."
-    FAILED_OPTIONAL+=("eww")
+    if ! sudo install -Dm755 "$built" /usr/local/bin/eww >>"$LOG_FILE" 2>&1; then
+        warn "No se pudo instalar el binario de Eww en /usr/local/bin."
+        FAILED_REQUIRED+=("eww")
+        return 1
+    fi
+
+    export PATH="/usr/local/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+    hash -r 2>/dev/null || true
+    if command_exists eww; then
+        success "Eww compilado e instalado en /usr/local/bin/eww."
+        return 0
+    fi
+
+    FAILED_REQUIRED+=("eww")
     return 1
 }
 
@@ -453,7 +522,7 @@ install_packages() {
     # Eww recibe un tratamiento especial: AUR primero y, si el PKGBUILD
     # falla por cambios de toolchain, compilación directa con backend X11.
     if ! install_eww; then
-        warn "Eww no pudo instalarse en esta ejecución; el resto del rice continuará funcionando."
+        fatal "Eww no pudo instalarse. La instalación se detiene para no dejar el rice incompleto."
     fi
 
     # Fallback for a derivative exposing a native "brave" package.
@@ -569,77 +638,99 @@ setup_configs() {
 
     mkdir -p "$HOME/.config" "$HOME/.local/bin" "$HOME/.local/share/applications" "$HOME/.local/share/fonts" "$HOME/Pictures/Wallpapers"
 
-    # IMPORTANT: every config/<name> maps exactly to ~/.config/<name>.
-    # The destination is removed only AFTER backup_user_configs() completed.
-    # No sed/cat/append operation is allowed to modify repository-managed files.
-    local src name rc=0
+    local rc=0 src name dst
+
+    # IMPORTANT: sync each repository-owned top-level config separately.
+    # We deliberately do NOT run --delete against the whole ~/.config, because
+    # that would remove unrelated configurations belonging to the user.
     if [[ -d "$SCRIPT_DIR/config" ]]; then
+        info "Sincronizando configuraciones administradas por el repositorio..."
         while IFS= read -r -d '' src; do
             name="${src##*/}"
-            copy_exact "$src" "$HOME/.config/$name" || rc=1
+            dst="$HOME/.config/$name"
+            if [[ -d "$src" ]]; then
+                mkdir -p "$dst"
+                if ! rsync -a --delete "$src/" "$dst/" >>"$LOG_FILE" 2>&1; then
+                    warn "No se pudo replicar exactamente config/$name."
+                    rc=1
+                fi
+            else
+                rm -rf -- "$dst"
+                if ! cp -a -- "$src" "$dst" >>"$LOG_FILE" 2>&1; then
+                    warn "No se pudo copiar exactamente config/$name."
+                    rc=1
+                fi
+            fi
         done < <(find "$SCRIPT_DIR/config" -mindepth 1 -maxdepth 1 -print0 | sort -z)
     fi
 
-    # home/* maps to $HOME/* exactly (.zshrc currently lives here).
+    # home/* is also synchronized one entry at a time. Never use --delete on
+    # "$HOME/" itself: the source contains only repository-managed entries and
+    # deleting at the home-root would be destructive.
     if [[ -d "$SCRIPT_DIR/home" ]]; then
+        info "Sincronizando archivos administrados de home/..."
         while IFS= read -r -d '' src; do
             name="${src##*/}"
-            copy_exact "$src" "$HOME/$name" || rc=1
+            dst="$HOME/$name"
+            if [[ -d "$src" ]]; then
+                mkdir -p "$dst"
+                if ! rsync -a --delete "$src/" "$dst/" >>"$LOG_FILE" 2>&1; then
+                    warn "No se pudo replicar exactamente home/$name."
+                    rc=1
+                fi
+            else
+                rm -rf -- "$dst"
+                if ! cp -a -- "$src" "$dst" >>"$LOG_FILE" 2>&1; then
+                    warn "No se pudo copiar exactamente home/$name."
+                    rc=1
+                fi
+            fi
         done < <(find "$SCRIPT_DIR/home" -mindepth 1 -maxdepth 1 -print0 | sort -z)
     fi
 
-    # Wallpapers are copied without changing filenames or image contents.
+    # Wallpapers and misc payloads intentionally do NOT delete unrelated user files.
     if [[ -d "$SCRIPT_DIR/Wallpapers" ]]; then
-        copy_tree_merge "$SCRIPT_DIR/Wallpapers" "$HOME/Pictures/Wallpapers" || rc=1
+        rsync -a "$SCRIPT_DIR/Wallpapers/" "$HOME/Pictures/Wallpapers/" >>"$LOG_FILE" 2>&1 || rc=1
     fi
 
-    # Miscellaneous repository payloads are copied file-for-file into their
-    # intended locations without deleting unrelated user data in those folders.
-    # File bytes and repository permissions are preserved by cp -a.
-    copy_tree_merge "$SCRIPT_DIR/misc/applications" "$HOME/.local/share/applications" || rc=1
-    copy_tree_merge "$SCRIPT_DIR/misc/asciiart" "$HOME/.local/share/techogr/asciiart" || rc=1
-    copy_tree_merge "$SCRIPT_DIR/misc/bin" "$HOME/.local/bin" || rc=1
-    copy_tree_merge "$SCRIPT_DIR/misc/firefox" "$HOME/.local/share/techogr/firefox" || rc=1
-    copy_tree_merge "$SCRIPT_DIR/misc/fonts" "$HOME/.local/share/fonts" || rc=1
-    copy_tree_merge "$SCRIPT_DIR/misc/startup-page" "$HOME/.local/share/techogr/startup-page" || rc=1
+    for pair in \
+        "$SCRIPT_DIR/misc/applications|$HOME/.local/share/applications" \
+        "$SCRIPT_DIR/misc/asciiart|$HOME/.local/share/techogr/asciiart" \
+        "$SCRIPT_DIR/misc/bin|$HOME/.local/bin" \
+        "$SCRIPT_DIR/misc/firefox|$HOME/.local/share/techogr/firefox" \
+        "$SCRIPT_DIR/misc/fonts|$HOME/.local/share/fonts" \
+        "$SCRIPT_DIR/misc/startup-page|$HOME/.local/share/techogr/startup-page"; do
+        src="${pair%%|*}"
+        dst="${pair#*|}"
+        if [[ -d "$src" ]]; then
+            mkdir -p "$dst"
+            rsync -a "$src/" "$dst/" >>"$LOG_FILE" 2>&1 || rc=1
+        fi
+    done
 
-    # Pacman hook is a system-level payload from the repository. Copy it
-    # byte-for-byte while keeping a backup of an existing hook.
+    # Pacman hook is system-level repository content: preserve bytes exactly.
     local hook="$SCRIPT_DIR/misc/polybar-update.hook"
     if [[ -f "$hook" ]]; then
         sudo install -d -m 755 /etc/pacman.d/hooks
         if [[ -f /etc/pacman.d/hooks/polybar-update.hook ]]; then
-            sudo cp -a /etc/pacman.d/hooks/polybar-update.hook "$BACKUP_DIR/polybar-update.hook" 2>>"$LOG_FILE" || warn "No se pudo respaldar el hook de pacman existente."
+            mkdir -p "$BACKUP_DIR/system"
+            sudo cp -a /etc/pacman.d/hooks/polybar-update.hook "$BACKUP_DIR/system/polybar-update.hook" 2>>"$LOG_FILE" || true
         fi
         sudo install -m 644 "$hook" /etc/pacman.d/hooks/polybar-update.hook >>"$LOG_FILE" 2>&1 || rc=1
     fi
 
-    # User systemd units are already part of config/systemd/user and therefore
-    # were copied exactly above. Reload and enable the timer when a user bus is
-    # available; never rewrite the unit contents.
-    if [[ -d "$HOME/.config/systemd/user" ]]; then
-        if systemctl --user daemon-reload >>"$LOG_FILE" 2>&1; then
-            if [[ -f "$HOME/.config/systemd/user/ArchUpdates.timer" ]]; then
-                systemctl --user start ArchUpdates.timer >>"$LOG_FILE" 2>&1 || warn "ArchUpdates.timer no pudo iniciarse en esta sesión; no se modificará su estado persistente."
-            fi
-        else
-            warn "No hay bus systemd --user disponible durante la instalación; las unidades quedaron copiadas correctamente."
-        fi
-    fi
-
-    # kitty/ is a top-level duplicate of config/kitty in the current repo.
-    # Keep a divergence warning rather than silently inventing a merged config.
-    if [[ -d "$SCRIPT_DIR/kitty" ]]; then
-        if [[ -d "$SCRIPT_DIR/config/kitty" ]] && ! diff -qr "$SCRIPT_DIR/config/kitty" "$SCRIPT_DIR/kitty" >>"$LOG_FILE" 2>&1; then
-            warn "config/kitty y kitty/ difieren en el repositorio; se conserva config/kitty como fuente canónica."
-        fi
+    # Repository systemd user files are copied exactly. We only reload the user
+    # manager; we do not start/enable timers here because runtime state is not
+    # part of the repository content and can create misleading verification diffs.
+    if [[ -d "$HOME/.config/systemd/user" ]] && command_exists systemctl; then
+        systemctl --user daemon-reload >>"$LOG_FILE" 2>&1 || warn "No hay bus systemd --user disponible ahora; las unidades sí fueron copiadas."
     fi
 
     command_exists update-desktop-database && update-desktop-database "$HOME/.local/share/applications" >>"$LOG_FILE" 2>&1 || true
     command_exists fc-cache && fc-cache -f >>"$LOG_FILE" 2>&1 || true
 
     (( rc == 0 )) || fatal "Uno o más árboles de dotfiles no pudieron copiarse exactamente."
-    success "Dotfiles administrados por el repositorio desplegados sin modificar su contenido."
+    success "Configuraciones del repositorio desplegadas exactamente, sin modificar archivos ajenos."
 }
 
 patch_session_safety() {
@@ -885,27 +976,47 @@ EOF_LOCK
 }
 
 verify_repo_integrity() {
-    step "11/12 - Integridad — comprobando que el repositorio no fue alterado"
+    step "11/12 - Integridad — comprobación exacta mediante checksum"
     local mismatches=()
-    local src name
+    local src name dst tmp
 
+    # Verify each repository-owned config entry separately. This guarantees exact
+    # contents for bspwm, kitty, systemd, etc. without treating unrelated user
+    # configurations as errors.
     if [[ -d "$SCRIPT_DIR/config" ]]; then
         while IFS= read -r -d '' src; do
             name="${src##*/}"
-            if ! diff -qr "$src" "$HOME/.config/$name" >>"$LOG_FILE" 2>&1; then
+            dst="$HOME/.config/$name"
+            tmp="$(mktemp)"
+            if [[ -d "$src" ]]; then
+                if ! rsync -a --checksum --delete --dry-run --itemize-changes "$src/" "$dst/" >"$tmp" 2>>"$LOG_FILE"; then
+                    mismatches+=("config/$name (error de verificación)")
+                elif [[ -s "$tmp" ]]; then
+                    mismatches+=("config/$name")
+                fi
+            elif [[ ! -f "$dst" ]] || ! cmp -s "$src" "$dst"; then
                 mismatches+=("config/$name")
             fi
+            rm -f "$tmp"
         done < <(find "$SCRIPT_DIR/config" -mindepth 1 -maxdepth 1 -print0 | sort -z)
     fi
 
+    # Verify each home entry separately; never compare/delete the entire $HOME tree.
     if [[ -d "$SCRIPT_DIR/home" ]]; then
         while IFS= read -r -d '' src; do
             name="${src##*/}"
-            if [[ -f "$src" ]] && ! cmp -s "$src" "$HOME/$name"; then
-                mismatches+=("home/$name")
-            elif [[ -d "$src" ]] && ! diff -qr "$src" "$HOME/$name" >>"$LOG_FILE" 2>&1; then
+            dst="$HOME/$name"
+            tmp="$(mktemp)"
+            if [[ -d "$src" ]]; then
+                if ! rsync -a --checksum --delete --dry-run --itemize-changes "$src/" "$dst/" >"$tmp" 2>>"$LOG_FILE"; then
+                    mismatches+=("home/$name (error de verificación)")
+                elif [[ -s "$tmp" ]]; then
+                    mismatches+=("home/$name")
+                fi
+            elif [[ ! -f "$dst" ]] || ! cmp -s "$src" "$dst"; then
                 mismatches+=("home/$name")
             fi
+            rm -f "$tmp"
         done < <(find "$SCRIPT_DIR/home" -mindepth 1 -maxdepth 1 -print0 | sort -z)
     fi
 
@@ -916,10 +1027,11 @@ verify_repo_integrity() {
     fi
 
     if ((${#mismatches[@]} == 0)); then
-        success "Integridad OK: los archivos administrados por el repositorio permanecen intactos."
+        success "Integridad OK: todos los archivos administrados coinciden con el repositorio."
     else
         error "Se detectaron diferencias tras el despliegue: ${mismatches[*]}"
-        fatal "La instalación no puede considerarse íntegra; revisa $LOG_FILE"
+        warn "Detalle disponible en: $LOG_FILE"
+        fatal "La instalación no puede considerarse íntegra."
     fi
 }
 
