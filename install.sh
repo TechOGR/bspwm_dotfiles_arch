@@ -18,7 +18,7 @@
 
 set -uo pipefail
 
-SCRIPT_VERSION="5.0.0"
+SCRIPT_VERSION="6.0.0"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_URL="https://github.com/TechOGR/bspwm_dotfiles_arch.git"
 LOG_FILE="$HOME/.techogr_install.log"
@@ -29,6 +29,8 @@ AUR_HELPER=""
 DM_NAME=""
 FAILED_REQUIRED=()
 FAILED_OPTIONAL=()
+CURRENT_STEP=0
+TOTAL_STEPS=12
 
 # ------------------------------- Colors --------------------------------------
 if [[ -t 1 ]]; then
@@ -70,8 +72,21 @@ error() {
 }
 
 step() {
-    printf '\n%s%s==> %s%s\n' "$MAGENTA" "$BOLD" "$1" "$RESET"
-    log STEP "$1"
+    local label="$1"
+    CURRENT_STEP=$((CURRENT_STEP + 1))
+    local width=32 filled=0 pct=0
+    (( TOTAL_STEPS > 0 )) && pct=$(( CURRENT_STEP * 100 / TOTAL_STEPS ))
+    (( pct > 100 )) && pct=100
+    filled=$(( pct * width / 100 ))
+    local empty=$(( width - filled ))
+    local bar=""
+    (( filled > 0 )) && bar+=$(printf '%*s' "$filled" '' | tr ' ' '█')
+    (( empty > 0 )) && bar+=$(printf '%*s' "$empty" '' | tr ' ' '░')
+    printf '\n%s╭────────────────────────────────────────────────────────────╮%s\n' "$BLUE" "$RESET"
+    printf '%s│%s %s%sPaso %02d/%02d%s  %-39s %s│%s\n' "$BLUE" "$RESET" "$BOLD" "$MAGENTA" "$CURRENT_STEP" "$TOTAL_STEPS" "$RESET" "$label" "$BLUE" "$RESET"
+    printf '%s│%s %s%s%s %3d%%  %s│%s\n' "$BLUE" "$RESET" "$CYAN" "$bar" "$RESET" "$pct" "$BLUE" "$RESET"
+    printf '%s╰────────────────────────────────────────────────────────────╯%s\n' "$BLUE" "$RESET"
+    log STEP "$label"
 }
 
 fatal() {
@@ -154,23 +169,35 @@ on_error() {
 trap 'on_error' ERR
 
 print_banner() {
-    clear 2>/dev/null || true
-    printf '%s%s\n' "$CYAN" "$BOLD"
+    if [[ -t 1 && -n "${TERM:-}" ]]; then
+        clear 2>/dev/null || true
+    fi
+    printf '%s%s' "$CYAN" "$BOLD"
     cat <<'BANNER'
-  ████████╗███████╗ ██████╗██╗  ██╗ ██████╗  ██████╗ ██████╗
-  ╚══██╔══╝██╔════╝██╔════╝██║  ██║██╔═══██╗██╔════╝ ██╔══██╗
-     ██║   █████╗  ██║     ███████║██║   ██║██║  ███╗██████╔╝
-     ██║   ██╔══╝  ██║     ██╔══██║██║   ██║██║   ██║██╔══██╗
-     ██║   ███████╗╚██████╗██║  ██║╚██████╔╝╚██████╔╝██║  ██║
-     ╚═╝   ╚══════╝ ╚═════╝╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝
+╔══════════════════════════════════════════════════════════════════╗
+║                                                                  ║
+║   ████████╗███████╗ ██████╗██╗  ██╗ ██████╗  ██████╗ ██████╗    ║
+║   ╚══██╔══╝██╔════╝██╔════╝██║  ██║██╔═══██╗██╔════╝ ██╔══██╗   ║
+║      ██║   █████╗  ██║     ███████║██║   ██║██║  ███╗██████╔╝   ║
+║      ██║   ██╔══╝  ██║     ██╔══██║██║   ██║██║   ██║██╔══██╗   ║
+║      ██║   ███████╗╚██████╗██║  ██║╚██████╔╝╚██████╔╝██║  ██║   ║
+║      ╚═╝   ╚══════╝ ╚═════╝╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝   ║
+║                                                                  ║
+╚══════════════════════════════════════════════════════════════════╝
 BANNER
-    printf '%sTechOGR BSPWM Dotfiles Installer v%s%s\n' "$BLUE" "$SCRIPT_VERSION" "$RESET"
-    printf '%sArch-family / X11 / BSPWM / LightDM / AUR%s\n\n' "$DIM" "$RESET"
+    printf '%s%sTechOGR • BSPWM Dotfiles Installer v%s%s\n' "$BLUE" "$BOLD" "$SCRIPT_VERSION" "$RESET"
+    printf '%sArch family • X11 • BSPWM • Eww • LightDM • AUR%s\n\n' "$DIM" "$RESET"
+    printf '%s %s %s\n\n' "$CYAN" '╭────────────────────────────────────────────────────────────╮' "$RESET"
+    printf '%s │ %sInstalación limpia, segura y fiel al repositorio%s │%s\n' "$CYAN" "$BOLD" "$RESET" "$CYAN"
+    printf '%s │ %s• backups antes de reemplazar configuraciones%s        │%s\n' "$CYAN" "$DIM" "$RESET" "$CYAN"
+    printf '%s │ %s• dotfiles copiados sin alterar su contenido%s         │%s\n' "$CYAN" "$DIM" "$RESET" "$CYAN"
+    printf '%s │ %s• componentes opcionales aislados de fallos%s         │%s\n' "$CYAN" "$DIM" "$RESET" "$CYAN"
+    printf '%s ╰────────────────────────────────────────────────────────────╯ %s\n\n' "$CYAN" "$RESET"
     log INFO "Installer v$SCRIPT_VERSION started from $SCRIPT_DIR"
 }
 
 check_execution() {
-    step "1/11 - Verificación de ejecución y herramientas básicas"
+    step "1/12 - Verificación de ejecución y herramientas básicas"
 
     [[ "$EUID" -ne 0 ]] || fatal "No ejecutes este instalador como root. Usa ./install.sh como usuario normal."
     [[ -n "${HOME:-}" && -d "$HOME" ]] || fatal "HOME no es válido."
@@ -190,7 +217,7 @@ check_execution() {
 }
 
 check_arch() {
-    step "2/11 - Detección de Arch Linux y estado de pacman"
+    step "2/12 - Detección de Arch Linux y estado de pacman"
 
     [[ -r /etc/os-release ]] || fatal "No existe /etc/os-release."
     # shellcheck disable=SC1091
@@ -243,7 +270,7 @@ check_arch() {
 }
 
 install_base_deps() {
-    step "3/11 - Dependencias base y compilación AUR"
+    step "3/12 - Dependencias base y compilación AUR"
     local pkgs=(base-devel git curl ca-certificates)
     local pkg
     for pkg in "${pkgs[@]}"; do
@@ -254,7 +281,7 @@ install_base_deps() {
 }
 
 install_aur_helper() {
-    step "4/11 - Detección / instalación del AUR helper"
+    step "4/12 - Detección / instalación del AUR helper"
 
     if command_exists yay; then
         AUR_HELPER="yay"
@@ -292,41 +319,36 @@ install_aur_helper() {
 }
 
 install_eww() {
-    step "5.1/11 - Instalación robusta de Eww para X11"
+    export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
 
     if command_exists eww; then
-        success "Eww ya está instalado: $(eww --version 2>/dev/null | head -n1 || printf '%s' 'versión disponible')"
+        success "Eww ya está disponible: $(eww --version 2>/dev/null | head -n1 || printf '%s' 'versión instalada')"
         return 0
     fi
 
-    # Primero intentamos el paquete AUR, que es la vía más sencilla cuando el
-    # PKGBUILD del momento es compatible con el sistema del usuario.
     if [[ -n "$AUR_HELPER" ]]; then
-        info "Intentando instalar Eww desde AUR (${AUR_HELPER})..."
-        if "$AUR_HELPER" -S --needed --noconfirm eww >>"$LOG_FILE" 2>&1; then
-            if command_exists eww; then
-                success "Eww instalado correctamente desde AUR."
-                return 0
-            fi
+        info "Probando Eww desde AUR con $AUR_HELPER..."
+        if "$AUR_HELPER" -S --needed --noconfirm eww >>"$LOG_FILE" 2>&1 && command_exists eww; then
+            success "Eww instalado correctamente desde AUR."
+            return 0
         fi
-        warn "El paquete AUR de Eww no pudo instalarse. Se usará compilación desde el código fuente."
+        warn "El paquete AUR de Eww no es compatible con el toolchain actual; activando fallback upstream."
     fi
 
-    # Fallback estable: compilar Eww directamente con el backend X11.
-    # Eww es un proyecto Rust y su documentación recomienda cargo build para
-    # compilarlo; para este rice no necesitamos Wayland.
     local build_dir="$HOME/.local/state/techogr-bspwm/build/eww-source"
     local eww_repo="https://github.com/elkowar/eww.git"
-    # rust ya incluye cargo en Arch; no lo tratamos como un paquete separado.
-    # Esto evita instalaciones redundantes y reduce los conflictos rust/rustup.
     local eww_deps=(pkgconf gtk3 gtk-layer-shell pango gdk-pixbuf2 cairo glib2 dbus libdbusmenu-gtk3)
     local dep
 
-    info "Preparando dependencias de compilación de Eww..."
+    for dep in "${eww_deps[@]}"; do
+        if ! is_pkg_installed "$dep"; then
+            install_repo_pkg "$dep" yes || true
+        fi
+    done
 
     if ! command_exists cargo; then
         if command_exists rustup; then
-            info "rustup detectado; activando toolchain stable para Eww..."
+            info "Activando Rust stable mediante rustup..."
             rustup toolchain install stable --profile minimal >>"$LOG_FILE" 2>&1 || true
             rustup default stable >>"$LOG_FILE" 2>&1 || true
         else
@@ -334,18 +356,8 @@ install_eww() {
         fi
     fi
 
-    for dep in "${eww_deps[@]}"; do
-        if is_pkg_installed "$dep"; then
-            continue
-        fi
-        if ! install_repo_pkg "$dep" yes; then
-            warn "No se pudo instalar la dependencia de Eww: $dep"
-        fi
-    done
-
-    # cargo puede ser proporcionado por rust o por rustup.
     command_exists cargo || {
-        warn "cargo no está disponible; Eww no podrá compilarse en este intento."
+        warn "Cargo no está disponible; Eww no pudo compilarse."
         FAILED_OPTIONAL+=("eww")
         return 1
     }
@@ -353,52 +365,45 @@ install_eww() {
     mkdir -p "$(dirname -- "$build_dir")"
     rm -rf -- "$build_dir"
 
-    info "Clonando Eww desde upstream..."
-    if ! git clone --depth=1 --filter=blob:none "$eww_repo" "$build_dir" >>"$LOG_FILE" 2>&1; then
+    info "Clonando la fuente oficial de Eww..."
+    if ! git clone --depth=1 https://github.com/elkowar/eww.git "$build_dir" >>"$LOG_FILE" 2>&1; then
         warn "No se pudo clonar Eww desde GitHub."
         FAILED_OPTIONAL+=("eww")
         return 1
     fi
 
-    info "Compilando Eww con backend X11 (cargo build --release)..."
-    if ! (
-        cd "$build_dir" &&
-        cargo build --release --no-default-features --features x11
-    ) >>"$LOG_FILE" 2>&1; then
-        warn "La compilación de Eww falló. Revisa $LOG_FILE para el error de Rust/dependencias."
+    info "Compilando Eww para X11..."
+    if ! (cd "$build_dir" && cargo build --release --no-default-features --features x11) >>"$LOG_FILE" 2>&1; then
+        warn "La compilación de Eww falló. Revisa $LOG_FILE."
         FAILED_OPTIONAL+=("eww")
         return 1
     fi
 
-    [[ -x "$build_dir/target/release/eww" ]] || {
-        warn "La compilación terminó sin generar target/release/eww."
-        FAILED_OPTIONAL+=("eww")
-        return 1
-    }
-
-    install -Dm755 "$build_dir/target/release/eww" "$HOME/.local/bin/eww" || {
-        warn "No se pudo instalar Eww en ~/.local/bin/eww."
+    local built="$build_dir/target/release/eww"
+    [[ -x "$built" ]] || {
+        warn "Cargo terminó pero no produjo $built."
         FAILED_OPTIONAL+=("eww")
         return 1
     }
 
-    if ! command_exists eww; then
-        warn "Eww quedó instalado pero ~/.local/bin no está en PATH durante esta ejecución."
-        export PATH="$HOME/.local/bin:$PATH"
+    # Install the fallback system-wide so the repository's ORIGINAL bspwmrc
+    # can call `eww` without changing its PATH or modifying its contents.
+    if sudo install -Dm755 "$built" /usr/local/bin/eww >>"$LOG_FILE" 2>&1; then
+        hash -r 2>/dev/null || true
+        export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
+        if command_exists eww; then
+            success "Eww compilado e instalado en /usr/local/bin/eww."
+            return 0
+        fi
     fi
 
-    if command_exists eww; then
-        success "Eww compilado e instalado en ~/.local/bin/eww."
-        return 0
-    fi
-
-    warn "No fue posible verificar el binario de Eww."
+    warn "No se pudo colocar el binario de Eww en /usr/local/bin."
     FAILED_OPTIONAL+=("eww")
     return 1
 }
 
 install_packages() {
-    step "5/11 - Paquetes X11, BSPWM, audio, utilidades y estética"
+    step "5/12 - Paquetes X11, BSPWM, audio, utilidades y estética"
 
     # Required official repository packages. Keep this list conservative and
     # avoid lib32/vendor packages that are absent when optional repos are disabled.
@@ -470,7 +475,7 @@ install_packages() {
 }
 
 backup_user_configs() {
-    step "6/11 - Copia de seguridad de configuraciones existentes"
+    step "6/12 - Copia de seguridad de configuraciones existentes"
 
     mkdir -p "$BACKUP_DIR" || fatal "No se pudo crear $BACKUP_DIR"
 
@@ -536,127 +541,133 @@ copy_tree_if_exists() {
     return 0
 }
 
+copy_exact() {
+    local src="$1" dst="$2"
+    [[ -e "$src" || -L "$src" ]] || return 0
+    mkdir -p "$(dirname -- "$dst")"
+    rm -rf -- "$dst"
+    cp -a -- "$src" "$dst" >>"$LOG_FILE" 2>&1 || {
+        warn "No se pudo desplegar exactamente: $src -> $dst"
+        return 1
+    }
+    return 0
+}
+
+copy_tree_merge() {
+    local src="$1" dst="$2"
+    [[ -d "$src" ]] || return 0
+    mkdir -p "$dst"
+    cp -a -- "$src/." "$dst/" >>"$LOG_FILE" 2>&1 || {
+        warn "No se pudo copiar completamente: $src -> $dst"
+        return 1
+    }
+    return 0
+}
+
 setup_configs() {
-    step "7/11 - Despliegue correcto de dotfiles y permisos"
+    step "7/12 - Dotfiles — despliegue exacto del repositorio"
 
-    mkdir -p \
-        "$HOME/.config" \
-        "$HOME/.local/bin" \
-        "$HOME/.local/share/applications" \
-        "$HOME/.local/share/fonts" \
-        "$HOME/.local/share/techogr" \
-        "$HOME/Pictures/Wallpapers"
+    mkdir -p "$HOME/.config" "$HOME/.local/bin" "$HOME/.local/share/applications" "$HOME/.local/share/fonts" "$HOME/Pictures/Wallpapers"
 
-    # IMPORTANT: preserve the repository's nested layout. In particular:
-    #   config/bspwm/bspwmrc
-    #   config/bspwm/config/sxhkdrc
-    #   config/bspwm/config/picom/picom.conf
-    #   config/bspwm/bin/*
-    # are intentionally deployed as ~/.config/bspwm/...
-    copy_tree_if_exists "$SCRIPT_DIR/config" "$HOME/.config" || true
-    copy_tree_if_exists "$SCRIPT_DIR/home" "$HOME" || true
+    # IMPORTANT: every config/<name> maps exactly to ~/.config/<name>.
+    # The destination is removed only AFTER backup_user_configs() completed.
+    # No sed/cat/append operation is allowed to modify repository-managed files.
+    local src name rc=0
+    if [[ -d "$SCRIPT_DIR/config" ]]; then
+        while IFS= read -r -d '' src; do
+            name="${src##*/}"
+            copy_exact "$src" "$HOME/.config/$name" || rc=1
+        done < <(find "$SCRIPT_DIR/config" -mindepth 1 -maxdepth 1 -print0 | sort -z)
+    fi
 
+    # home/* maps to $HOME/* exactly (.zshrc currently lives here).
+    if [[ -d "$SCRIPT_DIR/home" ]]; then
+        while IFS= read -r -d '' src; do
+            name="${src##*/}"
+            copy_exact "$src" "$HOME/$name" || rc=1
+        done < <(find "$SCRIPT_DIR/home" -mindepth 1 -maxdepth 1 -print0 | sort -z)
+    fi
+
+    # Wallpapers are copied without changing filenames or image contents.
     if [[ -d "$SCRIPT_DIR/Wallpapers" ]]; then
-        copy_tree_if_exists "$SCRIPT_DIR/Wallpapers" "$HOME/Pictures/Wallpapers" || true
+        copy_tree_merge "$SCRIPT_DIR/Wallpapers" "$HOME/Pictures/Wallpapers" || rc=1
     fi
 
-    # Deploy misc/* without polluting ~/.local/share with unrelated folders.
-    copy_tree_if_exists "$SCRIPT_DIR/misc/asciiart" "$HOME/.local/share/techogr/asciiart" || true
-    copy_tree_if_exists "$SCRIPT_DIR/misc/firefox" "$HOME/.local/share/techogr/firefox" || true
-    copy_tree_if_exists "$SCRIPT_DIR/misc/fonts" "$HOME/.local/share/fonts" || true
-    copy_tree_if_exists "$SCRIPT_DIR/misc/bin" "$HOME/.local/bin" || true
-    copy_tree_if_exists "$SCRIPT_DIR/misc/applications" "$HOME/.local/share/applications" || true
+    # Miscellaneous repository payloads are copied file-for-file into their
+    # intended locations without deleting unrelated user data in those folders.
+    # File bytes and repository permissions are preserved by cp -a.
+    copy_tree_merge "$SCRIPT_DIR/misc/applications" "$HOME/.local/share/applications" || rc=1
+    copy_tree_merge "$SCRIPT_DIR/misc/asciiart" "$HOME/.local/share/techogr/asciiart" || rc=1
+    copy_tree_merge "$SCRIPT_DIR/misc/bin" "$HOME/.local/bin" || rc=1
+    copy_tree_merge "$SCRIPT_DIR/misc/firefox" "$HOME/.local/share/techogr/firefox" || rc=1
+    copy_tree_merge "$SCRIPT_DIR/misc/fonts" "$HOME/.local/share/fonts" || rc=1
+    copy_tree_merge "$SCRIPT_DIR/misc/startup-page" "$HOME/.local/share/techogr/startup-page" || rc=1
 
-    # Also support a future repo layout that contains top-level kitty/ or
-    # polkit/ trees without breaking the current layout.
-    copy_tree_if_exists "$SCRIPT_DIR/kitty" "$HOME/.config/kitty" || true
-
-    # Preserve executable bits where the repository expects shell helpers to run.
-    if [[ -d "$HOME/.config/bspwm/bin" ]]; then
-        find "$HOME/.config/bspwm/bin" -type f -exec chmod 755 {} + 2>>"$LOG_FILE" || true
+    # Pacman hook is a system-level payload from the repository. Copy it
+    # byte-for-byte while keeping a backup of an existing hook.
+    local hook="$SCRIPT_DIR/misc/polybar-update.hook"
+    if [[ -f "$hook" ]]; then
+        sudo install -d -m 755 /etc/pacman.d/hooks
+        if [[ -f /etc/pacman.d/hooks/polybar-update.hook ]]; then
+            sudo cp -a /etc/pacman.d/hooks/polybar-update.hook "$BACKUP_DIR/polybar-update.hook" 2>>"$LOG_FILE" || warn "No se pudo respaldar el hook de pacman existente."
+        fi
+        sudo install -m 644 "$hook" /etc/pacman.d/hooks/polybar-update.hook >>"$LOG_FILE" 2>&1 || rc=1
     fi
-    if [[ -d "$HOME/.local/bin" ]]; then
-        find "$HOME/.local/bin" -type f -exec chmod 755 {} + 2>>"$LOG_FILE" || true
-    fi
-    [[ -f "$HOME/.config/bspwm/bspwmrc" ]] && chmod 755 "$HOME/.config/bspwm/bspwmrc"
 
-    # Create/update the desktop launcher database and font cache.
+    # User systemd units are already part of config/systemd/user and therefore
+    # were copied exactly above. Reload and enable the timer when a user bus is
+    # available; never rewrite the unit contents.
+    if [[ -d "$HOME/.config/systemd/user" ]]; then
+        if systemctl --user daemon-reload >>"$LOG_FILE" 2>&1; then
+            if [[ -f "$HOME/.config/systemd/user/ArchUpdates.timer" ]]; then
+                systemctl --user start ArchUpdates.timer >>"$LOG_FILE" 2>&1 || warn "ArchUpdates.timer no pudo iniciarse en esta sesión; no se modificará su estado persistente."
+            fi
+        else
+            warn "No hay bus systemd --user disponible durante la instalación; las unidades quedaron copiadas correctamente."
+        fi
+    fi
+
+    # kitty/ is a top-level duplicate of config/kitty in the current repo.
+    # Keep a divergence warning rather than silently inventing a merged config.
+    if [[ -d "$SCRIPT_DIR/kitty" ]]; then
+        if [[ -d "$SCRIPT_DIR/config/kitty" ]] && ! diff -qr "$SCRIPT_DIR/config/kitty" "$SCRIPT_DIR/kitty" >>"$LOG_FILE" 2>&1; then
+            warn "config/kitty y kitty/ difieren en el repositorio; se conserva config/kitty como fuente canónica."
+        fi
+    fi
+
     command_exists update-desktop-database && update-desktop-database "$HOME/.local/share/applications" >>"$LOG_FILE" 2>&1 || true
     command_exists fc-cache && fc-cache -f >>"$LOG_FILE" 2>&1 || true
 
-    success "Dotfiles desplegados respetando la jerarquía real del repositorio."
+    (( rc == 0 )) || fatal "Uno o más árboles de dotfiles no pudieron copiarse exactamente."
+    success "Dotfiles administrados por el repositorio desplegados sin modificar su contenido."
 }
 
 patch_session_safety() {
-    step "8/11 - Blindaje de sesión BSPWM (sin romper el rice)"
+    step "8/12 - Entorno X11 — soporte extra sin tocar los dotfiles"
 
-    local bspwmrc="$HOME/.config/bspwm/bspwmrc"
-    [[ -f "$bspwmrc" ]] || fatal "No existe ~/.config/bspwm/bspwmrc después del despliegue."
-
-    # The repository's bspwmrc already contains the correct relative paths.
-    # Only add small, idempotent guards around optional programs.
-    # Disable the repository's unconditional Eww starts; the guarded block below owns them.
-    sed -i -E 's|^[[:space:]]*pidof -q eww \|\|.*$|# disabled by installer: Eww is started by TECHOGR_OPTIONAL_GUARDS|' "$bspwmrc"
-    sed -i -E 's|^[[:space:]]*\[[^]]*\.first_run_done[^]]*\].*eww.*$|# disabled by installer: Eww first-run is handled by TECHOGR_OPTIONAL_GUARDS|' "$bspwmrc"
-
-    if ! grep -q 'TECHOGR_OPTIONAL_GUARDS' "$bspwmrc"; then
-        cat >> "$bspwmrc" <<'EOF_GUARDS'
-
-# ============================================================================
-# TECHOGR_OPTIONAL_GUARDS
-# Keep optional components from producing fatal-looking startup errors.
-# ============================================================================
-if command -v dunst >/dev/null 2>&1; then
-    if ! pgrep -x dunst >/dev/null 2>&1; then dunst >/dev/null 2>&1 & fi
-fi
-
-# eww is optional because it may fail to build on a particular Arch toolchain.
-# Never call it when the binary is unavailable.
-if command -v eww >/dev/null 2>&1; then
-    eww -c "$HOME/.config/bspwm/eww" daemon >/dev/null 2>&1 &
-    if [[ -f "$HOME/.config/bspwm/eww/eww.yuck" && ! -f "$HOME/.config/bspwm/config/.first_run_done" ]]; then
-        ( eww -c "$HOME/.config/bspwm/eww" open --toggle welcome >/dev/null 2>&1 && touch "$HOME/.config/bspwm/config/.first_run_done" ) &
-    fi
-fi
-EOF_GUARDS
-    fi
-
-    # The current repository intentionally keeps sxhkd and picom beneath
-    # ~/.config/bspwm/config; do not manufacture duplicate ~/.config/sxhkd or
-    # ~/.config/picom trees. This is a common source of broken clicks/shortcuts.
-    local sxhkd_conf="$HOME/.config/bspwm/config/sxhkdrc"
-    local picom_conf="$HOME/.config/bspwm/config/picom/picom.conf"
-    [[ -f "$sxhkd_conf" ]] || warn "No se encontró $sxhkd_conf"
-    [[ -f "$picom_conf" ]] || warn "No se encontró $picom_conf"
-
-    # Avoid the old Virtual-1-only xrandr hard failure on physical hardware.
-    # The line is commented only if it exactly matches the repository's forced
-    # single-virtual-output command.
-    if grep -Eq '^[[:space:]]*xrandr --output Virtual-1 --mode 1920x1080 --rate 60[[:space:]]*$' "$bspwmrc"; then
-        sed -i 's/^[[:space:]]*xrandr --output Virtual-1 --mode 1920x1080 --rate 60[[:space:]]*$/# xrandr --output Virtual-1 --mode 1920x1080 --rate 60  # disabled by installer: hardware-independent startup/' "$bspwmrc"
-        success "Se eliminó la dependencia de una salida Virtual-1 fija."
-    fi
-
-    # Ensure PATH contains the repo's BSPWM helper directory before sxhkd/theme scripts.
-    if ! grep -q 'export PATH="\$HOME/.config/bspwm/bin:\$PATH"' "$bspwmrc"; then
-        sed -i '2i export PATH="$HOME/.config/bspwm/bin:$PATH"' "$bspwmrc"
-    fi
-
-    # Configure a safe X11 profile for LightDM/xinit without attempting to start
-    # bspwm twice. LightDM's Xsession will execute the selected .desktop session.
+    # This function intentionally DOES NOT modify ~/.config/bspwm/*.
+    # Repository-managed files must remain exact. Environment/service helpers live
+    # outside the repository instead.
     cat > "$HOME/.xprofile" <<'EOF_XPROFILE'
 #!/bin/sh
-# TechOGR BSPWM session environment
-export XDG_CURRENT_DESKTOP=bspwm
-export DESKTOP_SESSION=bspwm
-export XDG_SESSION_TYPE=x11
+# TechOGR session environment (installer-managed, not repository-managed)
+export PATH="/usr/local/bin:$HOME/.local/bin:$HOME/.config/bspwm/bin:$PATH"
+export XDG_CURRENT_DESKTOP='bspwm'
+export DESKTOP_SESSION='bspwm'
+export XDG_SESSION_TYPE='x11'
 export XCURSOR_SIZE="${XCURSOR_SIZE:-24}"
 export _JAVA_AWT_WM_NONREPARENTING="${_JAVA_AWT_WM_NONREPARENTING:-1}"
+
 [ -f "$HOME/.Xresources" ] && command -v xrdb >/dev/null 2>&1 && xrdb -merge "$HOME/.Xresources"
+
+# Keep the original bspwmrc untouched while making helper services available.
+if command -v xss-lock >/dev/null 2>&1 && command -v "$HOME/.local/bin/techogr_lock" >/dev/null 2>&1; then
+    pkill -x xss-lock >/dev/null 2>&1 || true
+    xss-lock --transfer-sleep-lock -- "$HOME/.local/bin/techogr_lock" >/dev/null 2>&1 &
+fi
 EOF_XPROFILE
     chmod 644 "$HOME/.xprofile"
 
-    # Keep xinit as a manual fallback only. LightDM does not use this file.
     cat > "$HOME/.xinitrc" <<'EOF_XINITRC'
 #!/bin/sh
 [ -f "$HOME/.xprofile" ] && . "$HOME/.xprofile"
@@ -664,34 +675,19 @@ exec bspwm
 EOF_XINITRC
     chmod 755 "$HOME/.xinitrc"
 
-    success "Sesión blindada sin duplicar servicios ni rutas de configuración."
+    success "Entorno X11 preparado sin modificar ningún archivo administrado por el repositorio."
 }
 
 configure_picom() {
     local conf="$HOME/.config/bspwm/config/picom/picom.conf"
-    [[ -f "$conf" ]] || return 0
-
-    # Picom backend compatibility: GLX is a good default for physical X11
-    # systems, but xrender is safer on VMs. Do not force a backend if the config
-    # doesn't already declare one.
-    local backend="glx" vsync="true"
-    if command_exists systemd-detect-virt && [[ "$(systemd-detect-virt)" != none ]]; then
-        backend="xrender"
-        vsync="false"
-        warn "Máquina virtual detectada: Picom usará xrender/vsync=false."
-    fi
-
-    if grep -qE '^[[:space:]]*backend[[:space:]]*=' "$conf"; then
-        sed -i -E "s|^[[:space:]]*backend[[:space:]]*=.*|backend = \"$backend\";|" "$conf"
-    fi
-    if grep -qE '^[[:space:]]*vsync[[:space:]]*=' "$conf"; then
-        sed -i -E "s|^[[:space:]]*vsync[[:space:]]*=.*|vsync = $vsync;|" "$conf"
+    if [[ -f "$conf" ]]; then
+        info "Picom: se conserva exactamente el archivo del repositorio ($conf)."
+    else
+        warn "No se encontró $conf; se mantiene el sistema sin inventar una configuración nueva."
     fi
 }
 
 configure_browser_default() {
-    step "9/11 - Navegador predeterminado y MIME handlers"
-
     local brave_desktop=""
     if [[ -f /usr/share/applications/brave-browser.desktop ]]; then
         brave_desktop="brave-browser.desktop"
@@ -711,7 +707,7 @@ configure_browser_default() {
 }
 
 install_display_manager() {
-    step "10/11 - Display Manager y sesión BSPWM"
+    step "10/12 - Display Manager y sesión BSPWM"
 
     # Always install the X session entry. This works with LightDM, GDM, SDDM,
     # Ly, etc., and is the real requirement for a selectable bspwm session.
@@ -835,15 +831,12 @@ EOF_DMRC
 }
 
 setup_lockscreen() {
-    step "11/11 - Lockscreen con fallback seguro y caché de wallpaper"
+    step "9/12 - Lockscreen — fondo, fallback y bloqueo automático"
 
     local lock_script="$HOME/.local/bin/techogr_lock"
     cat > "$lock_script" <<'EOF_LOCK'
 #!/usr/bin/env bash
 set -u
-
-# TechOGR lockscreen cascade:
-# betterlockscreen -> i3lock-color -> i3lock
 
 if command -v betterlockscreen >/dev/null 2>&1; then
     exec betterlockscreen -l dimblur
@@ -878,45 +871,60 @@ EOF_LOCK
     chmod 755 "$lock_script"
     ln -sfn "$lock_script" "$HOME/.local/bin/lockscreen"
 
-    # Cache initial wallpaper only when both commands/data exist.
     if command_exists betterlockscreen; then
         local wall=""
         wall="$(find "$HOME/Pictures/Wallpapers" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) -print -quit 2>/dev/null || true)"
         if [[ -n "$wall" ]]; then
             info "Generando caché inicial de betterlockscreen..."
-            betterlockscreen -u "$wall" >>"$LOG_FILE" 2>&1 || warn "betterlockscreen no pudo generar la caché; el lock seguirá usando su fallback."
+            betterlockscreen -u "$wall" >>"$LOG_FILE" 2>&1 || warn "No se pudo generar la caché inicial; el fallback seguirá disponible."
         fi
     fi
 
-    # Add idempotent sxhkd bindings to the repository's actual path.
-    local sxhkd_conf="$HOME/.config/bspwm/config/sxhkdrc"
-    if [[ -f "$sxhkd_conf" ]] && ! grep -q 'techogr_lock' "$sxhkd_conf"; then
-        cat >> "$sxhkd_conf" <<'EOF_SXHKD'
+    # Keybindings remain repository-owned and are therefore NEVER appended here.
+    success "Lockscreen preparado sin modificar sxhkdrc ni bspwmrc."
+}
 
-# TechOGR lockscreen
-super + alt + l
-    $HOME/.local/bin/techogr_lock
-EOF_SXHKD
+verify_repo_integrity() {
+    step "11/12 - Integridad — comprobando que el repositorio no fue alterado"
+    local mismatches=()
+    local src name
+
+    if [[ -d "$SCRIPT_DIR/config" ]]; then
+        while IFS= read -r -d '' src; do
+            name="${src##*/}"
+            if ! diff -qr "$src" "$HOME/.config/$name" >>"$LOG_FILE" 2>&1; then
+                mismatches+=("config/$name")
+            fi
+        done < <(find "$SCRIPT_DIR/config" -mindepth 1 -maxdepth 1 -print0 | sort -z)
     fi
 
-    # Start xss-lock once per BSPWM session if available.
-    local bspwmrc="$HOME/.config/bspwm/bspwmrc"
-    if [[ -f "$bspwmrc" ]] && ! grep -q 'TECHOGR_XSS_LOCK' "$bspwmrc"; then
-        cat >> "$bspwmrc" <<'EOF_XSS'
-
-# TECHOGR_XSS_LOCK
-if command -v xss-lock >/dev/null 2>&1 && command -v "$HOME/.local/bin/techogr_lock" >/dev/null 2>&1; then
-    pkill -x xss-lock >/dev/null 2>&1 || true
-    xss-lock --transfer-sleep-lock -- "$HOME/.local/bin/techogr_lock" >/dev/null 2>&1 &
-fi
-EOF_XSS
+    if [[ -d "$SCRIPT_DIR/home" ]]; then
+        while IFS= read -r -d '' src; do
+            name="${src##*/}"
+            if [[ -f "$src" ]] && ! cmp -s "$src" "$HOME/$name"; then
+                mismatches+=("home/$name")
+            elif [[ -d "$src" ]] && ! diff -qr "$src" "$HOME/$name" >>"$LOG_FILE" 2>&1; then
+                mismatches+=("home/$name")
+            fi
+        done < <(find "$SCRIPT_DIR/home" -mindepth 1 -maxdepth 1 -print0 | sort -z)
     fi
 
-    success "Lockscreen configurado con fallback i3lock y bloqueo automático con xss-lock."
+    if [[ -f "$SCRIPT_DIR/misc/polybar-update.hook" ]]; then
+        if ! sudo cmp -s "$SCRIPT_DIR/misc/polybar-update.hook" /etc/pacman.d/hooks/polybar-update.hook; then
+            mismatches+=("misc/polybar-update.hook")
+        fi
+    fi
+
+    if ((${#mismatches[@]} == 0)); then
+        success "Integridad OK: los archivos administrados por el repositorio permanecen intactos."
+    else
+        error "Se detectaron diferencias tras el despliegue: ${mismatches[*]}"
+        fatal "La instalación no puede considerarse íntegra; revisa $LOG_FILE"
+    fi
 }
 
 post_install_fixes() {
-    step "Diagnóstico final - rutas, servicios y archivos críticos"
+    step "12/12 - Diagnóstico final - rutas, servicios y archivos críticos"
 
     configure_picom
     configure_browser_default
@@ -987,8 +995,8 @@ show_summary() {
     printf '   ~/.config/bspwm/config/sxhkdrc\n'
     printf '   ~/.config/bspwm/config/picom/picom.conf\n'
     printf '   ~/.config/bspwm/bin/*\n'
-    printf '\n %sAtajos añadidos por el instalador:%s\n' "$CYAN" "$RESET"
-    printf '   Super + Alt + L  -> bloquear pantalla\n'
+    printf '\n %sIntegridad:%s     archivos del repositorio preservados sin parches automáticos\n' "$CYAN" "$RESET"
+    printf ' %sLockscreen:%s     helper generado fuera de ~/.config/bspwm\n' "$CYAN" "$RESET"
 
     if ((${#FAILED_OPTIONAL[@]} > 0)); then
         printf '\n%sOpcionales que no se instalaron:%s %s\n' "$YELLOW" "$RESET" "${FAILED_OPTIONAL[*]}"
@@ -1014,6 +1022,7 @@ main() {
     patch_session_safety
     setup_lockscreen
     install_display_manager
+    verify_repo_integrity
     post_install_fixes
     show_summary
 }
