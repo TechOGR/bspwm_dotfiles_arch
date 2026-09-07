@@ -4,7 +4,7 @@
 ## and set up your preferences.                             ##
 ##############################################################
 
-mpd_host = "127.0.0.1"
+mpd_host = "~/.config/mpd/socket"
 mpd_port = 6600
 mpd_connection_timeout = "5"
 mpd_crossfade_time = "5"
