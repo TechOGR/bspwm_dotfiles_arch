@@ -1,0 +1,41 @@
+#!/bin/sh
+# =============================================================
+# GpuStatusPolybar - GPU load/temperature for polybar
+#
+# Supports NVIDIA (nvidia-smi) and AMD (sysfs hwmon) GPUs.
+# Self-hides (prints nothing) when no supported GPU is found, so
+# it simply disappears from the bar on machines/VMs without one.
+# =============================================================
+
+util=""
+temp=""
+
+if command -v nvidia-smi >/dev/null 2>&1; then
+    data=$(nvidia-smi --query-gpu=utilization.gpu,temperature.gpu --format=csv,noheader,nounits 2>/dev/null)
+    [ -z "$data" ] && exit 0
+    util=$(printf '%s' "$data" | cut -d',' -f1 | tr -d ' ')
+    temp=$(printf '%s' "$data" | cut -d',' -f2 | tr -d ' ')
+elif [ -f /sys/class/drm/card0/device/gpu_busy_percent ]; then
+    util=$(cat /sys/class/drm/card0/device/gpu_busy_percent 2>/dev/null)
+    hwmon=$(find /sys/class/drm/card0/device/hwmon -maxdepth 1 -name 'hwmon*' 2>/dev/null | head -n1)
+    if [ -n "$hwmon" ] && [ -f "$hwmon/temp1_input" ]; then
+        temp_raw=$(cat "$hwmon/temp1_input" 2>/dev/null)
+        [ -n "$temp_raw" ] && temp=$((temp_raw / 1000))
+    fi
+else
+    exit 0
+fi
+
+[ -z "$util" ] && [ -z "$temp" ] && exit 0
+[ -z "$util" ] && util=0
+[ -z "$temp" ] && temp=0
+
+if [ "$util" -ge 80 ]; then
+    color="#f7768e"
+elif [ "$util" -ge 40 ]; then
+    color="#e0af68"
+else
+    color="#9ece6a"
+fi
+
+printf "%%{F%s}\xef\x8b\x9b%%{F-} %s%% %s\xc2\xb0C\n" "$color" "$util" "$temp"

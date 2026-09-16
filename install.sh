@@ -43,42 +43,102 @@ if [[ -t 1 ]]; then
     CYAN=$'\e[36m'
     WHITE=$'\e[37m'
     BG_BLUE=$'\e[44m'
+    TC_SUPPORT=true
 else
     RESET=''; BOLD=''; DIM=''; RED=''; GREEN=''; YELLOW=''; BLUE=''; MAGENTA=''; CYAN=''; WHITE=''; BG_BLUE=''
+    TC_SUPPORT=false
 fi
+
+# 24-bit "rgb R G B" -> escape code. Falls back to plain BOLD when the
+# terminal isn't a tty (piped output, CI logs, etc.).
+rgb() {
+    [[ "$TC_SUPPORT" == true ]] && printf '\e[38;2;%d;%d;%dm' "$1" "$2" "$3" || printf '%s' "$BOLD"
+}
+
+# Prints one line, colored as a linear interpolation between two RGB stops
+# picked by how far `step`/`of` are along the sequence. Used to give the
+# banner and the progress rail a smooth cyan -> violet gradient instead of a
+# single flat color.
+gradient_line() {
+    local text="$1" step="$2" of="$3"
+    local r1=125 g1=207 b1=255   # soft cyan
+    local r2=189 g2=147 b2=249   # soft violet
+    local t=0 r g b
+    (( of > 0 )) && t=$(( step * 100 / of ))
+    r=$(( r1 + (r2 - r1) * t / 100 ))
+    g=$(( g1 + (g2 - g1) * t / 100 ))
+    b=$(( b1 + (b2 - b1) * t / 100 ))
+    printf '%s%s%s%s\n' "$BOLD" "$(rgb "$r" "$g" "$b")" "$text" "$RESET"
+}
 
 mkdir -p -- "$(dirname -- "$LOG_FILE")"
 printf '=== TechOGR BSPWM Installer %s - %s ===\n' "$SCRIPT_VERSION" "$(date)" > "$LOG_FILE"
 
 # ------------------------------- Logging -------------------------------------
+CURRENT_STEP=0
+TOTAL_STEPS=13
+STEP_OPEN=false
+STEP_START=0
+RAIL="$MAGENTA│$RESET "
+
 log() {
     printf '%s [%s] %s\n' "$(date '+%F %T')" "$1" "$2" >> "$LOG_FILE"
 }
 
 info() {
-    printf '  %s➜%s %s\n' "$CYAN" "$RESET" "$1"
+    printf ' %s%s➜%s %s\n' "$RAIL" "$CYAN" "$RESET" "$1"
     log INFO "$1"
 }
 
 success() {
-    printf '  %s✔%s %s\n' "$GREEN" "$RESET" "$1"
+    printf ' %s%s✔%s %s\n' "$RAIL" "$GREEN" "$RESET" "$1"
     log SUCCESS "$1"
 }
 
 warn() {
-    printf '  %s⚠%s %s\n' "$YELLOW" "$RESET" "$1"
+    printf ' %s%s⚠%s %s\n' "$RAIL" "$YELLOW" "$RESET" "$1"
     log WARNING "$1"
 }
 
 error() {
-    printf '  %s✖%s %s\n' "$RED" "$RESET" "$1" >&2
+    printf ' %s%s✖%s %s\n' "$RAIL" "$RED" "$RESET" "$1" >&2
     log ERROR "$1"
 }
 
+# Renders a slim, filled/empty progress rail: [08/13] ██████░░░░░░░  62%
+progress_rail() {
+    local current="$1" total="$2" width=28 filled i bar
+    (( filled = current * width / total ))
+    bar=""
+    for ((i = 0; i < width; i++)); do
+        if (( i < filled )); then
+            bar+="$(gradient_line "█" "$i" "$width")"
+        else
+            bar+="${DIM}░${RESET}"
+        fi
+    done
+    printf ' %s%s%s %s%3d%%%s\n' "$DIM" "$bar" "$RESET" "$DIM" "$(( current * 100 / total ))" "$RESET"
+}
+
+# Opens a numbered step box, closing the previous one first (with its
+# elapsed time) so the whole run reads as a continuous, connected tree
+# instead of a flat wall of text.
 step() {
-    printf '\n%s%s╭─ %s%s\n' "$MAGENTA" "$BOLD" "$1" "$RESET"
-    printf '%s%s│%s\n' "$MAGENTA" "$BOLD" "$RESET"
+    if [[ "$STEP_OPEN" == true ]]; then
+        printf '%s%s╰─%s %sListo en %ss%s\n' "$MAGENTA" "$BOLD" "$RESET" "$DIM" "$(( $(date +%s) - STEP_START ))" "$RESET"
+    fi
+    CURRENT_STEP=$((CURRENT_STEP + 1))
+    STEP_OPEN=true
+    STEP_START=$(date +%s)
+    printf '\n%s%s╭─ [%02d/%02d] %s%s\n' "$MAGENTA" "$BOLD" "$CURRENT_STEP" "$TOTAL_STEPS" "$1" "$RESET"
+    progress_rail "$CURRENT_STEP" "$TOTAL_STEPS"
     log STEP "$1"
+}
+
+close_last_step() {
+    [[ "$STEP_OPEN" == true ]] || return 0
+    printf '%s%s╰─%s %sListo en %ss%s\n' "$MAGENTA" "$BOLD" "$RESET" "$DIM" "$(( $(date +%s) - STEP_START ))" "$RESET"
+    STEP_OPEN=false
 }
 
 fatal() {
@@ -93,29 +153,21 @@ is_pkg_installed() { pacman -Qq "$1" >/dev/null 2>&1; }
 # ------------------------------- UI -------------------------------------------
 print_banner() {
     clear 2>/dev/null || true
-    printf '%s%s' "$CYAN" "$BOLD"
-    cat <<'BANNER'
-   ████████╗███████╗ ██████╗██╗  ██╗ ██████╗  ██████╗ ██████╗
-   ╚══██╔══╝██╔════╝██╔════╝██║  ██║██╔═══██╗██╔════╝ ██╔══██╗
-      ██║   █████╗  ██║     ███████║██║   ██║██║  ███╗██████╔╝
-      ██║   ██╔══╝  ██║     ██╔══██║██║   ██║██║   ██║██╔══██╗
-      ██║   ███████╗╚██████╗██║  ██║╚██████╔╝╚██████╔╝██║  ██║
-      ╚═╝   ╚══════╝ ╚═════╝╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝
-BANNER
-    printf '%sTechOGR BSPWM Dotfiles Installer v%s%s\n' "$BLUE" "$SCRIPT_VERSION" "$RESET"
-    printf '%sExact repository deployment • X11 • Eww • LightDM • AUR%s\n\n' "$DIM" "$RESET"
-}
-
-section_progress() {
-    local current="$1" total="$2" title="$3"
-    local width=46 filled=0 empty=0 i bar
-    (( filled = current * width / total ))
-    (( empty = width - filled ))
-    bar=""
-    for ((i=0; i<filled; i++)); do bar+='█'; done
-    for ((i=0; i<empty; i++)); do bar+='░'; done
-    printf '\n %s%s[%02d/%02d]%s %s\n' "$BOLD" "$CYAN" "$current" "$total" "$RESET" "$title"
-    printf ' %s%s%s %3d%%\n' "$GREEN" "$bar" "$RESET" "$(( current * 100 / total ))"
+    local lines=(
+        '   ████████╗███████╗ ██████╗██╗  ██╗ ██████╗  ██████╗ ██████╗ '
+        '   ╚══██╔══╝██╔════╝██╔════╝██║  ██║██╔═══██╗██╔════╝ ██╔══██╗'
+        '      ██║   █████╗  ██║     ███████║██║   ██║██║  ███╗██████╔╝'
+        '      ██║   ██╔══╝  ██║     ██╔══██║██║   ██║██║   ██║██╔══██╗'
+        '      ██║   ███████╗╚██████╗██║  ██║╚██████╔╝╚██████╔╝██║  ██║'
+        '      ╚═╝   ╚══════╝ ╚═════╝╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝'
+    )
+    local i
+    printf '\n'
+    for i in "${!lines[@]}"; do
+        gradient_line "${lines[$i]}" "$i" "${#lines[@]}"
+    done
+    printf '   %s%s· BSPWM Dotfiles Installer · v%s%s\n' "$DIM" "$BOLD" "$SCRIPT_VERSION" "$RESET"
+    printf '   %sX11 · Eww · Picom (animaciones) · Polybar · LightDM · AUR%s\n\n' "$DIM" "$RESET"
 }
 
 # Render progress for a long-running command while preserving full output in the log.
@@ -150,8 +202,9 @@ cleanup() {
         kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
     fi
     if (( rc != 0 )); then
+        close_last_step
         error "La instalación terminó con código $rc."
-        printf '  %sLog:%s %s\n' "$YELLOW" "$RESET" "$LOG_FILE"
+        printf ' %s%sLog:%s %s\n' "$RAIL" "$YELLOW" "$RESET" "$LOG_FILE"
     fi
     exit "$rc"
 }
@@ -166,7 +219,7 @@ trap on_err ERR
 
 # ---------------------------- Privileges -------------------------------------
 check_execution() {
-    step "1/12 · Comprobación del entorno"
+    step "Comprobación del entorno"
     [[ "$EUID" -ne 0 ]] || fatal "No ejecutes install.sh como root. Usa ./install.sh."
     [[ -d "$HOME" ]] || fatal "HOME no es válido."
     [[ -f "$SCRIPT_DIR/install.sh" ]] || fatal "install.sh no se encuentra en el directorio del repositorio."
@@ -185,7 +238,7 @@ check_execution() {
 }
 
 check_arch() {
-    step "2/12 · Detección de Arch Linux"
+    step "Detección de Arch Linux"
     [[ -r /etc/os-release ]] || fatal "/etc/os-release no existe."
     # shellcheck disable=SC1091
     source /etc/os-release
@@ -230,7 +283,7 @@ install_pkg() {
 }
 
 install_base_deps() {
-    step "3/12 · Dependencias base"
+    step "Dependencias base"
     local pkgs=(base-devel git rsync curl ca-certificates unzip xdg-utils xdg-user-dirs fontconfig)
     local pkg
     for pkg in "${pkgs[@]}"; do
@@ -245,7 +298,7 @@ install_base_deps() {
 }
 
 install_aur_helper() {
-    step "4/12 · Configuración de AUR"
+    step "Configuración de AUR"
     if command_exists yay; then AUR_HELPER="yay"; fi
     if [[ -z "$AUR_HELPER" ]] && command_exists paru; then AUR_HELPER="paru"; fi
 
@@ -271,7 +324,7 @@ install_aur_helper() {
 }
 
 prepare_rust_for_eww() {
-    step "5/12 · Preparando Rust stable para Eww"
+    step "Preparando Rust stable para Eww"
 
     # Exactly the sequence that works reliably on Arch for Eww:
     #   1) base-devel
@@ -307,7 +360,7 @@ prepare_rust_for_eww() {
 }
 
 install_eww() {
-    step "6/12 · Instalación de Eww"
+    step "Instalación de Eww"
     export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 
     if command_exists eww; then
@@ -367,7 +420,7 @@ install_eww() {
 }
 
 install_packages() {
-    step "7/12 · Paquetes del entorno TechOGR"
+    step "Paquetes del entorno TechOGR"
 
     # This list is based on commands referenced by THIS repository's config tree.
     # No packages from another dotfiles repository are added here.
@@ -429,7 +482,7 @@ install_packages() {
 }
 
 install_lockscreen() {
-    step "8/12 · Lockscreen"
+    step "Lockscreen"
     # Prefer betterlockscreen + i3lock-color. Fall back to i3lock.
     local lock_ok=false
     if command_exists betterlockscreen; then lock_ok=true; fi
@@ -472,7 +525,7 @@ backup_path() {
 }
 
 create_backup() {
-    step "9/12 · Respaldo de configuraciones existentes"
+    step "Respaldo de configuraciones existentes"
     mkdir -p -- "$BACKUP_DIR"
 
     # Only back up locations that this repository manages.
@@ -529,7 +582,7 @@ prepare_wallpaper_dir() {
 }
 
 copy_repository_content() {
-    step "10/12 · Despliegue exacto de TechOGR"
+    step "Despliegue exacto de TechOGR"
 
     prepare_wallpaper_dir
     mkdir -p -- "$HOME/.config" "$HOME/.local/bin" "$HOME/.local/share/fonts" "$HOME/.local/share/applications"
@@ -584,7 +637,7 @@ copy_repository_content() {
 }
 
 deploy_repository_home() {
-    step "10.5/12 · Aplicando archivos de home/ del repositorio"
+    step "Aplicando archivos de home/ del repositorio"
 
     # The user's HOME directory already exists. We only deploy the CONTENTS
     # of this repository's home/ directory, after packages such as zsh and
@@ -610,7 +663,7 @@ install_pacman_hook() {
 
 # -------------------------- Sessions / Services ------------------------------
 setup_display_manager() {
-    step "11/12 · Display Manager / sesión BSPWM"
+    step "Display Manager / sesión BSPWM"
 
     local active=""
     if systemctl is-active --quiet display-manager.service; then
@@ -716,13 +769,13 @@ configure_shell() {
 
 # --------------------------- Integrity checks ---------------------------------
 verify_repository_layout() {
-    step "12/12 · Verificación final"
+    step "Verificación final"
 
     local required=(
         "$HOME/.config/bspwm/bspwmrc"
         "$HOME/.config/bspwm/config/sxhkdrc"
         "$HOME/.config/bspwm/eww"
-        "$HOME/.config/bspwm/rices/emilia/walls"
+        "$HOME/.config/bspwm/rices/crackone/walls"
     )
     local f
     for f in "${required[@]}"; do
@@ -750,14 +803,23 @@ verify_repository_layout() {
 }
 
 show_summary() {
-    printf '\n%s%s╔══════════════════════════════════════════════════════════════╗%s\n' "$GREEN" "$BOLD" "$RESET"
-    printf '%s%s║           TECHOGR BSPWM · INSTALACIÓN COMPLETADA             ║%s\n' "$GREEN" "$BOLD" "$RESET"
-    printf '%s%s╚══════════════════════════════════════════════════════════════╝%s\n\n' "$GREEN" "$BOLD" "$RESET"
-    printf '  %s✓%s Configuración: %s\n' "$GREEN" "$RESET" "$HOME/.config/bspwm"
-    printf '  %s✓%s Wallpapers:    %s\n' "$GREEN" "$RESET" "$HOME/Imágenes/Wallpapers"
+    close_last_step
+    local lines=(
+        '  ╔════════════════════════════════════════════════════════════╗'
+        '  ║           TECHOGR BSPWM · INSTALACIÓN COMPLETADA             ║'
+        '  ╚════════════════════════════════════════════════════════════╝'
+    )
+    local i
+    printf '\n'
+    for i in "${!lines[@]}"; do
+        gradient_line "${lines[$i]}" "$i" "${#lines[@]}"
+    done
+    printf '\n  %s✓%s Configuración:  %s\n' "$GREEN" "$RESET" "$HOME/.config/bspwm"
+    printf '  %s✓%s Wallpapers:     %s\n' "$GREEN" "$RESET" "$HOME/Imágenes/Wallpapers"
     printf '  %s✓%s Eww:            %s\n' "$GREEN" "$RESET" "$(command -v eww)"
     printf '  %s✓%s Backup:         %s\n' "$GREEN" "$RESET" "$BACKUP_DIR"
     printf '  %s✓%s Log:            %s\n\n' "$GREEN" "$RESET" "$LOG_FILE"
+    printf '  %sAtajos clave:%s Super+Alt+m módulos de la barra · Alt+F1 ayuda general\n' "$CYAN" "$RESET"
     printf '  %sPróximo paso:%s cierra la sesión y selecciona %sBSPWM%s en tu Display Manager.\n' "$CYAN" "$RESET" "$BOLD" "$RESET"
     printf '  %sPara restaurar tu configuración:%s %s/restore.sh%s\n\n' "$CYAN" "$RESET" "$BACKUP_DIR" "$RESET"
 }

@@ -1,0 +1,52 @@
+;; Workspace hover preview - shows a "last seen" thumbnail of every
+;; bspwm desktop. Opened/closed by WorkspaceHoverWatcher whenever the
+;; cursor lingers over the workspace icons in the polybar bar.
+
+(defpoll ws-list :interval "1s" "WorkspaceListJSON")
+
+(defwidget ws-card [ws]
+  (eventbox
+    :cursor "pointer"
+    :onclick "bspc desktop -f ${ws.name}"
+    (box
+      :class {ws.focused ? "ws-card ws-card-focused" : "ws-card"}
+      :orientation "v"
+      :space-evenly false
+      :spacing 6
+      (box
+        :class "ws-thumb-frame"
+        (image :path {ws.thumb} :image-width 152 :image-height 86 :class "ws-thumb")
+      )
+      (box
+        :orientation "h"
+        :space-evenly false
+        :spacing 4
+        :halign "center"
+        (label :class "ws-name" :text {ws.name})
+        (label :class "ws-count" :text {ws.windows > 0 ? "· ${ws.windows}" : ""})
+      )
+    )
+  )
+)
+
+(defwidget wspreview []
+  (box
+    :class "wspreview"
+    :orientation "h"
+    :space-evenly false
+    :spacing 10
+    (for ws in ws-list
+      (ws-card :ws ws)
+    )
+  )
+)
+
+(defwindow wspreview
+  :monitor 0
+  :geometry (geometry
+    :y "3%"
+    :anchor "top center"
+  )
+  :wm-ignore false
+  (wspreview)
+)

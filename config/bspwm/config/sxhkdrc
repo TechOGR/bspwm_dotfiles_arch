@@ -28,6 +28,10 @@ super + @space
 alt + @space
     RiceSelector
 
+# Polybar Modules browser/toggler
+super + alt + m
+    ModulesList
+
 # ----- Your Apps ----- #
 
 # Apps (browser, editor, filemanager)

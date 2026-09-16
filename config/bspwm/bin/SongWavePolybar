@@ -1,0 +1,56 @@
+#!/bin/sh
+# =============================================================
+# SongWavePolybar - animated now-playing ticker for polybar
+#
+# Scrolls the current MPD track like a marquee when it's longer
+# than the visible window, and breathes the note icon (via the
+# same alpha-over-time trick as HeartbeatPolybar) while playing.
+# Prints nothing when MPD isn't running or nothing is loaded, so
+# the module self-hides.
+# =============================================================
+
+CACHE_DIR="$HOME/.cache/$USER"
+OFFSET_FILE="$CACHE_DIR/song_wave_offset"
+mkdir -p "$CACHE_DIR"
+
+command -v mpc >/dev/null 2>&1 || exit 0
+status=$(mpc status 2>/dev/null) || exit 0
+[ -z "$status" ] && exit 0
+
+song=$(mpc current 2>/dev/null)
+[ -z "$song" ] && exit 0
+
+playing=0
+printf '%s\n' "$status" | sed -n '2p' | grep -q '\[playing\]' && playing=1
+
+MAXLEN=26
+sep="   \xc2\xb7   "
+full="${song}$(printf "$sep")"
+len=$(printf '%s' "$full" | wc -m)
+
+if [ "$len" -le "$MAXLEN" ]; then
+    display="$song"
+    rm -f "$OFFSET_FILE"
+else
+    offset=0
+    [ -f "$OFFSET_FILE" ] && offset=$(cat "$OFFSET_FILE")
+    doubled="${full}${full}"
+    display=$(printf '%s' "$doubled" | cut -c"$((offset + 1))-$((offset + MAXLEN))")
+    offset=$(((offset + 1) % len))
+    printf '%s' "$offset" > "$OFFSET_FILE"
+fi
+
+if [ "$playing" -eq 1 ]; then
+    alpha=$(awk -v t="$(date +%s%N)" 'BEGIN {
+        phase = (t / 1000000000.0) * 3
+        v = (sin(phase) + 1) / 2
+        printf "%02x", int(140 + v * 115)
+    }')
+    color="#${alpha}9ece6a"
+    icon="\xef\x80\x81"
+else
+    color="#565f89"
+    icon="\xef\x81\x8c"
+fi
+
+printf "%%{F%s}${icon}%%{F-} %s\n" "$color" "$display"

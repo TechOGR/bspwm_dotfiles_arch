@@ -1,0 +1,63 @@
+#!/bin/sh
+# =============================================================
+# WorkspaceThumbDaemon - keeps a small "last seen" screenshot of
+# whichever bspwm desktop is currently focused.
+#
+# bspwm (like most tiling WMs) only ever renders the ACTUALLY
+# focused desktop - other desktops have no live pixels to grab.
+# So instead of trying to capture desktops that aren't on screen
+# (impossible without a real off-screen compositor), this polls
+# the desktop that IS visible on a short interval and refreshes
+# its thumbnail. Hovering a workspace icon in the bar then shows
+# the most recent frame captured while you were last there.
+#
+# Output: ~/.cache/$USER/ws_thumbs/<desktop-name>.png
+# =============================================================
+
+CACHE_DIR="$HOME/.cache/$USER/ws_thumbs"
+INTERVAL=1.5
+THUMB_W=304
+THUMB_H=171
+
+mkdir -p "$CACHE_DIR"
+
+# Single-instance lock so re-sourcing bspwmrc (e.g. "Reload BSPWM") never
+# piles up duplicate capture loops.
+exec 9>"$CACHE_DIR/.daemon.lock"
+flock -n 9 || exit 0
+
+is_locked() {
+    pgrep -x i3lock >/dev/null 2>&1 || pgrep -x betterlockscreen >/dev/null 2>&1
+}
+
+while true; do
+    if ! is_locked; then
+        desktop=$(bspc query -D -d focused --names 2>/dev/null)
+        tree=$(bspc query -T -m focused 2>/dev/null)
+
+        if [ -n "$desktop" ] && [ -n "$tree" ]; then
+            # bspwm already knows exactly where the usable (non-padded)
+            # work area is - use that instead of guessing bar height.
+            read -r cap_x cap_y cap_w cap_h <<EOF
+$(printf '%s' "$tree" | jq -r '
+    (.rectangle.x + .padding.left) as $x |
+    (.rectangle.y + .padding.top) as $y |
+    (.rectangle.width - .padding.left - .padding.right) as $w |
+    (.rectangle.height - .padding.top - .padding.bottom) as $h |
+    "\($x) \($y) \($w) \($h)"
+')
+EOF
+
+            if [ -n "$cap_h" ] && [ "$cap_h" -gt 10 ] 2>/dev/null; then
+                tmp="$CACHE_DIR/.${desktop}.tmp.png"
+                if maim -g "${cap_w}x${cap_h}+${cap_x}+${cap_y}" "$tmp" 2>/dev/null; then
+                    magick "$tmp" -resize "${THUMB_W}x${THUMB_H}" -gravity center \
+                        -background "#1a1b26" -extent "${THUMB_W}x${THUMB_H}" \
+                        "$CACHE_DIR/${desktop}.png" 2>/dev/null
+                    rm -f "$tmp"
+                fi
+            fi
+        fi
+    fi
+    sleep "$INTERVAL"
+done

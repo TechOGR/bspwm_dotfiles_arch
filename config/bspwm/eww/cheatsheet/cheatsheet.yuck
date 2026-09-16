@@ -74,6 +74,9 @@
         (label :class "keys" :xalign 0 :text "Terminal selector")
         (label :class "keys-alt" :xalign 1 :text "Super + Alt + t"))
       (box :orientation "h" :space-evenly "true"
+        (label :class "keys" :xalign 0 :text "Polybar modules browser")
+        (label :class "keys-alt" :xalign 1 :text "Super + Alt + m"))
+      (box :orientation "h" :space-evenly "true"
         (label :class "category-workspaces" :xalign 0.5 :text "Workspaces")
         (label :text ""))
       (box :orientation "h" :space-evenly "true"

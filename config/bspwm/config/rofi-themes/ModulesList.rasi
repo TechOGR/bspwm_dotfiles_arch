@@ -1,0 +1,120 @@
+// ModulesList - Polybar module browser/toggler theme
+// Matches the futuristic Tokyo-Night accent used across the bar.
+
+configuration {
+    show-icons:                  false;
+}
+
+@import "shared.rasi"
+
+window {
+    enabled:                     true;
+    transparency:                "real";
+    location:                    center;
+    anchor:                      center;
+    fullscreen:                  false;
+    width:                       46%;
+    x-offset:                    0px;
+    y-offset:                    0px;
+
+    background-color:            @background;
+    border:                      2px;
+    border-radius:                14px;
+    border-color:                @selected;
+}
+
+mainbox {
+    enabled:                     true;
+    spacing:                     14px;
+    padding:                     22px;
+    background-color:            transparent;
+    children:                    [ "inputbar", "message", "listview" ];
+}
+
+inputbar {
+    enabled:                     true;
+    spacing:                     10px;
+    padding:                     10px 14px;
+    border-radius:                10px;
+    background-color:            @bg-alt;
+    text-color:                  @foreground;
+    children:                    [ "textbox-prompt-colon", "entry" ];
+}
+
+textbox-prompt-colon {
+    enabled:                     true;
+    expand:                      false;
+    str:                         "";
+    padding:                     0px 8px 0px 0px;
+    background-color:            transparent;
+    text-color:                  @selected;
+}
+
+entry {
+    enabled:                     true;
+    background-color:            transparent;
+    text-color:                  @foreground;
+    placeholder:                 "Buscar módulo...";
+    placeholder-color:           #565f89;
+}
+
+message {
+    enabled:                     true;
+    padding:                     6px 4px;
+    background-color:            transparent;
+    text-color:                  #565f89;
+}
+
+textbox {
+    background-color:            transparent;
+    text-color:                  inherit;
+}
+
+listview {
+    enabled:                     true;
+    columns:                     1;
+    lines:                       10;
+    cycle:                       true;
+    dynamic:                     true;
+    scrollbar:                   true;
+    layout:                      vertical;
+    reverse:                     false;
+    fixed-height:                true;
+
+    spacing:                     4px;
+    background-color:            transparent;
+    text-color:                  @foreground;
+    cursor:                      "default";
+}
+
+scrollbar {
+    width:                       4px;
+    border-radius:                4px;
+    handle-color:                @selected;
+    background-color:            @bg-alt;
+}
+
+element {
+    enabled:                     true;
+    orientation:                 horizontal;
+    padding:                     10px 14px;
+    border-radius:                10px;
+    background-color:            @bg-alt;
+    text-color:                  @foreground;
+    cursor:                      pointer;
+}
+
+element-text {
+    background-color:            transparent;
+    text-color:                  inherit;
+    cursor:                      inherit;
+    vertical-align:              0.5;
+    markup:                      true;
+}
+
+element selected.normal {
+    background-color:            @background-alt;
+    border:                      1px 1px 1px 3px;
+    border-color:                @selected;
+    text-color:                  @foreground;
+}

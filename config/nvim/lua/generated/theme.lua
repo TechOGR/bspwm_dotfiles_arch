@@ -1,4 +1,4 @@
--- Colors generated for the emilia theme.
+-- Colors generated for the crackone theme.
 return {
     base00 = "#1a1b26",
     base01 = "#1a1b26",

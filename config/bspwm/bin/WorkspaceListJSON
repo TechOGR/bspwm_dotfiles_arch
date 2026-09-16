@@ -1,0 +1,24 @@
+#!/bin/sh
+# =============================================================
+# WorkspaceListJSON - dumps every OCCUPIED bspwm desktop as JSON,
+# paired with its cached thumbnail (see WorkspaceThumbDaemon) so
+# eww can render the hover preview strip. Empty desktops are left
+# out - nothing useful to preview there.
+# =============================================================
+
+CACHE_DIR="$HOME/.cache/$USER/ws_thumbs"
+FALLBACK="$HOME/.config/bspwm/config/assets/fallback.webp"
+focused=$(bspc query -D -d focused --names 2>/dev/null)
+
+bspc query -D -d .occupied --names 2>/dev/null | while IFS= read -r name; do
+    thumb="$CACHE_DIR/$name.png"
+    [ -f "$thumb" ] || thumb="$FALLBACK"
+
+    is_focused=false
+    [ "$name" = "$focused" ] && is_focused=true
+
+    win_count=$(bspc query -N -d "$name" -n ".window" 2>/dev/null | wc -l)
+
+    jq -n --arg name "$name" --arg thumb "$thumb" --argjson focused "$is_focused" --argjson windows "$win_count" \
+        '{name: $name, thumb: $thumb, focused: $focused, windows: $windows}'
+done | jq -s '.'

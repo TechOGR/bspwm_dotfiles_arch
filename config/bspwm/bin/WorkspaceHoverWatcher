@@ -1,0 +1,186 @@
+#!/bin/sh
+# =============================================================
+# WorkspaceHoverWatcher - opens the eww "wspreview" popup when the
+# mouse is directly over the workspace switcher (the bspwm module)
+# in the polybar bar, and closes it again once the cursor leaves
+# both that area AND the popup itself.
+#
+# Polybar has no hover events and no way to query a module's exact
+# rendered position, so this locates the workspace pill by taking a
+# 1px-tall screenshot slice across the bar and finding the "island"
+# of non-background pixels closest to the bar's horizontal middle
+# (module-center is always positioned there, wrapped by the "bi"/"bd"
+# caps, regardless of how fixed-center/adaptive-centering shifts it
+# as live content on either side changes width). That gives a tight,
+# pixel-accurate hover zone instead of a guessed-width band.
+#
+# Two rectangular zones are treated as "inside":
+#   1) The detected workspace pill itself (plus a small margin).
+#   2) The area right below the bar where the popup renders, so
+#      moving down into it to click a thumbnail doesn't instantly
+#      close it.
+# =============================================================
+
+EWW_CONFIG="$HOME/.config/bspwm/eww"
+DWELL_MS=220
+CLOSE_DELAY_MS=250
+POLL_MS=120
+ZONE_MARGIN=6
+BG_HEX="1a1b26"
+SLICE_PNG="/tmp/.ws_hover_slice_$$.png"
+
+# Single-instance lock so re-sourcing bspwmrc (e.g. "Reload BSPWM") never
+# piles up duplicate watchers fighting over the same eww window.
+LOCK_DIR="$HOME/.cache/$USER"
+mkdir -p "$LOCK_DIR"
+exec 9>"$LOCK_DIR/.workspace_hover.lock"
+flock -n 9 || exit 0
+
+open=false
+in_zone_since=""
+out_zone_since=""
+
+now_ms() { date +%s%3N; }
+
+get_bar_geom() {
+    set -- $(xdotool search --class "[Pp]olybar" getwindowgeometry --shell 2>/dev/null | head -6 | tr '\n' ' ')
+    BAR_X=""; BAR_Y=""; BAR_W=""; BAR_H=""
+    for kv in "$@"; do
+        case "$kv" in
+            X=*) BAR_X=${kv#X=} ;;
+            Y=*) BAR_Y=${kv#Y=} ;;
+            WIDTH=*) BAR_W=${kv#WIDTH=} ;;
+            HEIGHT=*) BAR_H=${kv#HEIGHT=} ;;
+        esac
+    done
+}
+
+
+# Polybar may still be starting up when this daemon is launched from
+# bspwmrc, so retry for a few seconds instead of giving up immediately.
+tries=0
+while [ "$tries" -lt 20 ]; do
+    get_bar_geom
+    [ -n "$BAR_W" ] && break
+    tries=$((tries + 1))
+    sleep 0.5
+done
+if [ -z "$BAR_W" ]; then
+    echo "WorkspaceHoverWatcher: no polybar window found, exiting." >&2
+    exit 1
+fi
+
+trap 'rm -f "$SLICE_PNG"' EXIT
+
+# Finds the on-screen pixel range (relative to the bar's own left edge)
+# of whichever "island" of non-background pixels sits closest to the
+# bar's horizontal middle. Prints "x1 x2" or nothing on failure.
+detect_ws_island() {
+    sample_y=$((BAR_H / 2))
+    maim -g "${BAR_W}x1+${BAR_X}+$((BAR_Y + sample_y))" "$SLICE_PNG" 2>/dev/null || return 1
+    magick "$SLICE_PNG" txt:- 2>/dev/null | tail -n +2 | awk -v bg="$BG_HEX" '
+        BEGIN {
+            tr = strtonum("0x" substr(bg,1,2))
+            tg = strtonum("0x" substr(bg,3,2))
+            tb = strtonum("0x" substr(bg,5,2))
+        }
+        {
+            split($1, xy, ",")
+            x = xy[1] + 0
+            if (!match($0, /#([0-9A-Fa-f]{6})/, arr)) next
+            r = strtonum("0x" substr(arr[1],1,2))
+            g = strtonum("0x" substr(arr[1],3,2))
+            b = strtonum("0x" substr(arr[1],5,2))
+            d = (r-tr)^2 + (g-tg)^2 + (b-tb)^2
+            cur = (d < 30) ? 0 : 1
+            if (cur != prevstate) {
+                if (prevstate == 1 && (x - 1 - rstart) >= 15) print rstart, x - 1
+                if (cur == 1) rstart = x
+            }
+            prevstate = cur
+            lastx = x
+        }
+        END { if (prevstate == 1 && (lastx - rstart) >= 15) print rstart, lastx }
+    ' | awk -v c="$((BAR_W / 2))" '
+        {
+            mid = ($1 + $2) / 2
+            d = mid - c
+            if (d < 0) d = -d
+            if (best == "" || d < bestd) { best = $1" "$2; bestd = d }
+        }
+        END { if (best != "") print best }
+    '
+}
+
+compute_zones() {
+    island=$(detect_ws_island)
+    if [ -n "$island" ]; then
+        rel_x1=${island% *}
+        rel_x2=${island#* }
+        zone1_x1=$((BAR_X + rel_x1 - ZONE_MARGIN))
+        zone1_x2=$((BAR_X + rel_x2 + ZONE_MARGIN))
+    else
+        # Fallback if the screenshot/detection failed for a frame: a
+        # narrow band around the bar's own middle.
+        zone1_x1=$((BAR_X + BAR_W / 2 - 90))
+        zone1_x2=$((BAR_X + BAR_W / 2 + 90))
+    fi
+    zone1_y1=$BAR_Y
+    zone1_y2=$((BAR_Y + BAR_H))
+
+    # Zone 2: the popup itself, right under the bar, centered on the
+    # same spot as the detected workspace pill.
+    zone_center=$(( (zone1_x1 + zone1_x2) / 2 ))
+    zone2_x1=$((zone_center - 260))
+    zone2_x2=$((zone_center + 260))
+    zone2_y1=$zone1_y2
+    zone2_y2=$((zone2_y1 + 190))
+}
+compute_zones
+
+in_rect() {
+    x=$1; y=$2; x1=$3; y1=$4; x2=$5; y2=$6
+    [ "$x" -ge "$x1" ] && [ "$x" -le "$x2" ] && [ "$y" -ge "$y1" ] && [ "$y" -le "$y2" ]
+}
+
+sleep_ms() {
+    sleep "$(awk -v ms="$1" 'BEGIN{printf "%.3f", ms/1000}')"
+}
+
+poll_count=0
+while true; do
+    poll_count=$((poll_count + 1))
+    if [ "$poll_count" -ge 16 ] && [ "$open" = false ] && [ -z "$in_zone_since" ]; then
+        # Re-measure every ~16 polls (~2s) while idle: cheap (~50ms) and
+        # keeps the zone glued to the pill as live content on either side
+        # of it changes width, or after a bar restart/rice switch. Never
+        # re-measured mid-hover/while open, so it can't flicker under you.
+        poll_count=0
+        get_bar_geom
+        [ -n "$BAR_W" ] && compute_zones
+    fi
+    eval "$(xdotool getmouselocation --shell 2>/dev/null)"
+    if [ -n "$X" ] && [ -n "$Y" ]; then
+        if in_rect "$X" "$Y" "$zone1_x1" "$zone1_y1" "$zone1_x2" "$zone1_y2" || \
+           in_rect "$X" "$Y" "$zone2_x1" "$zone2_y1" "$zone2_x2" "$zone2_y2"; then
+            out_zone_since=""
+            if [ -z "$in_zone_since" ]; then
+                in_zone_since=$(now_ms)
+            elif [ "$open" = false ] && [ $(( $(now_ms) - in_zone_since )) -ge "$DWELL_MS" ]; then
+                timeout 2 eww -c "$EWW_CONFIG" open wspreview >/dev/null 2>&1 9>&- &
+                open=true
+            fi
+        else
+            in_zone_since=""
+            if [ "$open" = true ]; then
+                if [ -z "$out_zone_since" ]; then
+                    out_zone_since=$(now_ms)
+                elif [ $(( $(now_ms) - out_zone_since )) -ge "$CLOSE_DELAY_MS" ]; then
+                    timeout 2 eww -c "$EWW_CONFIG" close wspreview >/dev/null 2>&1 9>&- &
+                    open=false
+                fi
+            fi
+        fi
+    fi
+    sleep_ms "$POLL_MS"
+done

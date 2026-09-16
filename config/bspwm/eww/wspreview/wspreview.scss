@@ -1,0 +1,44 @@
+.wspreview {
+  background-color: rgba(26, 27, 38, 0.92);
+  border: 1px solid rgba(125, 207, 255, 0.35);
+  border-radius: 16px;
+  padding: 12px;
+}
+
+.ws-card {
+  background-color: rgba(34, 35, 48, 0.85);
+  border: 1px solid transparent;
+  border-radius: 12px;
+  padding: 6px;
+  transition: all 200ms ease-in-out;
+}
+
+.ws-card-focused {
+  background-color: rgba(122, 162, 247, 0.12);
+  border: 1px solid $cyan;
+}
+
+.ws-thumb-frame {
+  border-radius: 8px;
+}
+
+.ws-thumb {
+  border-radius: 8px;
+}
+
+.ws-name {
+  color: $fg;
+  font-family: "JetBrainsMono Nerd Font";
+  font-weight: bold;
+  font-size: 0.85rem;
+}
+
+.ws-count {
+  color: #565f89;
+  font-family: "JetBrainsMono Nerd Font";
+  font-size: 0.8rem;
+}
+
+.ws-card-focused .ws-name {
+  color: $cyan;
+}

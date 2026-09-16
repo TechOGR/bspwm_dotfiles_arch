@@ -1,0 +1,36 @@
+#!/bin/sh
+# =============================================================
+# SensorsTempPolybar - CPU temperature for polybar
+#
+# Reads the first usable temperature sensor via `sensors`.
+# Self-hides (prints nothing) when no sensor is available, so the
+# module simply disappears from the bar on machines without one
+# (VMs, missing lm_sensors, etc).
+# =============================================================
+
+command -v sensors >/dev/null 2>&1 || exit 0
+
+temp=$(sensors 2>/dev/null | awk '
+    /^(Package id 0|Tctl|Tdie|CPU Temperature|Core 0)/ {
+        for (i = 1; i <= NF; i++) {
+            if ($i ~ /^[+-][0-9]+\.[0-9]+.C$/) {
+                gsub(/[+°C]/, "", $i)
+                print $i
+                exit
+            }
+        }
+    }')
+
+[ -z "$temp" ] && exit 0
+
+tint=${temp%.*}
+
+if [ "$tint" -ge 80 ]; then
+    color="#f7768e"
+elif [ "$tint" -ge 60 ]; then
+    color="#e0af68"
+else
+    color="#9ece6a"
+fi
+
+printf "%%{F%s}\xef\x81\xad%%{F-} %s\xc2\xb0C\n" "$color" "$tint"

@@ -1,0 +1,21 @@
+#!/bin/sh
+# =============================================================
+# HeartbeatPolybar - decorative "system alive" neon pulse
+#
+# Renders a single dot that breathes in and out using the alpha
+# channel of an ARGB hex color, driven by a sine wave over time.
+# Meant to sit next to the launcher as a subtle futuristic accent.
+#
+# Usage: HeartbeatPolybar [RRGGBB]   (default: 7dcfff)
+# =============================================================
+
+hex="${1:-7dcfff}"
+now_ns=$(date +%s%N)
+
+alpha=$(awk -v t="$now_ns" 'BEGIN {
+    phase = (t / 1000000000.0) * 2.6
+    v = (sin(phase) + 1) / 2
+    printf "%02x", int(60 + v * 195)
+}')
+
+printf "%%{F#%s%s}\xe2\x97\x8f%%{F-}\n" "$alpha" "$hex"

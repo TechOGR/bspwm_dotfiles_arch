@@ -1,0 +1,21 @@
+#!/bin/sh
+# =============================================================
+# UptimePolybar - formatted system uptime for polybar
+# =============================================================
+
+read -r up _ < /proc/uptime
+up=${up%.*}
+
+days=$((up / 86400))
+hours=$(((up % 86400) / 3600))
+mins=$(((up % 3600) / 60))
+
+if [ "$days" -gt 0 ]; then
+    label=$(printf '%dd %dh %dm' "$days" "$hours" "$mins")
+elif [ "$hours" -gt 0 ]; then
+    label=$(printf '%dh %dm' "$hours" "$mins")
+else
+    label=$(printf '%dm' "$mins")
+fi
+
+printf "\xef\x80\x97 %s\n" "$label"

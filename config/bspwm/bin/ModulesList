@@ -1,0 +1,199 @@
+#!/bin/sh
+# =============================================================
+# ModulesList - Polybar module browser / toggler for bspwm
+#
+# Shows every polybar module known to this rice (active or not)
+# in a rofi menu, with an icon, a short description and its
+# current status. Selecting a non-fixed module toggles it on/off
+# in modules-right and live-reloads polybar. Bound to
+# `super + alt + m` in sxhkdrc, and to the "" help button in the
+# bar itself.
+# =============================================================
+
+CONFIG_DIR="$HOME/.config/bspwm"
+read -r RICE < "$CONFIG_DIR/.rice"
+CONFIG_FILE="$CONFIG_DIR/rices/$RICE/config.ini"
+THEME="$CONFIG_DIR/config/rofi-themes/ModulesList.rasi"
+WS_PREVIEW_FLAG="$CONFIG_DIR/config/.ws_preview_enabled"
+
+[ -f "$CONFIG_FILE" ] || { dunstify -u critical "ModulesList" "No se encontró config.ini del rice '$RICE'"; exit 1; }
+
+# id|icon|name|description|fixed(0/1)|kind(bar/service)
+# "bar" entries live in config.ini's modules-left/center/right. "service"
+# entries are background daemons started/stopped directly (nothing to
+# add/remove from the bar's module lists).
+_catalog='
+launcher||Lanzador|Menú de aplicaciones y selector de rice|1|bar
+bspwm||Escritorios|Indicador de espacios de trabajo|1|bar
+cpu_wave||CPU Wave|Gráfico animado de carga de CPU|0|bar
+memory_bar||Memoria|Uso de RAM|0|bar
+filesystem||Disco|Espacio usado en /|0|bar
+uptime||Uptime|Tiempo desde el último arranque|0|bar
+sensors_temp||Temperatura|Temperatura de la CPU|0|bar
+gpu||GPU|Uso y temperatura de la GPU|0|bar
+heartbeat||Heartbeat|Pulso neón animado (decorativo)|0|bar
+song_wave||Now Playing|Ticker animado de la canción en MPD|0|bar
+mpd||MPD|Estado corto del reproductor MPD|0|bar
+mplayer||Reproductor|Accesos directos al panel de reproducción|0|bar
+bluetooth||Bluetooth|Estado del adaptador Bluetooth|0|bar
+network||Red|Estado y velocidad de red|0|bar
+pulseaudio||Volumen|Control y nivel de audio|0|bar
+battery||Batería|Nivel y estado de carga|0|bar
+updates||Actualizaciones|Paquetes pendientes de actualizar|0|bar
+weather||Clima|Temperatura y clima actual|0|bar
+brightness||Brillo|Nivel de brillo de pantalla|0|bar
+xkeyboard||Teclado|Diseño de teclado activo|0|bar
+colorpicker||Selector de color|Captura colores en pantalla|0|bar
+workspace_preview||Preview de workspaces|Miniatura al pasar el mouse sobre el selector de escritorios|0|service
+date||Fecha y hora|Reloj del sistema|1|bar
+tray||Bandeja|Iconos de apps en segundo plano|1|bar
+power||Energía|Menú de apagado / reinicio|1|bar
+modules_help||Ayuda de módulos|Abre este mismo listado|1|bar
+'
+
+get_lines() {
+    left=$(awk -F'=' '/^modules-left[[:space:]]*=/{print $2; exit}' "$CONFIG_FILE")
+    center=$(awk -F'=' '/^modules-center[[:space:]]*=/{print $2; exit}' "$CONFIG_FILE")
+    right=$(awk -F'=' '/^modules-right[[:space:]]*=/{print $2; exit}' "$CONFIG_FILE")
+}
+
+is_active() {
+    id="$1"
+    kind="$2"
+    if [ "$kind" = "service" ]; then
+        [ -f "$WS_PREVIEW_FLAG" ]
+    else
+        printf '%s %s %s\n' "$left" "$center" "$right" | tr ' ' '\n' | grep -qx "$id"
+    fi
+}
+
+remove_word() {
+    awk -v tgt="$2" '
+    {
+        n = split($0, w, " ")
+        out_n = 0
+        skip_sep = 0
+        for (i = 1; i <= n; i++) {
+            if (w[i] == "") continue
+            if (w[i] == tgt) {
+                if (out_n > 0 && out[out_n] == "sep") out_n--
+                skip_sep = 1
+                continue
+            }
+            if (skip_sep && w[i] == "sep") { skip_sep = 0; continue }
+            skip_sep = 0
+            out_n++
+            out[out_n] = w[i]
+        }
+        res = ""
+        for (i = 1; i <= out_n; i++) res = res (i > 1 ? " " : "") out[i]
+        print res
+    }' <<EOF
+$1
+EOF
+}
+
+set_line() {
+    key="$1"
+    value="$2"
+    tmp=$(mktemp)
+    awk -v key="$key" -v value="$value" '
+        BEGIN { pattern = "^" key "[[:space:]]*=" }
+        $0 ~ pattern { print key " = " value; next }
+        { print }
+    ' "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
+}
+
+reload_bar() {
+    if pgrep -x polybar >/dev/null; then
+        polybar-msg cmd restart >/dev/null 2>&1
+    fi
+}
+
+toggle_module() {
+    mod="$1"
+    get_lines
+    [ -f "$CONFIG_FILE.bak" ] || cp "$CONFIG_FILE" "$CONFIG_FILE.bak"
+
+    if is_active "$mod" "bar"; then
+        newleft=$(remove_word "$left" "$mod")
+        newcenter=$(remove_word "$center" "$mod")
+        newright=$(remove_word "$right" "$mod")
+        [ "$newleft" != "$left" ] && set_line "modules-left" "$newleft"
+        [ "$newcenter" != "$center" ] && set_line "modules-center" "$newcenter"
+        [ "$newright" != "$right" ] && set_line "modules-right" "$newright"
+        action="desactivado"
+    else
+        if [ -n "$right" ]; then
+            newright="$right sep $mod"
+        else
+            newright="$mod"
+        fi
+        set_line "modules-right" "$newright"
+        action="activado"
+    fi
+
+    reload_bar
+    dunstify -i dialog-information "Módulos de Polybar" "'$mod' $action"
+}
+
+toggle_service() {
+    mod="$1"
+    case "$mod" in
+        workspace_preview)
+            if [ -f "$WS_PREVIEW_FLAG" ]; then
+                rm -f "$WS_PREVIEW_FLAG"
+                pkill -f "WorkspaceThumbDaemon" 2>/dev/null
+                pkill -f "WorkspaceHoverWatcher" 2>/dev/null
+                eww -c "$CONFIG_DIR/eww" close wspreview >/dev/null 2>&1 &
+                action="desactivado"
+            else
+                touch "$WS_PREVIEW_FLAG"
+                "$CONFIG_DIR/bin/WorkspaceThumbDaemon" >/dev/null 2>&1 &
+                "$CONFIG_DIR/bin/WorkspaceHoverWatcher" >/dev/null 2>&1 &
+                action="activado"
+            fi
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+    dunstify -i dialog-information "Módulos de Polybar" "'$mod' $action"
+}
+
+build_menu() {
+    printf '%s\n' "$_catalog" | while IFS='|' read -r id icon name desc fixed kind; do
+        [ -z "$id" ] && continue
+        get_lines
+        if is_active "$id" "$kind"; then
+            status="<span foreground='#9ece6a'>● Activo</span>"
+        else
+            status="<span foreground='#565f89'>○ Inactivo</span>"
+        fi
+        [ "$fixed" = "1" ] && status="<span foreground='#7aa2f7'>▣ Base</span>"
+        printf "$icon  <b>%s</b>  <span foreground='#8C8C8C'>— %s</span>   %s\n" "$name" "$desc" "$status"
+    done
+}
+
+get_lines
+
+selection_index=$(build_menu | rofi -dmenu -i -markup-rows -format i \
+    -p "Módulos de Polybar" \
+    -mesg "Enter: activar / desactivar   ·   Esc: cerrar" \
+    -theme "$THEME")
+
+[ -z "$selection_index" ] && exit 0
+
+sel_id=$(printf '%s\n' "$_catalog" | awk -F'|' -v n="$((selection_index + 1))" 'NF{c++} c==n{print $1; exit}')
+sel_fixed=$(printf '%s\n' "$_catalog" | awk -F'|' -v n="$((selection_index + 1))" 'NF{c++} c==n{print $5; exit}')
+sel_kind=$(printf '%s\n' "$_catalog" | awk -F'|' -v n="$((selection_index + 1))" 'NF{c++} c==n{print $6; exit}')
+
+[ -z "$sel_id" ] && exit 0
+
+if [ "$sel_fixed" = "1" ]; then
+    dunstify "Módulos de Polybar" "'$sel_id' es un módulo base y no se puede desactivar."
+elif [ "$sel_kind" = "service" ]; then
+    toggle_service "$sel_id"
+else
+    toggle_module "$sel_id"
+fi
