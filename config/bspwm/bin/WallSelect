@@ -1,7 +1,7 @@
 #!/bin/sh
 # =============================================================
-# Author:  gh0stzk
-# Repo:    https://github.com/gh0stzk/dotfiles
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
 # Date:    27.06.2025 11:43:32
 
 # WallSelect - Dynamic wallpaper selector with intelligent caching system
@@ -18,7 +18,7 @@
 #   → Media: feh, imagemagick
 #   → GNU: findutils, coreutils
 #
-# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
 # Licensed under GPL-3.0 license
 # =============================================================
 

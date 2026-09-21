@@ -1,5 +1,5 @@
 ;; Author : gh0st
-;; Dotfiles : https://github.com/gh0stzk/dotfiles
+;; Dotfiles : https://github.com/TechOGR/bspwm_dotfiles_arch
 ;; Show a welcome window for the bspwm environment.
 ;;
 
@@ -55,7 +55,7 @@
            :xalign 0
            :wrap true
            :justify "left"
-           :markup "Hello <b>${username}</b>, maybe it's your first time using a window manager or maybe not, here are some shortcuts so you don't feel so lost. You can always visit my <a href=\"https://github.com/gh0stzk/dotfiles/wiki\">Wiki</a>")
+           :markup "Hello <b>${username}</b>, maybe it's your first time using a window manager or maybe not, here are some shortcuts so you don't feel so lost. You can always visit my <a href=\"https://github.com/TechOGR/bspwm_dotfiles_arch/wiki\">Wiki</a>")
     (box :class "welcome-list" :orientation "v" :space-evenly "false" :spacing 8
       (shortcut-item :key "Alt + F1" :desc "Shortcuts")
       (shortcut-item :key "Super + Enter" :desc "Open a terminal")

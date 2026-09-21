@@ -1,11 +1,11 @@
 #!/bin/sh
 # =============================================================
-# gh0stzk
-# https://github.com/gh0stzk/dotfiles
+# TechOGR
+# https://github.com/TechOGR/bspwm_dotfiles_arch
 # 10.07.2024 07:05:25
 # Mount and unmount Android device using simple-mtpfs and Rofi
 #
-# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
 # Licensed under GPL-3.0 license
 # =============================================================
 

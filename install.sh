@@ -6,7 +6,7 @@
 #
 # IMPORTANT:
 #   This installer deploys ONLY the files present in THIS repository.
-#   It does not clone gh0stzk/dotfiles or copy files from any other dotfiles repo.
+#   It does not clone any other dotfiles repository.
 #   Managed configuration files are copied as-is and are NEVER patched in place.
 #
 # Run:
@@ -16,7 +16,7 @@
 
 set -Eeuo pipefail
 
-SCRIPT_VERSION="8.0.0"
+SCRIPT_VERSION="8.1.0"
 REPO_URL="https://github.com/TechOGR/bspwm_dotfiles_arch.git"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 HOME="${HOME:?HOME is not set}"
@@ -76,7 +76,7 @@ printf '=== TechOGR BSPWM Installer %s - %s ===\n' "$SCRIPT_VERSION" "$(date)" >
 
 # ------------------------------- Logging -------------------------------------
 CURRENT_STEP=0
-TOTAL_STEPS=13
+TOTAL_STEPS=14
 STEP_OPEN=false
 STEP_START=0
 RAIL="$MAGENTA│$RESET "
@@ -274,10 +274,36 @@ check_arch() {
 }
 
 # ----------------------------- Packages -------------------------------------
+sync_system() {
+    step "Sincronización del sistema"
+    # Installing new packages on a stale/partially-synced system is the most
+    # common cause of "archivos en conflicto" errors (e.g. two shared library
+    # packages like ffmpeg/vmaf disagreeing about which owns a file). A full
+    # sync + upgrade before touching anything else keeps every package on the
+    # same, consistent set of versions and avoids that class of failure.
+    info "Sincronizando repositorios y actualizando paquetes existentes..."
+    if ! run_with_live_progress "pacman -Syu" sudo pacman -Syu --noconfirm; then
+        fatal "No se pudo sincronizar/actualizar el sistema. Revisa $LOG_FILE y vuelve a ejecutar el instalador."
+    fi
+    success "Sistema sincronizado y actualizado."
+}
+
 install_pkg() {
     local pkg="$1" required="${2:-yes}"
     if is_pkg_installed "$pkg"; then return 0; fi
     if sudo pacman -S --needed --noconfirm "$pkg" >>"$LOG_FILE" 2>&1; then return 0; fi
+
+    # A system that wasn't fully synced/upgraded can leave files on disk that
+    # pacman refuses to overwrite ("archivos en conflicto", e.g. ffmpeg/vmaf
+    # shared libraries). sync_system() already mitigates this, but as a last
+    # resort retry once forcing pacman to overwrite those stray files instead
+    # of aborting the whole installation.
+    log WARNING "pacman -S $pkg failed, retrying with --overwrite '*' (possible file conflict)."
+    if sudo pacman -S --needed --noconfirm --overwrite '*' "$pkg" >>"$LOG_FILE" 2>&1; then
+        log WARNING "Package '$pkg' required --overwrite to resolve file conflicts."
+        return 0
+    fi
+
     if [[ "$required" == yes ]]; then FAILED_REQUIRED+=("$pkg"); else FAILED_OPTIONAL+=("$pkg"); fi
     return 1
 }
@@ -790,16 +816,6 @@ verify_repository_layout() {
 
     if command_exists eww; then success "Eww operativo: $(command -v eww)"; else fatal "Eww no está operativo."
     fi
-
-    # Warn, but do not mutate, repository files containing upstream credits.
-    # The current repository itself includes some gh0stzk-origin references; the
-    # installer deliberately leaves them untouched because the repository is the source of truth.
-    local upstream_hits
-    upstream_hits="$(grep -RIl --exclude-dir=.git 'gh0stzk/dotfiles\|Author: gh0stzk\|Copyright (C) 2021-2026 gh0stzk' "$SCRIPT_DIR/config" "$SCRIPT_DIR/misc" 2>/dev/null | head -n 8 || true)"
-    if [[ -n "$upstream_hits" ]]; then
-        warn "El repositorio contiene referencias a gh0stzk en archivos que se copian tal cual."
-        log WARNING "Current TechOGR repository contains upstream gh0stzk references; installer did not alter them."
-    fi
 }
 
 show_summary() {
@@ -828,6 +844,7 @@ main() {
     print_banner
     check_execution
     check_arch
+    sync_system
     install_base_deps
     install_aur_helper
     install_eww

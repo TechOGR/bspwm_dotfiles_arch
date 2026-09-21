@@ -1,7 +1,7 @@
 #!/bin/sh
 # =============================================================
-# Author: gh0stzk
-# Repo:   https://github.com/gh0stzk/dotfiles
+# Author: TechOGR
+# Repo:   https://github.com/TechOGR/bspwm_dotfiles_arch
 # Date:   02.02.2025 16:50:44
 #
 # SoftReload - Dynamic reloading of graphical components
@@ -11,7 +11,7 @@
 #   ✔ Restart the Eww daemon if it is active
 #   ✔ Sends a notification that the configuration has been successfully reloaded.
 #
-# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
 # Licensed under GPL-3.0 license
 # =============================================================
 

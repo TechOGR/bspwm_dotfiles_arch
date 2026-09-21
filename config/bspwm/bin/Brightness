@@ -1,7 +1,7 @@
 #!/bin/sh
 # =============================================================
-# Author:  gh0stzk
-# Repo:    https://github.com/gh0stzk/dotfiles
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
 # Date:    03.02.2025 14:22:32
 #
 # Brightness - Hardware brightness control
@@ -14,7 +14,7 @@
 #   → brightnessctl
 #   → dunst
 #
-# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
 # Licensed under GPL-3.0 license
 # =============================================================
 

@@ -1,8 +1,8 @@
 #!/bin/sh
 # =============================================================
-# Author: gh0stzk
+# Author: TechOGR
 # Date:   02.02.2025 13:06:58
-# Repo:   https://github.com/gh0stzk/dotfiles
+# Repo:   https://github.com/TechOGR/bspwm_dotfiles_arch
 #
 # Bluetooth Status Checker for Polybar
 #
@@ -16,7 +16,7 @@
 # - Graceful error handling for missing configs
 # - Efficient command execution
 #
-# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
 # Licensed under GPL-3.0 license
 # ----------------------------------------------------------------------------
 

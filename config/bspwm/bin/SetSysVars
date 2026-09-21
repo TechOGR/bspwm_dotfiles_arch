@@ -1,7 +1,7 @@
 #!/bin/sh
 # =============================================================
-# Author:  gh0stzk
-# Repo:    https://github.com/gh0stzk/dotfiles
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
 # Date:    02.02.2025 08:44:12
 #
 # SetSysVars - Automated System Configuration for BSPWM
@@ -17,7 +17,7 @@
 # Dependencies:
 #   → Core: awk, grep, sed, iproute2 (All in Arch base)
 #
-# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
 # Licensed under GPL-3.0 license
 # =============================================================
 

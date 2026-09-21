@@ -1,9 +1,9 @@
 #!/bin/sh
 # =============================================================
 # Script to detect and control the bluetooth info on eww widget
-# gh0stzk | https://github.com/gh0stzk/dotfiles
+# TechOGR | https://github.com/TechOGR/bspwm_dotfiles_arch
 # 12.07.2024 09:51:19
-# Copyright (C) 2021-2025 gh0stzk <z0mbi3.zk@protonmail.com>
+# Copyright (C) 2021-2025 TechOGR <https://github.com/TechOGR>
 # =============================================================
 
 # Function to check if the system has Bluetooth and if the service is active

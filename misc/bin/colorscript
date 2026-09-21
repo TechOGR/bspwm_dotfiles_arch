@@ -1,14 +1,14 @@
 #!/bin/sh
-# Author: gh0stzk
+# Author: TechOGR
 # Revision Date: 09.02.2025 10:00:58
-# Repository: https://github.com/gh0stzk/dotfiles
+# Repository: https://github.com/TechOGR/bspwm_dotfiles_arch
 # ----------------------------------------------------------------------------
 # Simple CLI for shell-color-scripts
 #
 # This is my modified version of the shell-color-scripts from
 # https://github.com/charitarthchugh/shell-color-scripts
 #
-# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
 # Licensed under GPL-3.0 license
 # ----------------------------------------------------------------------------
 

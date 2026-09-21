@@ -1,4 +1,4 @@
-// https://github.com/gh0stzk/dotfiles
+// https://github.com/TechOGR/bspwm_dotfiles_arch
 
 configuration {
     modi:                        "drun";

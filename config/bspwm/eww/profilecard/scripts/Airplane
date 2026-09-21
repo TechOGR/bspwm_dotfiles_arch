@@ -1,9 +1,9 @@
 #!/bin/sh
 # =============================================================
 # Script to control my eww widget arirplane options.
-# gh0stzk | https://github.com/gh0stzk/dotfiles
+# TechOGR | https://github.com/TechOGR/bspwm_dotfiles_arch
 # 12.07.2024 10:12:26
-# Copyright (C) 2021-2025 gh0stzk <z0mbi3.zk@protonmail.com>
+# Copyright (C) 2021-2025 TechOGR <https://github.com/TechOGR>
 # =============================================================
 
 cache_dir="$HOME/.cache/$USER"

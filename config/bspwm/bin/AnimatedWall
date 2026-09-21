@@ -1,14 +1,14 @@
 #!/bin/sh
 # =============================================================
-# Author:  gh0stzk
-# Repo:    https://github.com/gh0stzk/dotfiles
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
 # Date:    24.04.2025
 #
 # AnimateWall - Animated Wallpaper for BSPWM
 # Info:  Script to set animated backgrounds using
 #        xwinwrap and mpv. Supports automatic aspect ratio adjustment.
 #
-# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
 # Licensed under GPL-3.0 license
 # =============================================================
 

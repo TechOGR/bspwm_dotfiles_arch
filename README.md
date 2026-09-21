@@ -1,58 +1,93 @@
-# 🛠️ TechOGR BSPWM Dotfiles (Arch Linux)
+# TechOGR · BSPWM Dotfiles
 
-Mi configuración personalizada para el gestor de ventanas **BSPWM**, optimizada para un flujo de trabajo rápido, estético y minimalista en **Arch Linux**.
+Configuración personal de escritorio para **BSPWM** sobre **Arch Linux** y derivados (CachyOS, EndeavourOS, Garuda, BlackArch, Manjaro...). Rice `crackone`: HUD cyberpunk/neon animado, con Polybar + Eww, Picom con animaciones y un instalador que deja el sistema listo en un solo comando.
+
+<p align="center">
+  <img src="Wallpapers/noche_car_man.jpg" alt="Wallpaper por defecto del rice crackone" width="100%">
+  <br>
+  <sub>Wallpaper por defecto incluido (<code>noche_car_man.jpg</code>). El instalador lo aplica automáticamente al fondo y al lockscreen.</sub>
+</p>
 
 ---
 
-## 📦 Paquetes y Dependencias
+## ✨ Qué incluye
 
-El script de instalación automatizado se encargará de instalar todo lo necesario. Aquí tienes la lista de lo que incluye:
+| Categoría | Herramientas |
+| :--- | :--- |
+| Gestor de ventanas | `bspwm` + `sxhkd` |
+| Barra / widgets | `polybar`, `eww` (perfil, módulos animados) |
+| Compositor | `picom` con animaciones |
+| Lanzador / menús | `rofi`, `jgmenu` |
+| Notificaciones | `dunst` |
+| Terminales | `alacritty` (por defecto), `kitty`, `st`, `ghostty` — selector con `Super+Alt+T` |
+| Shell | `zsh` + autosugerencias, resaltado de sintaxis, `fzf`/`fzf-tab` |
+| Multimedia | `mpd`, `ncmpcpp`, `mpv`, control de volumen/brillo/reproducción |
+| Archivos / documentos | `yazi`, `zathura` |
+| Portapapeles | `clipcat` |
+| Bloqueo de pantalla | `betterlockscreen` (o `i3lock` como respaldo) |
+| Navegador | `Brave` (predeterminado del sistema tras la instalación) |
+| Fuentes / iconos | JetBrainsMono Nerd Font, Font Awesome, Papirus |
+
+Todo se despliega desde este repositorio: el instalador **no clona ni copia archivos de ningún otro repositorio de dotfiles**.
+
 ---
 
-## 🚀 Guía de Instalación
+## 🚀 Instalación
 
-El proceso está completamente automatizado a través de un script seguro. Sigue estos sencillos pasos:
+Requisitos: una distribución basada en Arch Linux (x86_64), conexión a internet y un usuario normal con acceso a `sudo`.
 
-### 1. Clonar el repositorio
-Abre tu terminal y clona este repositorio en tu máquina:
 ```bash
 git clone https://github.com/TechOGR/bspwm_dotfiles_arch.git
 cd bspwm_dotfiles_arch
-```
-
-### 2. Dar permisos de ejecución
-Asegúrate de que el sistema te permita correr el script de instalación:
-```bash
 chmod +x install.sh
-```
-
-### 3. Ejecutar el instalador
-Corre el script **sin usar sudo**. El script te pedirá tu contraseña de administrador automáticamente cuando necesite utilizar `pacman` o instalar `yay` si no lo tienes en tu sistema:
-```bash
 ./install.sh
 ```
 
-> ⚠️ **Nota de seguridad:** El instalador creará automáticamente una copia de respaldo (`backup`) de tus carpetas `.config` y tu archivo `.zshrc` actuales dentro de un directorio con la fecha de hoy en tu `$HOME`. No perderás tus configuraciones previas.
+- Ejecuta el script **sin `sudo`**; te pedirá la contraseña automáticamente cuando la necesite.
+- Antes de tocar nada, sincroniza y actualiza todo el sistema (`pacman -Syu`) para evitar conflictos de archivos entre paquetes (por ejemplo entre librerías compartidas como `ffmpeg`/`vmaf`).
+- Instala `yay` si no tienes ya `yay`/`paru`, prepara Rust estable para compilar Eww si hace falta, y resuelve automáticamente cualquier paquete que quede en conflicto reintentando la instalación.
+- Antes de desplegar nada crea un **backup** completo de tu `~/.config` actual y tu `.zshrc` en `~/.dotfiles_backup/backup_<fecha>/`, con un script `restore.sh` listo para revertir todo.
+- Registra la sesión **BSPWM** en tu Display Manager (instala LightDM si no tienes ninguno activo) y deja tu shell en Zsh.
+- Guarda un log detallado de todo el proceso en `~/.techogr_install.log`, útil para depurar si algo falla.
 
-### 4. Reiniciar la sesión
-Una vez que el instalador finalice correctamente, cierra tu sesión actual o reinicia tu computadora. En tu gestor de inicio (como SDDM, GDM o LightDM), selecciona la sesión **BSPWM** e ingresa.
+Al terminar, cierra sesión (o reinicia) y selecciona **BSPWM** en la pantalla de inicio.
+
+> Para restaurar tu configuración anterior en cualquier momento: `~/.dotfiles_backup/backup_<fecha>/restore.sh`
 
 ---
 
-## ⌨️ Atajos de Teclado Esenciales
+## ⌨️ Atajos de teclado esenciales
 
-La tecla principal (Mod) está configurada por defecto como la tecla Windows (**Super**).
+La tecla principal (**Mod**) es **Super** (tecla Windows).
 
 | Combinación | Acción |
 | :--- | :--- |
-| `Super + Enter` | Abrir la terminal (**Kitty**) |
-| `Super + d` | Abrir el lanzador de aplicaciones (**Rofi**) |
-| `Super + Alt + r` | Reiniciar BSPWM y recargar configuraciones |
-| `Super + Alt + q` | Cerrar sesión / Salir de BSPWM |
-| `Super + w` / `c` | Cerrar la ventana actual enfocada |
-| `Super + Flechas / HJKL` | Cambiar el foco entre ventanas |
-| `Super + 1-9` | Cambiar de espacio de trabajo (Escritorio virtual) |
-| `Click Derecho en Escritorio` | Desplegar el menú de aplicaciones (**JGmenu**) |
+| `Alt + F1` | Mostrar ayuda de atajos |
+| `Super + Enter` | Abrir terminal |
+| `Super + Alt + Enter` | Abrir terminal flotante |
+| `Super + Space` | Lanzador de aplicaciones (Rofi) |
+| `Alt + Space` | Selector de rice (tema completo bspwm/polybar/eww) |
+| `Super + Alt + M` | Explorador/activador de módulos de la barra |
+| `Super + R` | Editor del rice |
+| `Super + Alt + T` | Selector de terminal |
+| `Super + Alt + W` | Selector de wallpaper |
+| `Super + Alt + S` | Captura de pantalla |
+| `Super + Alt + P` | Menú de energía |
+| `Super + Alt + C` | Historial del portapapeles |
+| `Super + Alt + H` / `U` | Ocultar / mostrar la barra |
+| `Super + X` / `Super + Shift + X` | Cerrar / matar la ventana enfocada |
+| `Alt + Tab` | Cambiar entre ventanas |
+| `Super + ← / →` | Cambiar de escritorio |
+| `Super + [1-9,0]` | Ir al escritorio N |
+| `Super + Ctrl + [1-9,0]` | Enviar ventana al escritorio N |
+| `Super + Alt + ← ↓ ↑ →` | Mover el foco entre ventanas |
+| `Super + Alt + R` | Recargar BSPWM |
+| `Ctrl + Super + Alt + Q` | Cerrar sesión |
+| `Ctrl + Super + Alt + L` | Bloquear pantalla |
+| `Click derecho en el escritorio` | Menú de aplicaciones (JGmenu) |
+
+Atajos completos y personalizables en [`config/bspwm/config/sxhkdrc`](config/bspwm/config/sxhkdrc).
 
 ---
-Desarrollado con ☕ por [TechOGR](https://github.com).
+
+<p align="center"><sub>Desarrollado por <a href="https://github.com/TechOGR">TechOGR</a></sub></p>

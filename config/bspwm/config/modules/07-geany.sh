@@ -4,11 +4,11 @@ _write "$HOME/.config/geany/colorschemes/current.conf" << EOF
 # Colorscheme generated for the ${RICE} theme.
 
 [theme_info]
-name=gh0stzk
-description=${RICE} theme for the BSPWM environment by gh0stzk
+name=TechOGR
+description=${RICE} theme for the BSPWM environment by TechOGR
 version=1.0
-author=gh0stzk
-url=https://github.com/gh0stzk/dotfiles
+author=TechOGR
+url=https://github.com/TechOGR/bspwm_dotfiles_arch
 
 [named_colors]
 bg_color=${bg}

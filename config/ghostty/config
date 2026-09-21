@@ -46,5 +46,5 @@ keybind = shift+enter=text:\n
 # Rando stuff
 gtk-single-instance = false
 
-# gh0stzk environment colors
-theme = gh0stzk
+# TechOGR environment colors
+theme = TechOGR

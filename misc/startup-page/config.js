@@ -11,7 +11,7 @@ const CONFIG = {
 	// └─┘┴ ┴└─┘┴└─┘└─┘
 
 	// General
-	name: 'gh0stzk',
+	name: 'TechOGR',
 	imageBackground: false,
 	openInNewTab: true,
 	twelveHourFormat: true,
@@ -140,8 +140,8 @@ const CONFIG = {
 			id: '1',
 			links: [
 				{
-					name: 'gh0stzk dotfiles',
-					link: 'https://github.com/gh0stzk/dotfiles',
+					name: 'TechOGR dotfiles',
+					link: 'https://github.com/TechOGR/bspwm_dotfiles_arch',
 				},
 				{
 					name: 'Arch Linux',
