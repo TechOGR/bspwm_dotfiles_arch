@@ -34,7 +34,6 @@ brown = #AC8476
 grey = #8C8C8C
 indigo = #6C77BB
 blue-gray = #6D8895
-trace = #33354A
 
 [bar/emi-bar]
 monitor = ${env:MONITOR:}
@@ -42,17 +41,12 @@ monitor-strict = false
 override-redirect = false
 
 bottom = false
-; Adaptive centering: the workspace pill centers itself in whatever space
-; is actually left between modules-left/modules-right, instead of pinning
-; to the bar's absolute midpoint. With `true` the left/right gaps around
-; it end up wildly uneven whenever one side has more live content than
-; the other (which changes constantly with real data).
-fixed-center = false
+fixed-center = true
 
-width = 99.5%
+width = 98.5%
 height = 28
 
-offset-x = 0.25%
+offset-x = 0.75%
 offset-y = 8
 
 background = ${color.bg}
@@ -68,16 +62,10 @@ line-color = ${color.blue}
 border-size = 2px
 border-color = ${color.cyan}
 
-padding = 4
+padding = 2
 
-module-margin-left = 0
-module-margin-right = 0
-
-; Global glow thickness for the per-module format-underline/format-overline
-; accents below -- each chip gets its own status color, this just sets how
-; thick that neon line renders.
-underline-size = 2
-overline-size = 2
+module-margin-left = 1
+module-margin-right = 1
 
 ; Text
 font-0 = "JetBrainsMono:style=Bold:pixelsize=9;3"
@@ -92,9 +80,9 @@ font-4 = "MesloLGS NF:style=Regular:pixelsize=17;4"
 ; Modules available but not active by default:
 ;   brightness   weather   xkeyboard   colorpicker   cpu_bar   mpd   mplayer
 ; Press super + alt + m (or click the  icon) to browse/toggle all of them.
-modules-left = frame-open launcher dots heartbeat sep bi cpu_wave bd sep bi memory_bar bd sep bi filesystem bd sep bi sensors_temp gpu bd sep bi uptime bd sep
+modules-left = launcher dots heartbeat sep bi cpu_wave bd sep bi memory_bar bd sep bi filesystem bd sep bi uptime bd sep
 modules-center = bi bspwm bd
-modules-right = bi song_wave bd sep bluetooth sep bi network bd sep bi pulseaudio bd sep bi battery bd sep bi updates bd sep bi date bd sep tray sep modules_help sep power frame-close
+modules-right = bi song_wave bd sep bluetooth sep bi sensors_temp gpu network bd sep bi pulseaudio bd sep bi battery bd sep bi updates bd sep bi date bd sep tray sep modules_help sep power
 
 separator =
 dim-value = 1.0

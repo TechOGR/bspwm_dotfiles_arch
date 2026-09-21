@@ -33,4 +33,4 @@ else
     color="#9ece6a"
 fi
 
-printf "%%{F%s}\xef\x81\xad%%{F-} %s\xc2\xb0C\n" "$color" "$tint"
+printf "%%{u%s}%%{+u}%%{F%s}\xef\x81\xad%%{F-} %s\xc2\xb0C%%{-u}\n" "$color" "$color" "$tint"

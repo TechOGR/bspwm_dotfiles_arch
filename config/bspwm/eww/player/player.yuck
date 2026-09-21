@@ -69,10 +69,13 @@
 							:status loop
 						)
 					)
-					(box
+					(eventbox
+						:cursor "pointer"
+						:tooltip "Open full player"
 						(button
 							:class {music-player != "spotify" ? "mpd-icon" : "spotify-icon"}
 							:halign "end"
+							:onclick "OpenApps --music"
 							{music-player != "spotify" ? "󰎆" : "󰓇"}
 						)
 					)

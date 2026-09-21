@@ -53,4 +53,8 @@ else
     icon="\xef\x81\x8c"
 fi
 
-printf "%%{F%s}${icon}%%{F-} %s\n" "$color" "$display"
+if [ "$playing" -eq 1 ]; then
+    printf "%%{u#9ece6a}%%{+u}%%{F%s}${icon}%%{F-} %s%%{-u}\n" "$color" "$display"
+else
+    printf "%%{F%s}${icon}%%{F-} %s\n" "$color" "$display"
+fi

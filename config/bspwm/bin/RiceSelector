@@ -1,13 +1,10 @@
 #!/bin/sh
 # =============================================================
-# Author:  gh0stzk
-# Repo:    https://github.com/gh0stzk/dotfiles
-# Date:    27.06.2025 11:14:42
+# Author:  techogr
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch.git
+# Date:    13.09.2026
 #
-# RiceSelector - Dynamic theme switcher for gh0stzk bspwm dotfiles
-#
-# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
-# Licensed under GPL-3.0 license
+# RiceSelector - Dynamic theme switcher for TechOGR bspwm
 # =============================================================
 
 # Some vars
@@ -32,7 +29,7 @@ done
 selected=$(
     for rice in $rices; do
         name=${rice##*/}
-        printf "%s\000icon\037%s/preview.webp\n" "$name" "$rice"
+        printf "%s\000icon\037%s/preview.jpg\n" "$name" "$rice"
     done | rofi -dmenu -p "RiceSelector" \
                 -theme "$bspwm_dir/config/rofi-themes/RiceSelector.rasi" \
                 -selected-row "$selected_index"

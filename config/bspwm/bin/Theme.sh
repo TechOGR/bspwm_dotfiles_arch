@@ -6,12 +6,11 @@
 #     ██║   ██╔══██║██╔══╝  ██║╚██╔╝██║██╔══╝
 #     ██║   ██║  ██║███████╗██║ ╚═╝ ██║███████╗
 #     ╚═╝   ╚═╝  ╚═╝╚══════╝╚═╝     ╚═╝╚══════╝
-# Author: gh0stzk
-# Repo:   https://github.com/gh0stzk/dotfiles
-# Date:   10.11.2025
+# Author: TechOGR
+# Repo:   https://github.com/TechOGR/bspwm_dotfiles_arch.git
+# Date:   13.09.2026
 # Info:   This file will configure and launch the rice.
 #
-# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
 # Licensed under GPL-3.0 license
 # =============================================================
 

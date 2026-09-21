@@ -79,6 +79,7 @@ case $MY_TERM in
 	    "--nvim") alacritty -e nvim ;;
 	    "--music") alacritty --class FloaTerm,MusicTerm -e ncmpcpp ;;
 	    "--fetch") alacritty --class FloaTerm,FetchTerm -e ~/.local/bin/sysfetch ;;
+	    "--sysmonitor") alacritty --class FloaTerm,SysTerm -e btop ;;
 	esac
 	;;
     "st")
@@ -90,6 +91,7 @@ case $MY_TERM in
 	    "--nvim") st -e nvim ;;
 	    "--music") st -n MusicTerm -c FloaTerm -e ncmpcpp ;;
 	    "--fetch") st -n FetchTerm -c FloaTerm -e ~/.local/bin/sysfetch ;;
+	    "--sysmonitor") st -n SysTerm -c FloaTerm -e btop ;;
 	esac
 	;;
     "kitty")
@@ -101,6 +103,7 @@ case $MY_TERM in
 	    "--nvim") kitty -e nvim ;;
 	    "--music") kitty --name=MusicTerm --class=FloaTerm -e ncmpcpp ;;
 	    "--fetch") kitty --name=FetchTerm --class=FloaTerm -e ~/.local/bin/sysfetch ;;
+	    "--sysmonitor") kitty --name=SysTerm --class=FloaTerm -e btop ;;
 	esac
 	;;
     "ghostty")
@@ -112,6 +115,7 @@ case $MY_TERM in
 	    "--nvim") ghostty -e nvim ;;
 	    "--music") ghostty --x11-instance-name=MusicTerm --title=MusicTerm -e ncmpcpp ;;
 	    "--fetch") ghostty --x11-instance-name=FetchTerm --title=FetchTerm -e ~/.local/bin/sysfetch ;;
+	    "--sysmonitor") ghostty --x11-instance-name=SysTerm --title=SysTerm -e btop ;;
 	esac
 	;;
 esac

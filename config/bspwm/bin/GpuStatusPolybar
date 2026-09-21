@@ -38,4 +38,4 @@ else
     color="#9ece6a"
 fi
 
-printf "%%{F%s}\xef\x8b\x9b%%{F-} %s%% %s\xc2\xb0C\n" "$color" "$util" "$temp"
+printf "%%{u%s}%%{+u}%%{F%s}\xef\x8b\x9b%%{F-} %s%% %s\xc2\xb0C%%{-u}\n" "$color" "$color" "$util" "$temp"

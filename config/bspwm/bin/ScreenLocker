@@ -1,9 +1,8 @@
 #!/bin/sh
 # =============================================================
-# Author: gh0stzk
-# Repo:   https://github.com/gh0stzk/dotfiles
-# Date:   23.04.2025
+# Author: techogr
 #
+
 # Script Name: ScreenLocker
 # Description: Advanced screen locker with blur effect and theme-based wallpapers
 # Features:

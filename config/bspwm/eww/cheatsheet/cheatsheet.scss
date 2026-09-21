@@ -1,13 +1,16 @@
 .cheatsheet {
-  background-color: $bg;
-  border-radius: 0.5rem;
+  background-color: $glass-bg;
+  border: 1px solid $border-glow;
+  border-radius: 1.1rem;
+  box-shadow: 0 0 28px rgba($cyan, 0.12), inset 0 0 40px rgba($blue, 0.04);
 }
 
 .title {
   font-family: JetBrainsMono NF;
   font-weight: Bolder;
-  font-size: 0.9rem;
-  color: $magenta;
+  font-size: 0.75rem;
+  color: $cyan;
+  text-shadow: 0 0 12px rgba($cyan, 0.55), 0 0 2px rgba($cyan, 0.85);
   margin: 1.6rem 1.6rem 0 1.6rem;
 }
 
@@ -16,123 +19,145 @@
   font-style: Italic;
   font-size: 0.8rem;
   margin-top: 3px;
-  color: $fg;
+  color: rgba($fg, 0.6);
 }
 
 .content {
-  margin: 1rem 1rem;
+  margin: 1rem 1.2rem 1.4rem 1.2rem;
 }
 
 .category-bspwm {
   font-family: JetBrainsMono NF;
   font-weight: Bold;
-  font-size: 0.8rem;
-  background-color: $green;
-  color: $bg;
-  margin: 8px 0;
-  padding: 2px 0;
-  border-radius: 2px;
+  font-size: 0.75rem;
+  background-color: rgba($green, 0.12);
+  border: 1px solid rgba($green, 0.5);
+  color: $green;
+  text-shadow: 0 0 8px rgba($green, 0.6);
+  margin: 10px 0 6px 0;
+  padding: 3px 0;
+  border-radius: 999px;
 }
 
 .category-system {
   font-family: JetBrainsMono NF;
   font-weight: Bold;
-  font-size: 0.8rem;
-  background-color: $red;
-  color: $bg;
-  margin: 8px 0;
-  padding: 2px 0;
-  border-radius: 2px;
+  font-size: 0.75rem;
+  background-color: rgba($red, 0.12);
+  border: 1px solid rgba($red, 0.5);
+  color: $red;
+  text-shadow: 0 0 8px rgba($red, 0.6);
+  margin: 10px 0 6px 0;
+  padding: 3px 0;
+  border-radius: 999px;
 }
 
 .category-nodes {
   font-family: JetBrainsMono NF;
   font-weight: Bold;
-  font-size: 0.8rem;
-  background-color: $yellow;
-  color: $bg;
-  margin: 8px 0;
-  padding: 2px 0;
-  border-radius: 2px;
+  font-size: 0.75rem;
+  background-color: rgba($yellow, 0.12);
+  border: 1px solid rgba($yellow, 0.5);
+  color: $yellow;
+  text-shadow: 0 0 8px rgba($yellow, 0.6);
+  margin: 10px 0 6px 0;
+  padding: 3px 0;
+  border-radius: 999px;
 }
 
 .category-workspaces {
   font-family: JetBrainsMono NF;
   font-weight: Bold;
-  font-size: 0.8rem;
-  background-color: $magenta;
-  color: $bg;
-  margin: 8px 0;
-  padding: 2px 0;
-  border-radius: 2px;
+  font-size: 0.75rem;
+  background-color: rgba($magenta, 0.12);
+  border: 1px solid rgba($magenta, 0.5);
+  color: $magenta;
+  text-shadow: 0 0 8px rgba($magenta, 0.6);
+  margin: 10px 0 6px 0;
+  padding: 3px 0;
+  border-radius: 999px;
 }
 
 .category-move {
   font-family: JetBrainsMono NF;
   font-weight: Bold;
-  font-size: 0.8rem;
-  background-color: $archicon;
-  color: $bg;
-  margin: 8px 0;
-  padding: 2px 0;
-  border-radius: 2px;
+  font-size: 0.75rem;
+  background-color: rgba($archicon, 0.12);
+  border: 1px solid rgba($archicon, 0.5);
+  color: $archicon;
+  text-shadow: 0 0 8px rgba($archicon, 0.6);
+  margin: 10px 0 6px 0;
+  padding: 3px 0;
+  border-radius: 999px;
 }
 
 .category-apps {
   font-family: JetBrainsMono NF;
   font-weight: Bold;
-  font-size: 0.8rem;
-  background-color: $green;
-  color: $bg;
-  margin: 8px 0;
-  padding: 2px 0;
-  border-radius: 2px;
+  font-size: 0.75rem;
+  background-color: rgba($green, 0.12);
+  border: 1px solid rgba($green, 0.5);
+  color: $green;
+  text-shadow: 0 0 8px rgba($green, 0.6);
+  margin: 10px 0 6px 0;
+  padding: 3px 0;
+  border-radius: 999px;
 }
 
 .category-preselection {
   font-family: JetBrainsMono NF;
   font-weight: Bold;
-  font-size: 0.8rem;
-  background-color: $blue;
-  color: $bg;
-  margin: 8px 0;
-  padding: 2px 0;
-  border-radius: 2px;
+  font-size: 0.75rem;
+  background-color: rgba($blue, 0.12);
+  border: 1px solid rgba($blue, 0.5);
+  color: $blue;
+  text-shadow: 0 0 8px rgba($blue, 0.6);
+  margin: 10px 0 6px 0;
+  padding: 3px 0;
+  border-radius: 999px;
 }
 
 .category-others {
   font-family: JetBrainsMono NF;
   font-weight: Bold;
-  font-size: 0.8rem;
-  background-color: $red;
-  color: $bg;
-  margin: 8px 0;
-  padding: 2px 0;
-  border-radius: 2px;
+  font-size: 0.75rem;
+  background-color: rgba($red, 0.12);
+  border: 1px solid rgba($red, 0.5);
+  color: $red;
+  text-shadow: 0 0 8px rgba($red, 0.6);
+  margin: 10px 0 6px 0;
+  padding: 3px 0;
+  border-radius: 999px;
 }
 
 .category-power {
   font-family: JetBrainsMono NF;
   font-weight: Bold;
-  font-size: 0.8rem;
-  background-color: $cyan;
-  color: $bg;
-  margin: 8px 0;
-  padding: 2px 0;
-  border-radius: 2px;
+  font-size: 0.75rem;
+  background-color: rgba($cyan, 0.12);
+  border: 1px solid rgba($cyan, 0.5);
+  color: $cyan;
+  text-shadow: 0 0 8px rgba($cyan, 0.6);
+  margin: 10px 0 6px 0;
+  padding: 3px 0;
+  border-radius: 999px;
 }
 
 .keys {
   font-family: BebasNeue;
   font-size: 1rem;
-  color: $fg;
+  color: rgba($fg, 0.85);
 }
 
 .keys-alt {
   font-family: JetBrainsMono NF;
   font-weight: Bold;
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   color: $fg;
+  background-color: rgba($cyan, 0.08);
+  border: 1px solid rgba($cyan, 0.3);
+  border-radius: 6px;
+  padding: 1px 8px;
 }
 
 scrollbar {
@@ -144,12 +169,12 @@ scrollbar {
       min-width: 4px;
       border-radius: 999999px;
       transition: all 0.2s cubic-bezier(0.22, 1, 0.36, 1);
-      background-color: $green;
+      background-color: $cyan;
     }
   }
 
   &:hover trough slider {
     min-width: 8px;
-    background-color: $green;
+    background-color: $cyan;
   }
 }

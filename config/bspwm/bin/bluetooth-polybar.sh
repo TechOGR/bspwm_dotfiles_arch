@@ -58,9 +58,9 @@ else  # Fallback colors if config missing
 fi
 
 if get_bt_status; then
-    echo "%{F${POWER_ON}}󰂯%{F-}"
+    echo "%{u${POWER_ON}}%{+u}%{F${POWER_ON}}󰂯%{F-}%{-u}"
 elif [ $? -eq 2 ]; then
-    echo "%{F${POWER_OFF}}󰂲%{F-}"
+    echo "%{u${POWER_OFF}}%{+u}%{F${POWER_OFF}}󰂲%{F-}%{-u}"
 fi
 
 # Ensure clean exit for Polybar compatibility

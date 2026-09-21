@@ -229,12 +229,17 @@
 
 
 (defwidget system []
-  (box
-    :class "system"
-    :spacing 8
-    (cpu)
-    (ram)
-    (disk)
+  (eventbox
+    :cursor "pointer"
+    :onclick "OpenApps --sysmonitor"
+    :tooltip "Open system monitor (btop)"
+    (box
+      :class "system"
+      :spacing 8
+      (cpu)
+      (ram)
+      (disk)
+    )
   )
 )
 

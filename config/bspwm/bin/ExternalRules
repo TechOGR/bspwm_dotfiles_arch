@@ -71,6 +71,9 @@ case "$instance" in
 	FetchTerm)
         result "state=floating center=on rectangle=369x601+0+0"
         ;;
+    SysTerm)
+        result "state=floating center=on rectangle=760x460+0+0"
+        ;;
     Toolkit)
         result "state=floating sticky=on rectangle=500x290+1054+593"
         ;;

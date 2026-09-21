@@ -70,10 +70,10 @@ case "$1" in
         ${FILEMANAGER:-thunar}
         ;;
     --browser)
-        ${BROWSER:-firefox}
+        ${BROWSER:-brave}
         ;;
     --editor)
-        ${EDITOR:-geany}
+        ${EDITOR:-GTK_THEME=Adwaita:dark thunar}
 		;;
 	--telegram)
 		telegram-desktop
@@ -93,6 +93,9 @@ case "$1" in
 		;;
 	--player)
 		eww -c "$WIDGET_DIR" open --toggle music
+		;;
+	--sysmonitor)
+		Term --sysmonitor
 		;;
 	*)
 		echo "Invalid Option"

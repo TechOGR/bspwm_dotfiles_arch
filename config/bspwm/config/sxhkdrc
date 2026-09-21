@@ -34,9 +34,9 @@ super + alt + m
 
 # ----- Your Apps ----- #
 
-# Apps (browser, editor, filemanager)
-super + {b,e,f}
-    OpenApps --{browser,editor,filemanager}
+# Apps (browser, filemanager)
+super + {b,e}
+    OpenApps --{browser,filemanager}
 
 # Terminal apps (yazi, nvim, ncmpcpp)
 super + {y,v,m}

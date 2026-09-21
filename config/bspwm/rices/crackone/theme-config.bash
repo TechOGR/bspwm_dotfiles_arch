@@ -1,32 +1,23 @@
 #############################
-#		Emilia Theme		#
+#    CrackOne Theme         #
 #############################
-# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
-# https://github.com/gh0stzk/dotfiles
+# https://github.com/TechOGR/bspwm_dotfiles_arch.git
 
-# (Tokyo Night) colorscheme
-bg="#1a1b26"
-fg="#c0caf5"
+# Cargar Paletas de Colores
+source "$HOME/.config/bspwm/rices/crackone/theme_colors.bash"
+#--Tokyo Night--
+cargar_tokyo_night
+#--Obsidian Deep--
+#cargar_obsidian_deep
+#--Cyber Sunset--
+#cargar_cyber_sunset
+#--Deep Ocean--
+#cargar_deep_ocean
+#--Minimal Gold --
+#cargar_minimal_gold
+#-- Cold Frost--
+#cargar_cold_frost
 
-black="#15161e"
-red="#f7768e"
-green="#9ece6a"
-yellow="#e0af68"
-blue="#7aa2f7"
-magenta="#bb9af7"
-cyan="#7dcfff"
-white="#a9b1d6"
-blackb="#414868"
-redb="#f7768e"
-greenb="#9ece6a"
-yellowb="#e0af68"
-blueb="#7aa2f7"
-magentab="#bb9af7"
-cyanb="#7dcfff"
-whiteb="#c0caf5"
-
-accent_color="#222330"
-arch_icon="#0f94d2"
 
 # Bspwm options
 BORDER_WIDTH="0"		# Bspwm border
@@ -45,8 +36,8 @@ term_font_name="JetBrainsMono Nerd Font"
 P_FADE="true"			# Fade true|false
 P_SHADOWS="true"		# Shadows true|false
 SHADOW_C="#000000"		# Shadow color
-P_CORNER_R="6"			# Corner radius (0 = disabled)
-P_BLUR="false"			# Blur true|false
+P_CORNER_R="8"			# Corner radius (0 = disabled)
+P_BLUR="true"			# Blur true|false
 P_ANIMATIONS="@"		# (@ = enable) (# = disable)
 P_TERM_OPACITY="1.0"	# Terminal transparency. Range: 0.1 - 1.0 (1.0 = disabled)
 
@@ -91,7 +82,7 @@ sl_date="${fg}"
 sl_verify="${green}"
 
 # Gtk theme
-gtk_theme="TokyoNight-zk"
+gtk_theme="$gtk_themeb"
 gtk_icons="TokyoNight-SE"
 gtk_cursor="volantes_cursors"
 geany_theme="z0mbi3-TokyoNight"
@@ -106,5 +97,5 @@ geany_theme="z0mbi3-TokyoNight"
 ENGINE="Default"
 
 CUSTOM_DIR="$HOME/Imágenes/Wallpapers"
-DEFAULT_WALL="$HOME/Imágenes/Wallpapers/noche_car_man.jpg"
+DEFAULT_WALL="/home/t3ch0gr/.config/bspwm/rices/crackone/walls/pirate-ship-island-digital-art-4k-wallpaper-uhdpaper.com-659@2@b.jpg"
 ANIMATED_WALL="$HOME/.config/bspwm/config/assets/animated_wall.mp4"

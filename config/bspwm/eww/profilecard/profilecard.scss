@@ -1,6 +1,8 @@
 .launchermenu {
-  background-color: $bg;
-  border-radius: 0.5rem;
+  background-color: $glass-bg;
+  border: 1px solid $border-glow;
+  box-shadow: 0 0 30px rgba($cyan, 0.12);
+  border-radius: 1.1rem;
   margin: 0.8rem 0.8rem;
   min-width: 18rem;
 }
@@ -14,11 +16,13 @@
 
 .min:hover {
   color: $magenta;
+  text-shadow: 0 0 0.6rem rgba($magenta, 0.7);
 }
 
 .usercard {
-  background-color: $bg-alt;
-  border-radius: 0.5rem;
+  background-color: $glass-panel;
+  border: 1px solid rgba($cyan, 0.15);
+  border-radius: 0.7rem;
 }
 
 .face {
@@ -27,9 +31,9 @@
   background-position: center;
   min-height: 65px;
   min-width: 65px;
-  //border: .2rem solid $bg;
+  border: 2px solid rgba($cyan, 0.4);
   border-radius: 100%;
-  box-shadow: 0 0 7px 1px rgba($fg, 0.3);
+  box-shadow: 0 0 14px 1px rgba($cyan, 0.35);
   margin: 10px -8px 10px 10px;
 }
 
@@ -41,13 +45,13 @@
 }
 
 .host {
-  color: $fg;
+  color: $cyan;
   font-family: Cartograph CF;
   font-size: 0.8rem;
 }
 
 .uptime {
-  color: $fg;
+  color: rgba($fg, 0.6);
   font-family: Cartograph CF;
   font-size: 0.7rem;
   margin-top: 0.5rem;
@@ -56,12 +60,13 @@
 .btn-info {
   font-family: Material Design Icons Desktop;
   font-size: 1.2rem;
-  color: $fg;
+  color: rgba($fg, 0.8);
   padding: 0 0.6rem;
 }
 
 .btn-info:hover {
-  text-shadow: 0 0 2px $fg;
+  color: $cyan;
+  text-shadow: 0 0 10px rgba($cyan, 0.8);
 }
 
 .launcher-pfp-label {
@@ -71,15 +76,17 @@
 }
 
 .pacman {
-  background-color: $bg-alt;
+  background-color: $glass-panel;
+  border: 1px solid rgba($yellow, 0.18);
   padding: 0.8rem;
-  border-radius: 0.5rem;
+  border-radius: 0.7rem;
   color: $fg;
 
   .pacman-icon {
     font-family: Material Design Icons Desktop;
     font-size: 1.2rem;
     color: $yellow;
+    text-shadow: 0 0 8px rgba($yellow, 0.6);
   }
 
   .pacman-info {
@@ -92,19 +99,27 @@
     font-family: Inconsolata Condensed Medium;
     font-weight: Bold;
     font-size: 1rem;
+    color: $fg;
+  }
+
+  .pacman-updates:hover {
+    color: $yellow;
+    text-shadow: 0 0 8px rgba($yellow, 0.6);
   }
 }
 
 .fetch {
-  background-color: $bg-alt;
+  background-color: $glass-panel;
+  border: 1px solid rgba($archicon, 0.18);
   padding: 0.8rem 2rem 0.8rem 1rem;
-  border-radius: 0.5rem;
+  border-radius: 0.7rem;
   color: $fg;
 
   .arch-icon {
     font-family: Material Design Icons Desktop;
     font-size: 3rem;
     color: $archicon;
+    text-shadow: 0 0 16px rgba($archicon, 0.55);
   }
 }
 
@@ -132,25 +147,28 @@
   font-family: Inconsolata SemiCondensed Medium;
   font-weight: Bold;
   font-size: 1rem;
+  color: $fg;
 }
 
 .weatherbox {
-  background-color: $bg-alt;
-  border-radius: 0.5rem;
+  background-color: $glass-panel;
+  border: 1px solid rgba($cyan, 0.15);
+  border-radius: 0.7rem;
   padding: 0.8rem;
 }
 
 .weathericon {
   padding: 0 0.8rem;
-  border-radius: 0.5rem;
+  border-radius: 0.7rem;
   margin-left: 0.6rem;
-  background-color: $bg-alt;
+  background-color: $glass-panel;
+  border: 1px solid rgba($cyan, 0.15);
   font-size: 1.5rem;
   font-family: "Font Awesome 6 Free Solid";
 }
 
 .weatherdesc {
-  font-size: 1.75rem;
+  font-size: 1.6rem;
   font-family: "Inconsolata SemiCondensed Medium";
   font-weight: Bold;
 }
@@ -159,13 +177,14 @@
   font-family: "Iosevka Nerd Font";
   font-size: 1.5rem;
   font-weight: bold;
-  color: $fg;
+  color: $cyan;
+  text-shadow: 0 0 10px rgba($cyan, 0.6);
 }
 
 .weathercity {
   font-size: 0.9rem;
   margin-top: 0.2rem;
-  color: $fg;
+  color: rgba($fg, 0.7);
   font-family: Inconsolata SemiCondensed Medium;
   font-weight: Bold;
 }
@@ -178,72 +197,56 @@
   font-family: "Material Design Icons Desktop";
   font-size: 1.4rem;
   border-radius: 100%;
-  background-color: $bg-alt;
-}
-.wifi-btn {
-  color: $blue;
-}
-
-.wifi-no-btn {
-  color: $black;
+  background-color: $glass-panel;
+  border: 1px solid rgba($cyan, 0.12);
+  transition: all 180ms ease-in-out;
 }
 
-.bluetooth-btn {
-  color: $blue;
+.tools-box:hover {
+  border: 1px solid rgba($cyan, 0.5);
+  box-shadow: 0 0 12px rgba($cyan, 0.4);
 }
 
-.bluetooth-no-btn {
-  color: $black;
-}
-
-.airplane-btn {
-  color: $blue;
-}
-
-.airplane-no-btn {
-  color: $black;
-}
-
-.redshift-btn {
-  color: $blue;
-}
-
-.redshift-no-btn {
-  color: $black;
-}
-
-.term-btn {
-  color: $blue;
-}
-
+.wifi-btn,
+.bluetooth-btn,
+.airplane-btn,
+.redshift-btn,
+.term-btn,
 .game-btn {
-  color: $blue;
+  color: $cyan;
+  text-shadow: 0 0 8px rgba($cyan, 0.6);
 }
 
+.wifi-no-btn,
+.bluetooth-no-btn,
+.airplane-no-btn,
+.redshift-no-btn,
 .game-no-btn {
-  color: $black;
+  color: rgba($fg, 0.25);
 }
 
 .info-btn {
   font-family: BebasNeue;
   font-size: 1.1rem;
-  color: $fg;
+  color: rgba($fg, 0.75);
 }
 
 .progress {
-  background-color: $bg-alt;
+  background-color: $glass-panel;
+  border: 1px solid rgba($cyan, 0.15);
   padding: 0.7rem 0.7rem;
   border-radius: 1rem;
+  transition: all 180ms ease-in-out;
 
   circular-progress {
-    background-color: $black;
+    background-color: rgba($fg, 0.08);
 
     &.ram {
       color: $blue;
     }
 
     &.cpu {
-      color: $green;
+      color: $cyan;
     }
 
     &.disk {
@@ -258,9 +261,14 @@
   }
 }
 
+.progress:hover {
+  border: 1px solid rgba($cyan, 0.4);
+  box-shadow: 0 0 14px rgba($cyan, 0.3);
+}
+
 .temp {
   font-family: "Font Awesome 6 Free Solid";
   font-size: 1rem;
   color: $magenta;
+  text-shadow: 0 0 8px rgba($magenta, 0.5);
 }
-
