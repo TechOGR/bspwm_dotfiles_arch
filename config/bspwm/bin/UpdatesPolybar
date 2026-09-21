@@ -1,0 +1,29 @@
+#!/bin/sh
+# =============================================================
+# UpdatesPolybar - cyberpunk HUD pending-updates pill for polybar
+#
+# Reads the pacman/AUR update count that bin/Updates already keeps
+# cached at $HOME/.cache/Updates.txt (refreshed by a pacman hook,
+# see misc/polybar-update.hook, and by `checkupdates`/paru inside
+# bin/Updates). This script only handles presentation: a calm
+# neon-lime pill when the system is current, and a neon-red "alert"
+# pill with a hazard glyph the moment updates are pending, so the
+# capsule itself functions as the futuristic status indicator.
+# =============================================================
+
+UPDATE_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/Updates.txt"
+
+total=$(cat "$UPDATE_FILE" 2>/dev/null)
+case "$total" in
+    ''|*[!0-9]*) total=0 ;;
+esac
+
+if [ "$total" -gt 0 ]; then
+    color="#FF2D55"
+    icon="\xef\x81\xb9"
+else
+    color="#B6FF3D"
+    icon="\xef\x81\xb9"
+fi
+
+printf "%%{T2}%%{F%s}%b%%{F-}%%{T-} %s\n" "$color" "$icon" "$total"

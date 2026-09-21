@@ -1,0 +1,121 @@
+#!/bin/sh
+# =============================================================
+# NetworkPolybar - cyberpunk HUD network status for polybar
+#
+# Shows a signal-strength ramp icon for Wi-Fi (outline -> 4 bars,
+# matching the same MDI wifi_strength_* glyphs already offered by
+# config/bspwm/config/NetManagerDM.ini), a dedicated ethernet icon
+# when wired, the active SSID/interface, and a live down/up
+# throughput readout computed from /sys/class/net statistics.
+#
+# Self-hides as a clear red "Offline" pill when no interface has
+# an active link, instead of printing stale/garbage data.
+#
+# Dependencies: iproute2 (ip), NetworkManager (nmcli) for the SSID
+# and signal reading. Falls back gracefully if nmcli is missing.
+# =============================================================
+
+CACHE_DIR="$HOME/.cache/$USER"
+STATE_FILE="$CACHE_DIR/network_prev"
+mkdir -p "$CACHE_DIR"
+
+COL_OK="#00F0FF"
+COL_MID="#FFE347"
+COL_LOW="#FF2D55"
+COL_MUTED="#5C6390"
+
+# Active interface = the one the default route would use. This
+# works fully offline too since it only consults the local routing
+# table (no packet is actually sent).
+iface=$(ip -o route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
+
+# Fallback: first non-loopback interface reporting carrier/up.
+if [ -z "$iface" ]; then
+    for cand in /sys/class/net/*; do
+        name=$(basename "$cand")
+        [ "$name" = "lo" ] && continue
+        [ "$(cat "$cand/operstate" 2>/dev/null)" = "up" ] && { iface="$name"; break; }
+    done
+fi
+
+if [ -z "$iface" ]; then
+    printf "%%{F%s}\xf3\xb0\x96\xaa%%{F-} Offline\n" "$COL_LOW"
+    rm -f "$STATE_FILE"
+    exit 0
+fi
+
+is_wifi=0
+[ -d "/sys/class/net/$iface/wireless" ] && is_wifi=1
+
+# --- Label + dynamic signal-ramp icon ---------------------------------
+if [ "$is_wifi" -eq 1 ]; then
+    signal=""
+    essid=""
+    if command -v nmcli >/dev/null 2>&1; then
+        line=$(nmcli -t -f active,signal,ssid dev wifi 2>/dev/null | awk -F: '$1=="yes"{print; exit}')
+        signal=$(printf '%s' "$line" | cut -d: -f2)
+        essid=$(printf '%s' "$line" | cut -d: -f3-)
+    fi
+    [ -z "$essid" ] && essid="$iface"
+    signal=${signal:-0}
+
+    if [ "$signal" -ge 76 ]; then
+        icon="\xf3\xb0\xa4\xa8"; color="$COL_OK"
+    elif [ "$signal" -ge 51 ]; then
+        icon="\xf3\xb0\xa4\xa5"; color="$COL_OK"
+    elif [ "$signal" -ge 26 ]; then
+        icon="\xf3\xb0\xa4\xa2"; color="$COL_MID"
+    elif [ "$signal" -ge 1 ]; then
+        icon="\xf3\xb0\xa4\x9f"; color="$COL_LOW"
+    else
+        icon="\xf3\xb0\xa4\xaf"; color="$COL_LOW"
+    fi
+    label="$essid"
+else
+    icon="\xf3\xb0\x88\x80"
+    color="$COL_OK"
+    speed_mbps=$(cat "/sys/class/net/$iface/speed" 2>/dev/null)
+    if [ -n "$speed_mbps" ] && [ "$speed_mbps" -gt 0 ] 2>/dev/null; then
+        label="Ethernet ${speed_mbps}M"
+    else
+        label="Ethernet"
+    fi
+fi
+
+# --- Throughput (down/up) ----------------------------------------------
+rx_now=$(cat "/sys/class/net/$iface/statistics/rx_bytes" 2>/dev/null)
+tx_now=$(cat "/sys/class/net/$iface/statistics/tx_bytes" 2>/dev/null)
+now=$(date +%s.%N)
+
+down_fmt="0 B/s"
+up_fmt="0 B/s"
+
+if [ -f "$STATE_FILE" ]; then
+    read -r prev_ts prev_iface prev_rx prev_tx < "$STATE_FILE"
+    if [ "$prev_iface" = "$iface" ] && [ -n "$rx_now" ] && [ -n "$tx_now" ]; then
+        eval "$(awk -v now="$now" -v prev="$prev_ts" -v rx="$rx_now" -v prx="$prev_rx" \
+                    -v tx="$tx_now" -v ptx="$prev_tx" 'BEGIN {
+            dt = now - prev
+            if (dt <= 0) dt = 1
+            drx = (rx - prx) / dt
+            dtx = (tx - ptx) / dt
+            if (drx < 0) drx = 0
+            if (dtx < 0) dtx = 0
+
+            fmt = "%.0f B/s"
+            if (drx >= 1048576) { drx /= 1048576; fmt = "%.1f MB/s" }
+            else if (drx >= 1024) { drx /= 1024; fmt = "%.0f KB/s" }
+            printf "down_fmt=\"" fmt "\"\n", drx
+
+            fmt = "%.0f B/s"
+            if (dtx >= 1048576) { dtx /= 1048576; fmt = "%.1f MB/s" }
+            else if (dtx >= 1024) { dtx /= 1024; fmt = "%.0f KB/s" }
+            printf "up_fmt=\"" fmt "\"\n", dtx
+        }')"
+    fi
+fi
+
+printf '%s %s %s %s\n' "$now" "$iface" "$rx_now" "$tx_now" > "$STATE_FILE"
+
+printf "%%{F%s}%b%%{F-} %s  %%{F%s}\xe2\x86\x93%%{F-} %s  %%{F%s}\xe2\x86\x91%%{F-} %s\n" \
+    "$color" "$icon" "$label" "$COL_MUTED" "$down_fmt" "$COL_MUTED" "$up_fmt"
