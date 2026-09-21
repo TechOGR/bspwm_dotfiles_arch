@@ -1,28 +1,36 @@
 #!/bin/sh
 # =============================================================
-# NetworkPolybar - cyberpunk HUD network status for polybar
+# NetworkPolybar - wifi/ethernet-aware network status for polybar
 #
-# Shows a signal-strength ramp icon for Wi-Fi (outline -> 4 bars,
-# matching the same MDI wifi_strength_* glyphs already offered by
-# config/bspwm/config/NetManagerDM.ini), a dedicated ethernet icon
-# when wired, the active SSID/interface, and a live down/up
-# throughput readout computed from /sys/class/net statistics.
+# Shows a signal-strength ramp icon for Wi-Fi (outline -> 4 bars) or
+# a dedicated icon when wired, plus a live "EKG" sparkline built from
+# recent throughput samples (rx+tx bytes/sec) rendered with Unicode
+# block glyphs -- it autoscales to the recent peak, so it reads as a
+# real heart-monitor trace: flat when idle, spiking with traffic.
+# When offline it draws a dim, flat line (flatlined), instead of
+# just text, to keep the same visual language.
 #
-# Self-hides as a clear red "Offline" pill when no interface has
-# an active link, instead of printing stale/garbage data.
-#
-# Dependencies: iproute2 (ip), NetworkManager (nmcli) for the SSID
-# and signal reading. Falls back gracefully if nmcli is missing.
+# Dependencies: iproute2 (ip), NetworkManager (nmcli) for Wi-Fi
+# signal/SSID. Falls back gracefully if nmcli is missing.
 # =============================================================
 
 CACHE_DIR="$HOME/.cache/$USER"
 STATE_FILE="$CACHE_DIR/network_prev"
+HISTORY_FILE="$CACHE_DIR/network_ecg"
+HISTORY_LEN=12
 mkdir -p "$CACHE_DIR"
 
-COL_OK="#00F0FF"
-COL_MID="#FFE347"
-COL_LOW="#FF2D55"
-COL_MUTED="#5C6390"
+COL_OK="#9ece6a"
+COL_MID="#e0af68"
+COL_LOW="#f7768e"
+COL_LINE="#9ece6a"
+COL_FLAT="#3b3d52"
+
+BLOCKS="▁▂▃▄▅▆▇█"
+
+flatline() {
+    awk -v n="$HISTORY_LEN" 'BEGIN{for(i=0;i<n;i++) printf "▁"}'
+}
 
 # Active interface = the one the default route would use. This
 # works fully offline too since it only consults the local routing
@@ -39,83 +47,88 @@ if [ -z "$iface" ]; then
 fi
 
 if [ -z "$iface" ]; then
-    printf "%%{F%s}\xf3\xb0\x96\xaa%%{F-} Offline\n" "$COL_LOW"
-    rm -f "$STATE_FILE"
+    printf "%%{F%s}\xf3\xb0\x96\xaa%%{F-} %%{F%s}%s%%{F-}\n" "$COL_LOW" "$COL_FLAT" "$(flatline)"
+    rm -f "$STATE_FILE" "$HISTORY_FILE"
     exit 0
 fi
 
 is_wifi=0
 [ -d "/sys/class/net/$iface/wireless" ] && is_wifi=1
 
-# --- Label + dynamic signal-ramp icon ---------------------------------
+# --- Icon: signal-ramp for Wi-Fi, dedicated glyph for Ethernet --------
 if [ "$is_wifi" -eq 1 ]; then
     signal=""
-    essid=""
     if command -v nmcli >/dev/null 2>&1; then
-        line=$(nmcli -t -f active,signal,ssid dev wifi 2>/dev/null | awk -F: '$1=="yes"{print; exit}')
-        signal=$(printf '%s' "$line" | cut -d: -f2)
-        essid=$(printf '%s' "$line" | cut -d: -f3-)
+        signal=$(nmcli -t -f active,signal dev wifi 2>/dev/null | awk -F: '$1=="yes"{print $2; exit}')
     fi
-    [ -z "$essid" ] && essid="$iface"
     signal=${signal:-0}
 
     if [ "$signal" -ge 76 ]; then
-        icon="\xf3\xb0\xa4\xa8"; color="$COL_OK"
+        icon="\xf3\xb0\xa4\xa8"; icon_color="$COL_OK"
     elif [ "$signal" -ge 51 ]; then
-        icon="\xf3\xb0\xa4\xa5"; color="$COL_OK"
+        icon="\xf3\xb0\xa4\xa5"; icon_color="$COL_OK"
     elif [ "$signal" -ge 26 ]; then
-        icon="\xf3\xb0\xa4\xa2"; color="$COL_MID"
+        icon="\xf3\xb0\xa4\xa2"; icon_color="$COL_MID"
     elif [ "$signal" -ge 1 ]; then
-        icon="\xf3\xb0\xa4\x9f"; color="$COL_LOW"
+        icon="\xf3\xb0\xa4\x9f"; icon_color="$COL_LOW"
     else
-        icon="\xf3\xb0\xa4\xaf"; color="$COL_LOW"
+        icon="\xf3\xb0\xa4\xaf"; icon_color="$COL_LOW"
     fi
-    label="$essid"
 else
     icon="\xf3\xb0\x88\x80"
-    color="$COL_OK"
-    speed_mbps=$(cat "/sys/class/net/$iface/speed" 2>/dev/null)
-    if [ -n "$speed_mbps" ] && [ "$speed_mbps" -gt 0 ] 2>/dev/null; then
-        label="Ethernet ${speed_mbps}M"
-    else
-        label="Ethernet"
-    fi
+    icon_color="$COL_OK"
 fi
 
-# --- Throughput (down/up) ----------------------------------------------
+# --- Throughput sample (rx+tx bytes/sec) -------------------------------
 rx_now=$(cat "/sys/class/net/$iface/statistics/rx_bytes" 2>/dev/null)
 tx_now=$(cat "/sys/class/net/$iface/statistics/tx_bytes" 2>/dev/null)
 now=$(date +%s.%N)
 
-down_fmt="0 B/s"
-up_fmt="0 B/s"
-
+rate=0
 if [ -f "$STATE_FILE" ]; then
     read -r prev_ts prev_iface prev_rx prev_tx < "$STATE_FILE"
     if [ "$prev_iface" = "$iface" ] && [ -n "$rx_now" ] && [ -n "$tx_now" ]; then
-        eval "$(awk -v now="$now" -v prev="$prev_ts" -v rx="$rx_now" -v prx="$prev_rx" \
-                    -v tx="$tx_now" -v ptx="$prev_tx" 'BEGIN {
+        rate=$(awk -v now="$now" -v prev="$prev_ts" -v rx="$rx_now" -v prx="$prev_rx" \
+                   -v tx="$tx_now" -v ptx="$prev_tx" 'BEGIN {
             dt = now - prev
             if (dt <= 0) dt = 1
-            drx = (rx - prx) / dt
-            dtx = (tx - ptx) / dt
-            if (drx < 0) drx = 0
-            if (dtx < 0) dtx = 0
-
-            fmt = "%.0f B/s"
-            if (drx >= 1048576) { drx /= 1048576; fmt = "%.1f MB/s" }
-            else if (drx >= 1024) { drx /= 1024; fmt = "%.0f KB/s" }
-            printf "down_fmt=\"" fmt "\"\n", drx
-
-            fmt = "%.0f B/s"
-            if (dtx >= 1048576) { dtx /= 1048576; fmt = "%.1f MB/s" }
-            else if (dtx >= 1024) { dtx /= 1024; fmt = "%.0f KB/s" }
-            printf "up_fmt=\"" fmt "\"\n", dtx
-        }')"
+            d = ((rx - prx) + (tx - ptx)) / dt
+            if (d < 0) d = 0
+            printf "%.0f", d
+        }')
     fi
 fi
-
 printf '%s %s %s %s\n' "$now" "$iface" "$rx_now" "$tx_now" > "$STATE_FILE"
 
-printf "%%{F%s}%b%%{F-} %s  %%{F%s}\xe2\x86\x93%%{F-} %s  %%{F%s}\xe2\x86\x91%%{F-} %s\n" \
-    "$color" "$icon" "$label" "$COL_MUTED" "$down_fmt" "$COL_MUTED" "$up_fmt"
+# --- Rolling history -> EKG-style sparkline -----------------------------
+hist=$(cat "$HISTORY_FILE" 2>/dev/null)
+hist=$(printf '%s %s' "$hist" "$rate" | awk -v n="$HISTORY_LEN" '{
+    for (i = 1; i <= NF; i++) a[i] = $i
+    start = NF - n + 1
+    if (start < 1) start = 1
+    out = ""
+    for (i = start; i <= NF; i++) out = out (out == "" ? "" : " ") a[i]
+    print out
+}')
+printf '%s\n' "$hist" > "$HISTORY_FILE"
+
+line=$(printf '%s\n' "$hist" | awk -v blocks="$BLOCKS" '
+BEGIN {
+    n = split(blocks, b, "")
+}
+{
+    max = 1
+    for (i = 1; i <= NF; i++) if ($i > max) max = $i
+    for (i = 1; i <= NF; i++) {
+        idx = int(($i / max) * (n - 1)) + 1
+        if (idx > n) idx = n
+        if (idx < 1) idx = 1
+        printf "%s", b[idx]
+    }
+}')
+
+count=$(printf '%s\n' "$hist" | wc -w)
+pad=$((HISTORY_LEN - count))
+[ "$pad" -gt 0 ] && padding=$(awk -v n="$pad" 'BEGIN{for(i=0;i<n;i++) printf "▁"}') || padding=""
+
+printf "%%{F%s}%b%%{F-} %%{F%s}%s%s%%{F-}\n" "$icon_color" "$icon" "$COL_LINE" "$padding" "$line"

@@ -51,7 +51,7 @@ sysmonitor||Monitor|Abre el monitor de procesos del sistema|0|bar
 caffeine||Modo despierto|Evita que la pantalla se apague|0|bar
 workspace_preview||Preview de workspaces|Miniatura al pasar el mouse sobre el selector de escritorios|0|service
 date||Fecha y hora|Reloj del sistema|1|bar
-tray||Bandeja|Iconos de apps en segundo plano|1|bar
+tray||Bandeja|Iconos de apps en segundo plano|0|bar
 power||Energía|Menú de apagado / reinicio|1|bar
 modules_help||Ayuda de módulos|Abre este mismo listado|1|bar
 '
