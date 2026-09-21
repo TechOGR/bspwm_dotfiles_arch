@@ -10,5 +10,6 @@ _write "$HOME/.config/bspwm/config/rofi-themes/shared.rasi" <<-EOF
     selected: ${rofi_selected};
     active: ${rofi_active};
     urgent: ${rofi_urgent};
+    border: ${rofi_border};
 }
 EOF

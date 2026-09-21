@@ -72,6 +72,7 @@ rofi_fg="$fg"
 rofi_selected="$blue"
 rofi_active="$green"
 rofi_urgent="$red"
+rofi_border="$cyan"
 
 # Screenlocker
 sl_bg="${bg}"
