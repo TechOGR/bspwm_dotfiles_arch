@@ -17,7 +17,7 @@
 CACHE_DIR="$HOME/.cache/$USER"
 STATE_FILE="$CACHE_DIR/network_prev"
 HISTORY_FILE="$CACHE_DIR/network_ecg"
-HISTORY_LEN=12
+HISTORY_LEN=9
 mkdir -p "$CACHE_DIR"
 
 COL_OK="#9ece6a"
