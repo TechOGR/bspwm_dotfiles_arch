@@ -25,6 +25,7 @@ COL_MID="#e0af68"
 COL_LOW="#f7768e"
 COL_LINE="#9ece6a"
 COL_FLAT="#3b3d52"
+COL_SPEED="#6D8895"
 
 BLOCKS="▁▂▃▄▅▆▇█"
 
@@ -47,7 +48,8 @@ if [ -z "$iface" ]; then
 fi
 
 if [ -z "$iface" ]; then
-    printf "%%{F%s}\xf3\xb0\x96\xaa%%{F-} %%{F%s}%s%%{F-}\n" "$COL_LOW" "$COL_FLAT" "$(flatline)"
+    printf "%%{F%s}\xf3\xb0\x96\xaa%%{F-} %%{F%s}%s%%{F-} %%{F%s}off%%{F-}\n" \
+        "$COL_LOW" "$COL_FLAT" "$(flatline)" "$COL_FLAT"
     rm -f "$STATE_FILE" "$HISTORY_FILE"
     exit 0
 fi
@@ -131,4 +133,13 @@ count=$(printf '%s\n' "$hist" | wc -w)
 pad=$((HISTORY_LEN - count))
 [ "$pad" -gt 0 ] && padding=$(awk -v n="$pad" 'BEGIN{for(i=0;i<n;i++) printf "▁"}') || padding=""
 
-printf "%%{F%s}%b%%{F-} %%{F%s}%s%s%%{F-}\n" "$icon_color" "$icon" "$COL_LINE" "$padding" "$line"
+# --- Combined rx+tx speed, right next to the trace ----------------------
+speed=$(awk -v d="$rate" 'BEGIN {
+    fmt = "%.0f B/s"
+    if (d >= 1048576) { d /= 1048576; fmt = "%.1f MB/s" }
+    else if (d >= 1024) { d /= 1024; fmt = "%.0f KB/s" }
+    printf fmt, d
+}')
+
+printf "%%{F%s}%b%%{F-} %%{F%s}%s%s%%{F-} %%{F%s}%s%%{F-}\n" \
+    "$icon_color" "$icon" "$COL_LINE" "$padding" "$line" "$COL_SPEED" "$speed"
