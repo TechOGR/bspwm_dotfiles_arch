@@ -18,7 +18,9 @@ window {
     y-offset:                    0px;
 
     background-color:            @background;
-    //border-radius: 				 6px;
+    border:                      2px;
+    border-color:                @border;
+    border-radius:               14px;
 }
 
 mainbox {
@@ -87,8 +89,8 @@ element {
     enabled:                     true;
     padding:                     40px 10px;
     border:                      1px solid;
-    border-radius:               6px;
-    border-color:                @selected;
+    border-radius:               10px;
+    border-color:                @border;
     background-color:            @background;
     text-color:                  @foreground;
     cursor:                      pointer;

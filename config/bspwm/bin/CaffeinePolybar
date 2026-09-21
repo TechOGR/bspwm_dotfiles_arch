@@ -1,0 +1,56 @@
+#!/bin/sh
+# =============================================================
+# CaffeinePolybar - idle/screen-blank inhibitor toggle for polybar
+#
+# Keeps the display from blanking (DPMS + X screensaver) while
+# active, useful for watching videos or presenting without the
+# screen dropping out. State is tracked in a small cache file so
+# the module reflects it on every poll.
+#
+# Usage:
+#   CaffeinePolybar            print current status (polling)
+#   CaffeinePolybar --toggle   flip the inhibitor on/off
+# =============================================================
+
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}"
+STATE_FILE="$CACHE_DIR/caffeine_state"
+mkdir -p "$CACHE_DIR"
+
+COL_AWAKE="#FBC02D"
+COL_IDLE="#8C8C8C"
+
+ICON_AWAKE="\xf3\xb0\x85\xb6"
+ICON_IDLE="\xf3\xb0\xbe\xaa"
+
+notify() {
+    dunstify -u low -h string:x-dunst-stack-tag:ccaffeine "$@"
+}
+
+is_awake() {
+    [ -f "$STATE_FILE" ] && [ "$(cat "$STATE_FILE")" = "on" ]
+}
+
+print_status() {
+    if is_awake; then
+        printf "%%{F%s}%b%%{F-}\n" "$COL_AWAKE" "$ICON_AWAKE"
+    else
+        printf "%%{F%s}%b%%{F-}\n" "$COL_IDLE" "$ICON_IDLE"
+    fi
+}
+
+case "$1" in
+    --toggle)
+        if is_awake; then
+            xset s default +dpms >/dev/null 2>&1
+            echo "off" > "$STATE_FILE"
+            notify "Ahorro de pantalla: activado"
+        else
+            xset s off -dpms >/dev/null 2>&1
+            echo "on" > "$STATE_FILE"
+            notify "Ahorro de pantalla: inhibido"
+        fi
+        ;;
+    *)
+        print_status
+        ;;
+esac

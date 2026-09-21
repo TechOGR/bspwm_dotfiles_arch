@@ -38,12 +38,17 @@ mplayer||Reproductor|Accesos directos al panel de reproducción|0|bar
 bluetooth||Bluetooth|Estado del adaptador Bluetooth|0|bar
 network||Red|Estado y velocidad de red|0|bar
 pulseaudio||Volumen|Control y nivel de audio|0|bar
+mic||Micrófono|Silenciar/activar el micrófono|0|bar
 battery||Batería|Nivel y estado de carga|0|bar
 updates||Actualizaciones|Paquetes pendientes de actualizar|0|bar
 weather||Clima|Temperatura y clima actual|0|bar
 brightness||Brillo|Nivel de brillo de pantalla|0|bar
 xkeyboard||Teclado|Diseño de teclado activo|0|bar
 colorpicker||Selector de color|Captura colores en pantalla|0|bar
+clipboard||Portapapeles|Historial de portapapeles (clipcat)|0|bar
+screenshot||Captura|Herramienta de captura de pantalla|0|bar
+sysmonitor||Monitor|Abre el monitor de procesos del sistema|0|bar
+caffeine||Modo despierto|Evita que la pantalla se apague|0|bar
 workspace_preview||Preview de workspaces|Miniatura al pasar el mouse sobre el selector de escritorios|0|service
 date||Fecha y hora|Reloj del sistema|1|bar
 tray||Bandeja|Iconos de apps en segundo plano|1|bar

@@ -36,7 +36,7 @@ term_font_name="JetBrainsMono Nerd Font"
 P_FADE="true"			# Fade true|false
 P_SHADOWS="true"		# Shadows true|false
 SHADOW_C="#000000"		# Shadow color
-P_CORNER_R="8"			# Corner radius (0 = disabled)
+P_CORNER_R="10"			# Corner radius (0 = disabled)
 P_BLUR="true"			# Blur true|false
 P_ANIMATIONS="@"		# (@ = enable) (# = disable)
 P_TERM_OPACITY="1.0"	# Terminal transparency. Range: 0.1 - 1.0 (1.0 = disabled)

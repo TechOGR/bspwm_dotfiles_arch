@@ -1,0 +1,48 @@
+#!/bin/sh
+# =============================================================
+# MicPolybar - microphone mute indicator/toggle for polybar
+#
+# Reads and toggles the mute state of the default input source via
+# pamixer. Self-hides (prints nothing) when the system has no
+# capture device at all, so it simply disappears from the bar on
+# machines/VMs without a microphone.
+#
+# Usage:
+#   MicPolybar            print current status (polling)
+#   MicPolybar --toggle   toggle mute and notify
+# =============================================================
+
+command -v pamixer >/dev/null 2>&1 || exit 0
+pamixer --default-source --get-mute >/dev/null 2>&1 || exit 0
+
+COL_LIVE="#7dcfff"
+COL_MUTED="#f7768e"
+
+ICON_LIVE="\xf3\xb0\x8d\xac"
+ICON_MUTED="\xf3\xb0\x8d\xad"
+
+notify() {
+    dunstify -u low -h string:x-dunst-stack-tag:cmic "$@"
+}
+
+print_status() {
+    if [ "$(pamixer --default-source --get-mute)" = "true" ]; then
+        printf "%%{F%s}%b%%{F-}\n" "$COL_MUTED" "$ICON_MUTED"
+    else
+        printf "%%{F%s}%b%%{F-}\n" "$COL_LIVE" "$ICON_LIVE"
+    fi
+}
+
+case "$1" in
+    --toggle)
+        pamixer --default-source --toggle-mute >/dev/null 2>&1
+        if [ "$(pamixer --default-source --get-mute)" = "true" ]; then
+            notify -i "microphone-off" "Micrófono silenciado"
+        else
+            notify -i "microphone" "Micrófono activo"
+        fi
+        ;;
+    *)
+        print_status
+        ;;
+esac

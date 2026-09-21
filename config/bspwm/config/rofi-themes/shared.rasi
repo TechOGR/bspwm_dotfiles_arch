@@ -7,4 +7,8 @@
     selected: #7aa2f7;
     active: #9ece6a;
     urgent: #f7768e;
+    /* Neon outline colour, matches the polybar bar border so every
+       floating HUD surface (bar, rofi menus, popups) reads as one
+       consistent futuristic system instead of separate widgets. */
+    border: #7dcfff;
 }
