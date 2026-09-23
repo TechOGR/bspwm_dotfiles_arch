@@ -1,0 +1,397 @@
+#!/usr/bin/env python3
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# KeyHelp - keybindings HUD (Alt + F1)
+#   ✔ Read live from sxhkdrc: add a binding and it shows up here
+#   ✔ Sections and descriptions come from the file's comments
+#   ✔ Keys rendered as keycaps, instant search, palette themed
+#   ✔ Alt + F1 again (or Esc) closes it
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+import os
+import re
+import sys
+import math
+import time
+
+sys.path.insert(0, os.path.expanduser('~/.config/bspwm/lib'))
+import riceui as ui  # noqa: E402
+from riceui import Gtk, Gdk, GLib, cairo  # noqa: E402
+
+SXHKDRC = os.path.join(ui.BSPWM, 'config/sxhkdrc')
+
+KEYNAMES = {
+    'super': 'SUPER', 'alt': 'ALT', 'ctrl': 'CTRL', 'shift': '⇧ SHIFT', 'return': '⏎ ENTER',
+    'space': '␣ SPACE', 'escape': 'ESC', 'tab': '⇥ TAB', 'left': '←', 'right': '→', 'up': '↑',
+    'down': '↓', 'plus': '+', 'minus': '−', 'comma': ',', 'period': '.', 'button1': 'LMB',
+    'button2': 'MMB', 'button3': 'RMB', 'print': 'PRINT', 'backspace': '⌫', 'delete': 'DEL',
+}
+MEDIA = {'raisevolume': 'VOL +', 'lowervolume': 'VOL −', 'mute': 'MUTE', 'next': '⏭ NEXT',
+         'prev': '⏮ PREV', 'play': '⏯ PLAY', 'stop': '⏹ STOP', 'up': 'BRIGHT +', 'down': 'BRIGHT −'}
+
+
+def pretty_key(k):
+    k = k.strip().lstrip('@~')
+    if ' ' in k:  # "shift comma" (a missing "+" in sxhkdrc) -> SHIFT+,
+        return '+'.join(p for p in (pretty_key(x) for x in k.split()) if p)
+    if not k or k == '_':
+        return ''
+    low = k.lower()
+    for prefix in ('xf86audio', 'xf86monbrightness'):
+        if low.startswith(prefix):
+            return MEDIA.get(low[len(prefix):], k[len(prefix):].upper())
+    return KEYNAMES.get(low, k.upper() if len(k) <= 2 else k.capitalize())
+
+
+def split_top(s, sep):
+    """Split on sep outside {braces}."""
+    parts, depth, cur = [], 0, ''
+    for ch in s:
+        depth += ch == '{'
+        depth -= ch == '}'
+        if ch == sep and depth == 0:
+            parts.append(cur)
+            cur = ''
+        else:
+            cur += ch
+    parts.append(cur)
+    return parts
+
+
+def expand(tok):
+    """All the alternatives of a sxhkd token: '{_,ctrl + }{1-9,0}' -> 4 strings."""
+    m = re.search(r'\{([^{}]*)\}', tok)
+    if not m:
+        return [tok]
+    out = []
+    for alt in m.group(1).split(','):
+        alt = '' if alt.strip() == '_' else alt
+        out += expand(tok[:m.start()] + alt + tok[m.end():])
+    return out
+
+
+def token_caps(tok):
+    """'super' -> 'SUPER', '{_,alt + }Return' -> '⏎ ENTER / ALT+⏎ ENTER'."""
+    if '{' not in tok:
+        return pretty_key(tok)
+    alts = []
+    for full in expand(tok.strip()):
+        keys = [full.strip()] if re.fullmatch(r'\s*\d+-\d+\s*', full) else \
+            [pretty_key(x) for x in full.split('+')]
+        a = '+'.join(k for k in keys if k) or '·'
+        if a not in alts:
+            alts.append(a)
+    return ' / '.join(alts)
+
+
+def binding_caps(line):
+    caps = []
+    for n, chord in enumerate(split_top(line, ';')):
+        if n:
+            caps.append('THEN')
+        caps += [c for c in (token_caps(t) for t in split_top(chord, '+')) if c]
+    return caps
+
+
+def parse_sxhkdrc():
+    sections, cur = [], None
+    comment = ''
+    last_desc = ''
+    try:
+        lines = open(SXHKDRC).read().splitlines()
+    except OSError:
+        return []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        s = line.strip()
+        title = None
+        m = re.match(r'^#\s*-+\s*(.+?)\s*-+\s*#?$', s)
+        if m:
+            title = m.group(1)
+        elif re.fullmatch(r'#{5,}', s) and i + 1 < len(lines):
+            m2 = re.match(r'^#\s*(.+?)\s*#$', lines[i + 1].strip())
+            if m2 and not re.fullmatch(r'#+', m2.group(1)):
+                title = m2.group(1).strip('- ')
+                i += 2
+        if title:
+            cur = {'title': title.upper(), 'items': []}
+            sections.append(cur)
+            comment = last_desc = ''
+            i += 1
+            continue
+        if s.startswith('#'):
+            txt = s.lstrip('#').strip()
+            if txt and not comment and not re.fullmatch(r'[#█╔╗╚╝═║ ]+', txt) \
+                    and not txt.lower().startswith(('author', 'dotfiles', 'gh0stzk', 'techogr')):
+                comment = txt  # first line of a comment block
+            i += 1
+            continue
+        if s and not line[0].isspace():
+            # binding line; command is the following indented block
+            cmd = []
+            j = i + 1
+            while j < len(lines) and lines[j][:1].isspace() and lines[j].strip():
+                cmd.append(lines[j].strip().rstrip('\\').strip())
+                j += 1
+            if cur is None:
+                cur = {'title': 'GENERAL', 'items': []}
+                sections.append(cur)
+            # no comment: reuse the one of the group above, else the command
+            desc = comment or last_desc or (cmd[0].split()[0] if cmd else 'Run command')
+            cur['items'].append({'desc': desc, 'keys': binding_caps(s),
+                                 'cmd': ' '.join(cmd), 'raw': s})
+            last_desc = comment or last_desc
+            comment = ''
+            i = j
+            continue
+        i += 1
+    return [sec for sec in sections if sec['items']]
+
+
+class Header(Gtk.DrawingArea):
+    def __init__(self, win):
+        super().__init__()
+        self.win = win
+        self.set_size_request(-1, 86)
+        self.connect('draw', self.on_draw)
+
+    def on_draw(self, w, cr):
+        W = w.get_allocated_width()
+        c = self.win.c
+        now = time.monotonic()
+        ui.text(cr, '󰌌', 0, 6, 26, (*c['magenta'], 1))
+        ui.text(cr, 'KEYBINDINGS', 56, 4, 24, (*c['fg'], 1), bold=True, spacing=6)
+        ui.text(cr, f'{self.win.total} SHORTCUTS · LIVE FROM ~/.config/bspwm/config/sxhkdrc',
+                58, 46, 8, (*c['fg'], 0.45), spacing=2)
+        ui.text(cr, 'ESC / ALT+F1  CLOSE', W, 14, 9, (*c['blue'], 0.9), bold=True, align='right', spacing=2)
+        y = 76
+        lg = cairo.LinearGradient(0, 0, W, 0)
+        lg.add_color_stop_rgba(0, *c['blue'], 0.9)
+        lg.add_color_stop_rgba(0.5, *c['magenta'], 0.4)
+        lg.add_color_stop_rgba(1, *c['blue'], 0.05)
+        cr.rectangle(0, y, W, 1)
+        cr.set_source(lg)
+        cr.fill()
+        sx = ((now * 0.3) % 1.0) * W
+        cr.arc(sx, y + 0.5, 2.5, 0, 2 * math.pi)
+        cr.set_source_rgba(*c['magenta'], 1)
+        cr.fill()
+        return True
+
+
+class KeyHelp(Gtk.Window):
+    def __init__(self):
+        super().__init__(type=Gtk.WindowType.POPUP)
+        self.set_title('KeyHelp')
+        ui.rgba_window(self)
+        geo = ui.monitor_geometry()
+        self.move(geo.x, geo.y)
+        self.set_default_size(geo.width, geo.height)
+        self.set_size_request(geo.width, geo.height)
+        self.set_resizable(False)
+        self.W, self.H = geo.width, geo.height
+        self.pal = ui.load_palette()
+        self.c = ui.rgb_palette(self.pal)
+        self.bg = ui.backdrop(self.W, self.H, self.pal, darken=0.7)
+        self.alpha = 0.0
+        self.t0 = time.monotonic()
+        self.closing = None
+
+        css = Gtk.CssProvider()
+        css.load_from_data((ui.hud_css(self.pal) + f'''
+.hud .card {{
+    background-color: alpha(@bg, 0.78);
+    border: 1px solid alpha(@accent, 0.20); border-radius: 16px; padding: 14px 16px;
+}}
+.hud .card:hover {{ border-color: alpha(@accent, 0.45); box-shadow: 0 0 20px alpha(@accent, 0.12); }}
+.hud .sec-title {{ color: @accent; font-weight: 800; font-size: 9pt; letter-spacing: 3px; }}
+.hud .sec-icon {{ color: @accent2; font-size: 11pt; }}
+.hud .sec-count {{ color: alpha(@fg, 0.35); font-size: 8pt; }}
+.hud .krow {{ padding: 6px 4px; border-radius: 8px; }}
+.hud .krow:hover {{ background-color: alpha(@accent, 0.08); }}
+.hud .kdesc {{ font-size: 9.5pt; }}
+.hud .kcmd {{ font-size: 7.5pt; color: alpha(@fg, 0.32); }}
+.hud .kcap {{
+    background-image: linear-gradient(to bottom, alpha(@fg, 0.10), alpha(@fg, 0.03));
+    border: 1px solid alpha(@accent, 0.40); border-bottom-width: 3px;
+    border-radius: 7px; padding: 2px 8px; margin-left: 4px;
+    color: @cyan; font-size: 8pt; font-weight: bold;
+}}
+.hud .kthen {{ color: alpha(@fg, 0.4); font-size: 7pt; margin-left: 4px; }}
+.hud .empty {{ color: alpha(@fg, 0.5); font-size: 12pt; }}
+''').encode())
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css,
+                                                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 2)
+
+        self.sections = parse_sxhkdrc()
+        self.total = sum(len(s['items']) for s in self.sections)
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        root.get_style_context().add_class('hud')
+        mx = max(40, int(self.W * 0.06))
+        root.set_margin_start(mx)
+        root.set_margin_end(mx)
+        root.set_margin_top(34)
+        root.set_margin_bottom(28)
+        self.add(root)
+        root.pack_start(Header(self), False, False, 0)
+
+        self.search = Gtk.SearchEntry()
+        self.search.get_style_context().add_class('search')
+        self.search.set_placeholder_text('Search a shortcut, a key or a command…')
+        self.search.connect('search-changed', lambda e: self.filter(e.get_text()))
+        root.pack_start(self.search, False, False, 0)
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        root.pack_start(scroll, True, True, 0)
+        wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        scroll.add(wrap)
+        self.columns = Gtk.Box(spacing=16, homogeneous=True)
+        wrap.pack_start(self.columns, False, False, 0)
+        self.empty = Gtk.Label(label='Nothing matches that search')
+        self.empty.get_style_context().add_class('empty')
+        self.empty.set_no_show_all(True)
+        wrap.pack_start(self.empty, False, False, 40)
+
+        self.cards = []
+        ncols = 3 if self.W >= 1500 else 2
+        cols = [Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16) for _ in range(ncols)]
+        heights = [0] * ncols
+        icons = ['󰀻', '󰖲', '󰍉', '󰌾', '󰕾', '󰁌', '󰆾', '󰙵', '󰍹', '󰘔']
+        for n, sec in enumerate(self.sections):
+            card = self.build_card(sec, icons[n % len(icons)])
+            k = heights.index(min(heights))
+            cols[k].pack_start(card[0], False, False, 0)
+            heights[k] += len(sec['items']) + 2
+            self.cards.append(card)
+        for col in cols:
+            self.columns.pack_start(col, True, True, 0)
+
+        self.add_events(Gdk.EventMask.KEY_PRESS_MASK | Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.connect('draw', self.on_draw)
+        self.connect('key-press-event', self.on_key)
+        self.connect('button-press-event', self.on_click)
+        self.connect('map-event', lambda *_: (ui.grab_input(self), self.search.grab_focus()))
+        self.connect('destroy', Gtk.main_quit)
+        self.add_tick_callback(self.on_tick)
+
+    def build_card(self, sec, icon):
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        card.get_style_context().add_class('card')
+        head = Gtk.Box(spacing=10)
+        ic = Gtk.Label(label=icon)
+        ic.get_style_context().add_class('sec-icon')
+        head.pack_start(ic, False, False, 0)
+        t = Gtk.Label(label=sec['title'], xalign=0)
+        t.get_style_context().add_class('sec-title')
+        head.pack_start(t, False, False, 0)
+        cnt = Gtk.Label(label=f'{len(sec["items"]):02d}')
+        cnt.get_style_context().add_class('sec-count')
+        head.pack_end(cnt, False, False, 0)
+        card.pack_start(head, False, False, 6)
+        rows = []
+        for it in sec['items']:
+            row = Gtk.Box(spacing=10)
+            row.get_style_context().add_class('krow')
+            texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            d = Gtk.Label(label=it['desc'], xalign=0)
+            d.set_line_wrap(True)
+            d.set_max_width_chars(34)
+            d.get_style_context().add_class('kdesc')
+            texts.pack_start(d, False, False, 0)
+            if it['cmd']:
+                cmd = Gtk.Label(label=it['cmd'], xalign=0)
+                cmd.set_ellipsize(ui.Pango.EllipsizeMode.END)
+                cmd.set_max_width_chars(30)
+                cmd.get_style_context().add_class('kcmd')
+                cmd.set_tooltip_text(it['cmd'])
+                texts.pack_start(cmd, False, False, 0)
+            row.pack_start(texts, True, True, 0)
+            box = Gtk.Box()
+            box.set_valign(Gtk.Align.CENTER)
+            for cap in it['keys']:
+                lb = Gtk.Label(label=cap if cap != 'THEN' else '›')
+                lb.get_style_context().add_class('kthen' if cap == 'THEN' else 'kcap')
+                box.pack_start(lb, False, False, 0)
+            row.pack_end(box, False, False, 0)
+            card.pack_start(row, False, False, 0)
+            hay = ' '.join([it['desc'], it['cmd'], it['raw'], *it['keys']]).lower()
+            rows.append((row, hay))
+        return card, rows, sec['title'].lower()
+
+    def filter(self, q):
+        q = q.lower().strip()
+        shown_any = False
+        for card, rows, title in self.cards:
+            visible = 0
+            for row, hay in rows:
+                ok = not q or all(w in hay or w in title for w in q.split())
+                row.set_visible(ok)
+                visible += ok
+            card.set_visible(visible > 0)
+            shown_any |= visible > 0
+        self.empty.set_visible(not shown_any)
+
+    def on_draw(self, _w, cr):
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+        cr.set_source_surface(self.bg, 0, 0)
+        cr.paint()
+        return False  # children are drawn on top; fade handled with set_opacity
+
+    def on_tick(self, *_):
+        now = time.monotonic()
+        if self.closing:
+            a = max(0.0, 1 - (now - self.closing) / 0.18)
+            if a <= 0:
+                self.destroy()
+                return False
+        else:
+            a = min(1.0, (now - self.t0) / 0.2)
+        if abs(a - self.alpha) > 0.001:
+            self.alpha = a
+            self.get_window() and self.get_window().set_opacity(a)
+        return True
+
+    def close(self):
+        if not self.closing:
+            self.closing = time.monotonic()
+
+    def on_key(self, _w, ev):
+        if ev.keyval == Gdk.KEY_Escape:
+            if self.search.get_text():
+                self.search.set_text('')
+            else:
+                self.close()
+            return True
+        if ev.keyval == Gdk.KEY_F1 and ev.state & Gdk.ModifierType.MOD1_MASK:
+            self.close()
+            return True
+        return False
+
+    def on_click(self, _w, ev):
+        if ev.button == 3:
+            self.close()
+        return False
+
+
+def main():
+    GLib.set_prgname('KeyHelp')
+    _lock = ui.single_instance('keyhelp', toggle=True)  # noqa: F841
+    win = KeyHelp()
+    ui.quit_on_sigterm(win.close)
+    win.show_all()
+    Gtk.main()
+
+
+if __name__ == '__main__':
+    main()

@@ -43,6 +43,12 @@ gi.require_version('Gtk', '3.0')
 gi.require_version('PangoCairo', '1.0')
 from gi.repository import Gtk, Gdk, GdkPixbuf, GLib, Pango, PangoCairo  # noqa: E402
 import cairo  # noqa: E402
+from gi.repository import Gio  # noqa: E402
+sys.path.insert(0, os.path.join(os.path.expanduser('~'), '.config/bspwm/lib'))
+try:
+    import riceui  # noqa: E402  (shared with Dock / AppLauncher / KeyHelp)
+except Exception:  # the editor must still open without it
+    riceui = None
 
 HOME = os.path.expanduser('~')
 BSPWM = os.path.join(HOME, '.config/bspwm')
@@ -463,6 +469,25 @@ button.palette.active {{ border: 2px solid @green; box-shadow: 0 0 18px alpha(@g
     background-color: @green; color: @bg; border-radius: 8px; padding: 1px 8px;
     font-size: 7pt; font-weight: 800; letter-spacing: 1px;
 }}
+
+.dock-app {{
+    background-color: alpha(@black, 0.45); border: 1px solid alpha(@fg, 0.06);
+    border-radius: 12px; padding: 6px 10px;
+}}
+.dock-app:hover {{ border-color: alpha(@accent, 0.5); box-shadow: 0 0 14px alpha(@accent, 0.18); }}
+.dock-idx {{ color: @accent2; font-weight: 800; font-size: 8pt; min-width: 22px; }}
+button.icon-btn {{
+    background-image: none; background-color: transparent; border: 1px solid alpha(@fg, 0.1);
+    border-radius: 8px; padding: 2px 8px; color: @fg; box-shadow: none; min-height: 0;
+}}
+button.icon-btn:hover {{ border-color: @accent; color: @accent; }}
+button.icon-btn.remove:hover {{ border-color: @red; color: @red; }}
+button.dock-pick {{
+    background-image: none; background-color: alpha(@black, 0.45); border: 1px solid alpha(@fg, 0.06);
+    border-radius: 12px; padding: 8px 4px; box-shadow: none;
+}}
+button.dock-pick:hover {{ border-color: @green; box-shadow: 0 0 14px alpha(@green, 0.3); }}
+button.dock-pick label {{ font-size: 8pt; }}
 
 button.wall {{
     background: none; border: 2px solid transparent; border-radius: 10px; padding: 2px; box-shadow: none;
@@ -1022,6 +1047,7 @@ class RiceEditor(Gtk.Window):
         ('compositor', '󰨇', 'Compositor', 'PICOM · CORNERS · SHADOWS · BLUR · OPACITY'),
         ('terminal', '󰆍', 'Terminal', 'KITTY · ALACRITTY · GHOSTTY · SHELL'),
         ('wallpaper', '󰸉', 'Wallpaper', 'ENGINE · GALLERY · 3D SELECTOR'),
+        ('dock', '󱂬', 'Dock', 'PINNED APPS · SIZE · BEHAVIOUR'),
         ('notifications', '󰂚', 'Notifications', 'DUNST · PLACEMENT · STYLE · MOTION'),
         ('lockscreen', '󰌾', 'Lockscreen', 'I3LOCK-COLOR · BETTERLOCKSCREEN'),
         ('appearance', '󰉼', 'Appearance', 'GTK · ICONS · CURSOR · ROFI'),
@@ -1081,6 +1107,7 @@ class RiceEditor(Gtk.Window):
             'dashboard': self.page_dashboard, 'palette': self.page_palette,
             'windows': self.page_windows, 'compositor': self.page_compositor,
             'terminal': self.page_terminal, 'wallpaper': self.page_wallpaper,
+            'dock': self.page_dock,
             'notifications': self.page_notifications, 'lockscreen': self.page_lockscreen,
             'appearance': self.page_appearance, 'snapshots': self.page_snapshots,
             'help': self.page_help,
@@ -1446,7 +1473,7 @@ class RiceEditor(Gtk.Window):
         grid = Gtk.Grid(column_spacing=12, row_spacing=12, column_homogeneous=True)
         actions = [
             ('󰸉', 'Wallpapers', '3D selector', lambda: spawn(['WallSelect'])),
-            ('󰏘', 'Rices', 'switch rice', lambda: spawn(['RiceSelector'])),
+            ('󰀻', 'Apps', 'app launcher', lambda: spawn(['OpenApps', '--menu'])),
             ('󰌾', 'Lock', 'lock screen now', lambda: spawn(['ScreenLocker'])),
             ('󰑓', 'Soft reload', 'bars · picom · dunst', self.soft_reload),
             ('󰄀', 'Screenshot', 'ScreenShoTer', lambda: spawn(['ScreenShoTer'])),
@@ -1999,6 +2026,206 @@ class RiceEditor(Gtk.Window):
         return False
 
     # ─────────────────────────────────────────────────── notifications
+    # ──────────────────────────────────────────────────────────── dock
+    def dock_conf(self):
+        return riceui.load_dock_conf()
+
+    def dock_save(self, conf, msg):
+        riceui.save_dock_conf(conf)  # the dock picks it up by itself (mtime)
+        self.toast(msg)
+
+    def dock_set(self, key, value, title):
+        conf = self.dock_conf()
+        conf[key] = value
+        self.dock_save(conf, f'{title} → {value}')
+
+    def dock_enable(self, on):
+        conf = self.dock_conf()
+        conf['enabled'] = on
+        riceui.save_dock_conf(conf)
+        if on:
+            spawn([os.path.join(BIN, 'Dock')])
+        self.toast('Dock enabled' if on else 'Dock disabled')
+
+    def dock_restart(self):
+        def work():
+            subprocess.run([os.path.join(BIN, 'Dock'), '--quit'], timeout=5)
+            time.sleep(0.6)
+            spawn([os.path.join(BIN, 'Dock')])
+        run_bg(work, lambda _r: self.toast('Dock restarted'))
+
+    def page_dock(self):
+        p = self.page()
+        if riceui is None:
+            c = self.card('󱂬', 'Dock')
+            c.pack_start(Gtk.Label(label='~/.config/bspwm/lib/riceui.py is missing', xalign=0), False, False, 0)
+            p.pack_start(c, False, False, 0)
+            return p
+        conf = self.dock_conf()
+        c = self.card('󱂬', 'Dock', 'bottom of the screen · follows the palette')
+        c.pack_start(self.row('Show the dock', 'Also starts with the session',
+                              self.switch(conf.get('enabled', True), self.dock_enable)), False, False, 0)
+        c.pack_start(self.row('Auto-hide', 'Slides away until the pointer touches the bottom edge; '
+                              'windows then use the whole screen',
+                              self.switch(conf.get('autohide'), lambda v: self.dock_set('autohide', v, 'Auto-hide'))),
+                     False, False, 0)
+        c.pack_start(self.row('Magnification', 'Wave zoom of the icons under the pointer',
+                              self.switch(conf.get('magnify', True),
+                                          lambda v: self.dock_set('magnify', v, 'Magnification'))), False, False, 0)
+        c.pack_start(self.row('Launcher button', 'Applications button at the left of the dock',
+                              self.switch(conf.get('show_launcher', True),
+                                          lambda v: self.dock_set('show_launcher', v, 'Launcher button'))),
+                     False, False, 0)
+        sc, lab = self.scale(28, 72, 2, conf.get('icon_size', 44), 0,
+                             lambda v: self.dock_set('icon_size', v, 'Icon size'), fmt=lambda v: f'{int(v)} px',
+                             delay=350)
+        sc.set_size_request(220, -1)
+        c.pack_start(self.row('Icon size', '', sc, lab), False, False, 0)
+        c.pack_start(self.row('Dock process', 'Restart it if something looks off',
+                              self.button('󰑓  Restart dock', 'neon', lambda *_: self.dock_restart())),
+                     False, False, 0)
+        p.pack_start(c, False, False, 0)
+
+        c = self.card('󰐃', 'Pinned apps', 'order = order in the dock')
+        self.dock_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        c.pack_start(self.dock_list, False, False, 4)
+        c.pack_start(self.row('Defaults', 'Brave · Thunar · kitty',
+                              self.button('󰜉  Reset', 'ghost', lambda *_: self.dock_reset())), False, False, 0)
+        p.pack_start(c, False, False, 0)
+
+        c = self.card('󰐕', 'Add apps', 'click to pin')
+        self.dock_search = Gtk.SearchEntry()
+        self.dock_search.set_placeholder_text('search applications…')
+        self.dock_search.connect('search-changed', lambda *_: self.dock_fill_picker())
+        c.pack_start(self.dock_search, False, False, 6)
+        self.dock_flow = Gtk.FlowBox()
+        self.dock_flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.dock_flow.set_homogeneous(True)
+        self.dock_flow.set_min_children_per_line(4)
+        self.dock_flow.set_max_children_per_line(8)
+        self.dock_flow.set_row_spacing(8)
+        self.dock_flow.set_column_spacing(8)
+        c.pack_start(self.dock_flow, False, False, 0)
+        p.pack_start(c, False, False, 0)
+
+        self.dock_all = sorted((a for a in Gio.AppInfo.get_all() if a.should_show() and a.get_id()),
+                               key=lambda a: a.get_display_name().lower())
+        self.dock_fill_list()
+        self.dock_fill_picker()
+        return p
+
+    @staticmethod
+    def app_icon(info, size):
+        img = Gtk.Image()
+        gicon = info.get_icon() if info else None
+        if gicon:
+            img.set_from_gicon(gicon, Gtk.IconSize.DIALOG)
+        else:
+            img.set_from_icon_name('application-x-executable', Gtk.IconSize.DIALOG)
+        img.set_pixel_size(size)
+        return img
+
+    def dock_fill_list(self):
+        for ch in self.dock_list.get_children():
+            ch.destroy()
+        apps = self.dock_conf().get('apps', [])
+        if not apps:
+            lb = Gtk.Label(label='No pinned apps yet: add some below', xalign=0)
+            lb.get_style_context().add_class('dim')
+            self.dock_list.pack_start(lb, False, False, 4)
+        for i, app_id in enumerate(apps):
+            info = Gio.DesktopAppInfo.new(app_id)
+            r = Gtk.Box(spacing=12)
+            r.get_style_context().add_class('dock-app')
+            idx = Gtk.Label(label=f'{i + 1:02d}')
+            idx.get_style_context().add_class('dock-idx')
+            r.pack_start(idx, False, False, 0)
+            r.pack_start(self.app_icon(info, 32), False, False, 0)
+            texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            texts.set_valign(Gtk.Align.CENTER)
+            t = Gtk.Label(label=info.get_display_name() if info else app_id, xalign=0)
+            t.get_style_context().add_class('row-title')
+            texts.pack_start(t, False, False, 0)
+            d = Gtk.Label(label=app_id if info else f'{app_id} · not installed', xalign=0)
+            d.get_style_context().add_class('row-desc')
+            texts.pack_start(d, False, False, 0)
+            r.pack_start(texts, True, True, 0)
+            for icon, tip, cls, cb, ok in (
+                    ('󰅁', 'Move left', 'icon-btn', lambda *_, k=i: self.dock_move(k, -1), i > 0),
+                    ('󰅂', 'Move right', 'icon-btn', lambda *_, k=i: self.dock_move(k, 1), i < len(apps) - 1),
+                    ('󰅖', 'Unpin', 'remove', lambda *_, a=app_id: self.dock_remove(a), True)):
+                b = Gtk.Button(label=icon)
+                b.get_style_context().add_class('icon-btn')
+                if cls != 'icon-btn':
+                    b.get_style_context().add_class(cls)
+                b.set_tooltip_text(tip)
+                b.set_sensitive(ok)
+                b.set_valign(Gtk.Align.CENTER)
+                b.connect('clicked', cb)
+                r.pack_start(b, False, False, 0)
+            self.dock_list.pack_start(r, False, False, 0)
+        self.dock_list.show_all()
+
+    def dock_fill_picker(self):
+        for ch in self.dock_flow.get_children():
+            ch.destroy()
+        q = self.dock_search.get_text().strip().lower()
+        pinned = set(self.dock_conf().get('apps', []))
+        shown = 0
+        for a in self.dock_all:
+            if a.get_id() in pinned:
+                continue
+            if q and q not in a.get_display_name().lower() and q not in a.get_id().lower():
+                continue
+            b = Gtk.Button()
+            b.get_style_context().add_class('dock-pick')
+            b.set_tooltip_text(a.get_description() or a.get_display_name())
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+            box.pack_start(self.app_icon(a, 36), False, False, 0)
+            lb = Gtk.Label(label=a.get_display_name())
+            lb.set_ellipsize(Pango.EllipsizeMode.END)
+            lb.set_max_width_chars(12)
+            box.pack_start(lb, False, False, 0)
+            b.add(box)
+            b.connect('clicked', lambda *_, i=a.get_id(), n=a.get_display_name(): self.dock_add(i, n))
+            self.dock_flow.add(b)
+            shown += 1
+            if shown >= 48:
+                break
+        self.dock_flow.show_all()
+
+    def dock_add(self, app_id, name):
+        conf = self.dock_conf()
+        if app_id not in conf['apps']:
+            conf['apps'].append(app_id)
+        self.dock_save(conf, f'{name} pinned to the dock')
+        self.dock_fill_list()
+        self.dock_fill_picker()
+
+    def dock_remove(self, app_id):
+        conf = self.dock_conf()
+        if app_id in conf['apps']:
+            conf['apps'].remove(app_id)
+        self.dock_save(conf, 'App unpinned')
+        self.dock_fill_list()
+        self.dock_fill_picker()
+
+    def dock_move(self, i, delta):
+        conf = self.dock_conf()
+        apps = conf['apps']
+        j = i + delta
+        if 0 <= j < len(apps):
+            apps[i], apps[j] = apps[j], apps[i]
+            self.dock_save(conf, 'Dock order updated')
+            self.dock_fill_list()
+
+    def dock_reset(self):
+        conf = self.dock_conf()
+        conf['apps'] = list(riceui.DOCK_DEFAULT['apps'])
+        self.dock_save(conf, 'Dock apps reset to defaults')
+        self.dock_fill_list()
+        self.dock_fill_picker()
+
     def page_notifications(self):
         p = self.page()
         cfg = self.cfg
@@ -2342,6 +2569,10 @@ def main():
     GLib.set_prgname('RiceEditor')
     app = RiceEditor()
     app.show_all()
+    if '--section' in sys.argv[1:-1]:
+        key = sys.argv[sys.argv.index('--section') + 1]
+        if key in app.nav:
+            app.go(key)
     Gtk.main()
 
 

@@ -1,0 +1,12 @@
+{
+  "enabled": true,
+  "apps": [
+    "brave-browser.desktop",
+    "thunar.desktop",
+    "kitty.desktop"
+  ],
+  "icon_size": 44,
+  "magnify": true,
+  "autohide": false,
+  "show_launcher": true
+}

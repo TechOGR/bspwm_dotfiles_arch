@@ -1,0 +1,639 @@
+#!/usr/bin/env python3
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# Dock - futuristic bottom dock for the rice
+#   ✔ Pinned apps from ~/.config/bspwm/config/dock.json (edit them in
+#     RiceEditor -> Dock, or right click an app in the launcher)
+#   ✔ Wave magnification, launch bounce, neon glass panel with a light
+#     sweep, HUD tooltips, glowing "running" indicators
+#   ✔ Click: focus / cycle windows or launch · middle: new window ·
+#     right: menu · wheel: cycle windows
+#   ✔ Also shows open apps that are not pinned
+#   ✔ Reserves screen space (or auto-hides) and hides on fullscreen
+#   ✔ Follows the rice palette and dock.json live
+#
+# Usage: Dock [--quit]
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+import os
+import re
+import sys
+import math
+import time
+import signal
+import threading
+import subprocess
+
+sys.path.insert(0, os.path.expanduser('~/.config/bspwm/lib'))
+import riceui as ui  # noqa: E402
+from riceui import Gtk, Gdk, GLib, cairo  # noqa: E402
+from gi.repository import Gio  # noqa: E402
+
+MAGNIFY = 1.55
+MARGIN_BOTTOM = 10
+SWEEP_EVERY = 7.0     # seconds between light sweeps along the panel edge
+SWEEP_DUR = 1.6
+
+
+def app_keys(info):
+    """Lowercase names a window class may use for this app."""
+    keys = set()
+    wm = info.get_startup_wm_class() if hasattr(info, 'get_startup_wm_class') else None
+    if wm:
+        keys.add(wm.lower())
+    if info.get_id():
+        keys.add(info.get_id().lower().removesuffix('.desktop'))
+    exe = info.get_executable()
+    if exe:
+        keys.add(os.path.basename(exe).lower())
+    return keys
+
+
+class Item:
+    def __init__(self, kind, info=None, pinned=True):
+        self.kind = kind          # 'launcher' | 'app' | 'sep'
+        self.info = info
+        self.pinned = pinned
+        self.id = info.get_id() if info else kind
+        self.name = info.get_display_name() if info else ('Applications' if kind == 'launcher' else '')
+        self.keys = app_keys(info) if info else set()
+        self.surface = None
+        self.scale = 1.0
+        self.bounce_t = -10.0
+        self.windows = []
+        self.cx = 0.0             # animated center x
+        self.hover = 0.0          # tooltip fade
+
+
+class Dock(Gtk.Window):
+    def __init__(self):
+        super().__init__()
+        self.set_title('Dock')
+        self.set_wmclass('Dock', 'Dock')
+        self.set_type_hint(Gdk.WindowTypeHint.DOCK)
+        self.set_decorated(False)
+        self.set_skip_taskbar_hint(True)
+        self.set_skip_pager_hint(True)
+        self.set_accept_focus(False)
+        self.set_keep_above(True)
+        self.stick()
+        ui.rgba_window(self)
+
+        self.conf = {}
+        self.conf_mtime = None
+        self.pal_sig = None
+        self.items = []
+        self.windows = {}          # xid -> (instance, class)
+        self.active = None
+        self.pointer = None        # x inside the window, None when away
+        self.shown = 1.0           # 0 hidden (slid down) .. 1 visible
+        self.fullscreen = False
+        self.sweeping = False
+        self.input_rect = None
+        self.app_index = {}
+
+        self.area = Gtk.DrawingArea()
+        self.area.add_events(Gdk.EventMask.POINTER_MOTION_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK |
+                             Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.SCROLL_MASK |
+                             Gdk.EventMask.SMOOTH_SCROLL_MASK)
+        self.area.connect('draw', self.on_draw)
+        self.area.connect('motion-notify-event', self.on_motion)
+        self.area.connect('leave-notify-event', self.on_leave)
+        self.area.connect('button-press-event', self.on_button)
+        self.area.connect('scroll-event', self.on_scroll)
+        self.add(self.area)
+
+        self.reload(force=True)
+        self.connect('realize', lambda *_: self.update_input())
+        self.connect('destroy', self.on_destroy)
+        GLib.timeout_add(1000, self.watch)
+        GLib.timeout_add(33, self.tick)
+        threading.Thread(target=self.spy_windows, daemon=True).start()
+        threading.Thread(target=self.spy_bspwm, daemon=True).start()
+
+    # ─────────────────────────────────────────────────────── config
+    def reload(self, force=False):
+        try:
+            mtime = os.path.getmtime(ui.DOCK_CONF)
+        except OSError:
+            mtime = 0
+        sig = ui.palette_signature()
+        if not force and mtime == self.conf_mtime and sig == self.pal_sig:
+            return
+        if sig != self.pal_sig:
+            self.pal = ui.load_palette()
+            self.c = ui.rgb_palette(self.pal)
+        self.conf_mtime, self.pal_sig = mtime, sig
+        self.conf = ui.load_dock_conf()
+        if not self.conf.get('enabled', True):
+            Gtk.main_quit()
+            return
+        S = int(max(28, min(72, self.conf.get('icon_size', 44))))
+        if S != getattr(self, 'S', S):
+            self.items = []  # reload the icons at the new resolution
+        self.S = S
+        self.app_index = {}
+        for info in Gio.AppInfo.get_all():
+            if isinstance(info, Gio.DesktopAppInfo):
+                for k in app_keys(info):
+                    self.app_index.setdefault(k, info)
+        self.build_items()
+        self.layout_window()
+
+    def build_items(self):
+        old = {it.id: it for it in self.items}
+        items = []
+        if self.conf.get('show_launcher', True):
+            items += [old.get('launcher') or Item('launcher'), Item('sep')]
+        for app_id in self.conf.get('apps', []):
+            info = Gio.DesktopAppInfo.new(app_id)
+            if info is None:
+                continue
+            it = old.get(app_id) or Item('app', info)
+            it.pinned = True
+            items.append(it)
+        # running apps that are not pinned
+        pinned_ids = {it.id for it in items}
+        extra = []
+        for inst, cls in self.windows.values():
+            info = self.app_index.get(cls.lower()) or self.app_index.get(inst.lower())
+            if info and info.get_id() not in pinned_ids and all(e.id != info.get_id() for e in extra):
+                it = old.get(info.get_id()) or Item('app', info, pinned=False)
+                it.pinned = False
+                extra.append(it)
+        if extra:
+            items.append(Item('sep'))
+            items += extra
+        for it in items:
+            if it.kind == 'app' and it.surface is None:
+                it.surface = self.load_icon(it.info)
+        if items and items[-1].kind == 'sep':
+            items.pop()
+        self.items = items
+        self.match_windows()
+
+    def load_icon(self, info):
+        theme = Gtk.IconTheme.get_default()
+        px = int(self.S * MAGNIFY * 1.2)
+        gicon = info.get_icon()
+        icon = None
+        try:
+            if gicon:
+                icon = theme.lookup_by_gicon(gicon, px, Gtk.IconLookupFlags.FORCE_SIZE)
+            if icon is None:
+                icon = theme.lookup_icon('application-x-executable', px, Gtk.IconLookupFlags.FORCE_SIZE)
+            pix = icon.load_icon() if icon else None
+        except GLib.Error:
+            pix = None
+        return Gdk.cairo_surface_create_from_pixbuf(pix, 1, None) if pix else None
+
+    # ─────────────────────────────────────────────────────── geometry
+    def slot_w(self, it, scale=1.0):
+        return 16 if it.kind == 'sep' else self.S * scale + 14
+
+    def base_width(self):
+        return sum(self.slot_w(it) for it in self.items) - 14 + 36
+
+    def layout_window(self):
+        geo = ui.monitor_geometry()
+        self.mon = geo
+        self.panel_h = self.S + 26
+        self.head = int(self.S * (MAGNIFY - 1) + 46)
+        self.Wd = int(self.base_width() + self.S * (MAGNIFY - 1) * 3 + 40)
+        self.Hd = self.head + self.panel_h + MARGIN_BOTTOM
+        self.panel_w = self.base_width()
+        self.panel_x = (self.Wd - self.panel_w) / 2
+        self.set_size_request(self.Wd, self.Hd)
+        self.resize(self.Wd, self.Hd)
+        self.move(geo.x + (geo.width - self.Wd) // 2, geo.y + geo.height - self.Hd)
+        self.apply_padding()
+
+    def reserved(self):
+        return self.panel_h + MARGIN_BOTTOM + 6
+
+    def base_padding(self):
+        try:
+            text = open(ui.theme_cfg()).read()
+        except OSError:
+            text = ''
+        m = re.search(r'^BOTTOM_PADDING="?(\d+)', text, re.M)
+        return int(m.group(1)) if m else 0
+
+    def apply_padding(self):
+        want = self.base_padding() + (0 if self.conf.get('autohide') else self.reserved())
+        cur = subprocess.run(['bspc', 'config', 'bottom_padding'], capture_output=True, text=True).stdout.strip()
+        if cur != str(want):
+            subprocess.run(['bspc', 'config', 'bottom_padding', str(want)])
+
+    def update_input(self):
+        gdkwin = self.get_window()
+        if not gdkwin:
+            return
+        x0, w = self.panel_x, self.panel_w
+        y0 = self.Hd - MARGIN_BOTTOM - self.panel_h + (1 - self.shown) * (self.panel_h + MARGIN_BOTTOM)
+        rect = (int(x0), int(y0), int(w), int(self.panel_h + MARGIN_BOTTOM))
+        if self.shown < 0.05:
+            rect = (int(x0), self.Hd - 3, int(w), 3)  # thin strip to reveal the dock
+        if rect != self.input_rect:
+            self.input_rect = rect
+            region = cairo.Region(cairo.RectangleInt(*rect))
+            gdkwin.input_shape_combine_region(region, 0, 0)
+
+    # ────────────────────────────────────────────────── window spying
+    def spy_windows(self):
+        """Event driven: xprop -spy prints a line whenever the lists change."""
+        try:
+            proc = subprocess.Popen(['xprop', '-root', '-spy', '_NET_CLIENT_LIST', '_NET_ACTIVE_WINDOW'],
+                                    stdout=subprocess.PIPE, text=True)
+        except OSError:
+            return
+        for line in proc.stdout:
+            if line.startswith('_NET_CLIENT_LIST'):
+                ids = re.findall(r'0x[0-9a-f]+', line)
+                GLib.idle_add(self.set_clients, ids)
+            elif line.startswith('_NET_ACTIVE_WINDOW'):
+                m = re.search(r'0x[0-9a-f]+', line)
+                GLib.idle_add(self.set_active, m.group(0) if m else None)
+
+    def set_clients(self, ids):
+        new = {}
+        for xid in ids:
+            if xid in self.windows:
+                new[xid] = self.windows[xid]
+                continue
+            out = subprocess.run(['xprop', '-id', xid, 'WM_CLASS'], capture_output=True, text=True).stdout
+            m = re.findall(r'"([^"]*)"', out)
+            new[xid] = (m[0], m[1]) if len(m) >= 2 else ('', '')
+        changed = set(new) != set(self.windows)
+        self.windows = new
+        if changed:
+            self.build_items()
+            self.area.queue_draw()
+        return False
+
+    def set_active(self, xid):
+        self.active = int(xid, 16) if xid else None
+        self.area.queue_draw()
+        return False
+
+    def match_windows(self):
+        for it in self.items:
+            if it.kind != 'app':
+                continue
+            it.windows = [x for x, (inst, cls) in self.windows.items()
+                          if inst.lower() in it.keys or cls.lower() in it.keys]
+
+    def spy_bspwm(self):
+        try:
+            proc = subprocess.Popen(['bspc', 'subscribe', 'node_state', 'node_focus', 'desktop_focus',
+                                     'node_remove'], stdout=subprocess.PIPE, text=True)
+        except OSError:
+            return
+        for _ in proc.stdout:
+            fs = subprocess.run(['bspc', 'query', '-N', '-n', 'focused.fullscreen'],
+                                capture_output=True, text=True).stdout.strip() != ''
+            GLib.idle_add(self.set_fullscreen, fs)
+
+    def set_fullscreen(self, fs):
+        self.fullscreen = fs
+        return False
+
+    # ─────────────────────────────────────────────────────── actions
+    def item_at(self, x):
+        for it in self.items:
+            if it.kind != 'sep' and abs(x - it.cx) <= self.slot_w(it, it.scale) / 2:
+                return it
+        return None
+
+    def launch(self, it):
+        it.bounce_t = time.monotonic()
+        try:
+            it.info.launch([], Gdk.Display.get_default().get_app_launch_context())
+        except GLib.Error as e:
+            print(f'Dock: {e}', file=sys.stderr)
+
+    def focus(self, xid):
+        subprocess.Popen(['bspc', 'node', xid, '-f'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def activate(self, it):
+        if it.kind == 'launcher':
+            it.bounce_t = time.monotonic()
+            subprocess.Popen(['OpenApps', '--menu'], start_new_session=True)
+            return
+        wins = sorted(it.windows)
+        if not wins:
+            self.launch(it)
+            return
+        ids = [int(w, 16) for w in wins]
+        if self.active in ids:
+            self.focus(wins[(ids.index(self.active) + 1) % len(wins)])
+        else:
+            self.focus(wins[0])
+
+    def menu(self, it, ev):
+        m = Gtk.Menu()
+
+        def add(label, cb):
+            mi = Gtk.MenuItem(label=label)
+            mi.connect('activate', lambda *_: cb())
+            m.append(mi)
+        if it.kind == 'launcher':
+            add('󰀻  Open launcher', lambda: self.activate(it))
+            add('󰒓  Dock settings (RiceEditor)', lambda: subprocess.Popen(['RiceEditor', '--section', 'dock'],
+                                                                           start_new_session=True))
+        else:
+            add('󰐕  New window', lambda: self.launch(it))
+            add('󰐄  Unpin from dock' if it.pinned else '󰐃  Pin to dock', lambda: self.toggle_pin(it))
+            if it.windows:
+                add(f'󰅖  Close {len(it.windows)} window' + ('s' if len(it.windows) > 1 else ''),
+                    lambda: [subprocess.Popen(['bspc', 'node', w, '-c']) for w in it.windows])
+        m.show_all()
+        m.popup_at_pointer(ev)
+        self._menu = m
+
+    def toggle_pin(self, it):
+        conf = ui.load_dock_conf()
+        if it.id in conf['apps']:
+            conf['apps'].remove(it.id)
+        else:
+            conf['apps'].append(it.id)
+        ui.save_dock_conf(conf)
+        self.reload(force=True)
+
+    # ─────────────────────────────────────────────────────── events
+    def on_motion(self, _w, ev):
+        self.pointer = ev.x
+        return False
+
+    def on_leave(self, _w, ev):
+        if ev.mode == Gdk.CrossingMode.NORMAL:
+            self.pointer = None
+        return False
+
+    def on_button(self, _w, ev):
+        it = self.item_at(ev.x)
+        if not it:
+            return False
+        if ev.button == 1:
+            self.activate(it)
+        elif ev.button == 2 and it.kind == 'app':
+            self.launch(it)
+        elif ev.button == 3:
+            self.menu(it, ev)
+        return True
+
+    def on_scroll(self, _w, ev):
+        it = self.item_at(ev.x)
+        if it and it.kind == 'app' and it.windows:
+            self.activate(it)
+        return True
+
+    def on_destroy(self, *_):
+        want = self.base_padding()
+        subprocess.run(['bspc', 'config', 'bottom_padding', str(want)])
+        Gtk.main_quit()
+
+    # ───────────────────────────────────────────────────── animation
+    def watch(self):
+        self.reload()
+        self.apply_padding()
+        return True
+
+    def tick(self):
+        now = time.monotonic()
+        S = self.S
+        # auto-hide / fullscreen
+        want_shown = 1.0
+        if self.fullscreen:
+            want_shown = 0.0
+        elif self.conf.get('autohide'):
+            _, px, py = Gdk.Display.get_default().get_default_seat().get_pointer().get_position()[0:3]
+            wx, wy = self.get_position()
+            near = py >= self.mon.y + self.mon.height - 3 and wx <= px <= wx + self.Wd
+            over = self.pointer is not None
+            want_shown = 1.0 if (near or over) else 0.0
+        self.shown += (want_shown - self.shown) * 0.25
+        if abs(want_shown - self.shown) < 0.01:
+            self.shown = want_shown
+
+        # magnification targets computed on the resting layout
+        base_x = (self.Wd - self.base_width()) / 2 + 18
+        x = base_x
+        centers = []
+        for it in self.items:
+            w = self.slot_w(it)
+            centers.append(x + (w - 14) / 2 if it.kind != 'sep' else x + w / 2 - 7)
+            x += w
+        moving = False
+        for it, c in zip(self.items, centers):
+            target = 1.0
+            if self.pointer is not None and it.kind != 'sep' and self.conf.get('magnify', True):
+                d = (self.pointer - c) / (S * 1.35)
+                target = 1 + (MAGNIFY - 1) * math.exp(-d * d)
+            it.scale += (target - it.scale) * 0.3
+            hov = 1.0 if (self.pointer is not None and abs(self.pointer - c) < (S + 14) / 2 and it.kind != 'sep') else 0.0
+            it.hover += (hov - it.hover) * 0.3
+            moving |= abs(target - it.scale) > 0.002 or now - it.bounce_t < 1.0 or 0.01 < it.hover < 0.99
+        # dynamic layout, centered
+        total = sum(self.slot_w(it, it.scale) for it in self.items) - 14 + 36
+        x = (self.Wd - total) / 2 + 18
+        for it in self.items:
+            w = self.slot_w(it, it.scale)
+            it.cx = x + (w - 14) / 2 if it.kind != 'sep' else x + w / 2 - 7
+            x += w
+        self.panel_x = (self.Wd - total) / 2
+        self.panel_w = total
+        self.update_input()
+        # redraw only while something moves: an idle dock costs nothing to
+        # the compositor (picom on vmwgfx does not like constant damage)
+        sweeping = (now % SWEEP_EVERY) < SWEEP_DUR
+        if moving or 0 < self.shown < 1 or sweeping or self.sweeping:
+            self.area.queue_draw()
+        self.sweeping = sweeping
+        return True
+
+    # ─────────────────────────────────────────────────────── drawing
+    def on_draw(self, w, cr):
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+        if not self.items or self.shown <= 0.001:
+            return True
+        c = self.c
+        now = time.monotonic()
+        S = self.S
+        slide = (1 - self.shown) * (self.panel_h + MARGIN_BOTTOM + 4)
+        cr.translate(0, slide)
+        px, pw, ph = self.panel_x, self.panel_w, self.panel_h
+        py = self.Hd - MARGIN_BOTTOM - ph
+
+        # glow + glass panel
+        for grow, a in ((10, 0.05), (5, 0.08)):
+            ui.rounded(cr, px - grow, py - grow, pw + 2 * grow, ph + 2 * grow, 20 + grow)
+            cr.set_source_rgba(*c['blue'], a)
+            cr.fill()
+        ui.rounded(cr, px, py, pw, ph, 20)
+        g = cairo.LinearGradient(0, py, 0, py + ph)
+        g.add_color_stop_rgba(0, *c['black'], 0.88)
+        g.add_color_stop_rgba(1, *c['bg'], 0.94)
+        cr.set_source(g)
+        cr.fill_preserve()
+        lg = cairo.LinearGradient(px, 0, px + pw, 0)
+        lg.add_color_stop_rgba(0, *c['blue'], 0.9)
+        lg.add_color_stop_rgba(0.5, *c['magenta'], 0.6)
+        lg.add_color_stop_rgba(1, *c['cyan'], 0.9)
+        cr.set_source(lg)
+        cr.set_line_width(1.3)
+        cr.stroke()
+        # inner top highlight
+        cr.move_to(px + 20, py + 1.5)
+        cr.line_to(px + pw - 20, py + 1.5)
+        cr.set_source_rgba(1, 1, 1, 0.06)
+        cr.set_line_width(1)
+        cr.stroke()
+        # light sweep along the top edge
+        t = min(1.0, (now % SWEEP_EVERY) / SWEEP_DUR)
+        sx = px + t * (pw + 160) - 80
+        sg = cairo.LinearGradient(sx - 80, 0, sx + 80, 0)
+        sg.add_color_stop_rgba(0, *c['cyan'], 0)
+        sg.add_color_stop_rgba(0.5, *c['cyan'], 0.95)
+        sg.add_color_stop_rgba(1, *c['cyan'], 0)
+        cr.save()
+        ui.rounded(cr, px, py, pw, ph, 20)
+        cr.clip()
+        cr.rectangle(sx - 80, py, 160, 2)
+        cr.set_source(sg)
+        cr.fill()
+        # faint scanlines inside the glass
+        for yy in range(int(py) + 4, int(py + ph), 4):
+            cr.rectangle(px, yy, pw, 1)
+        cr.set_source_rgba(*c['blue'], 0.025)
+        cr.fill()
+        cr.restore()
+
+        base = py + ph - 13      # icon baseline
+        hovered = None
+        for it in self.items:
+            if it.kind == 'sep':
+                sg2 = cairo.LinearGradient(0, py + 10, 0, py + ph - 10)
+                sg2.add_color_stop_rgba(0, *c['blue'], 0)
+                sg2.add_color_stop_rgba(0.5, *c['magenta'], 0.7)
+                sg2.add_color_stop_rgba(1, *c['blue'], 0)
+                cr.rectangle(it.cx - 0.5, py + 10, 1, ph - 20)
+                cr.set_source(sg2)
+                cr.fill()
+                continue
+            size = S * it.scale
+            bt = now - it.bounce_t
+            bounce = abs(math.sin(bt * 9)) * math.exp(-bt * 4) * S * 0.45 if bt < 1.0 else 0
+            x0, y0 = it.cx - size / 2, base - size - bounce
+            if it.hover > 0.02:
+                hovered = it
+                glow = cairo.RadialGradient(it.cx, y0 + size / 2, 2, it.cx, y0 + size / 2, size * 0.75)
+                glow.add_color_stop_rgba(0, *c['blue'], 0.35 * it.hover)
+                glow.add_color_stop_rgba(1, *c['blue'], 0)
+                cr.set_source(glow)
+                cr.arc(it.cx, y0 + size / 2, size * 0.75, 0, 2 * math.pi)
+                cr.fill()
+            if it.kind == 'launcher':
+                ui.rounded(cr, x0 + 2, y0 + 2, size - 4, size - 4, size * 0.28)
+                lgr = cairo.LinearGradient(x0, y0, x0 + size, y0 + size)
+                lgr.add_color_stop_rgba(0, *c['blue'], 0.95)
+                lgr.add_color_stop_rgba(1, *c['magenta'], 0.95)
+                cr.set_source(lgr)
+                cr.fill()
+                ui.text(cr, '󰀻', it.cx, y0 + size / 2, size * 0.36, (*c['bg'], 1), align='center',
+                        valign='middle')
+            elif it.surface:
+                sw = it.surface.get_width()
+                cr.save()
+                cr.translate(x0, y0)
+                cr.scale(size / sw, size / sw)
+                cr.set_source_surface(it.surface, 0, 0)
+                cr.get_source().set_filter(cairo.FILTER_GOOD)
+                cr.paint_with_alpha(1.0 if it.pinned else 0.85)
+                cr.restore()
+            # running indicators
+            n = len(it.windows)
+            if n:
+                focused = self.active is not None and self.active in [int(x, 16) for x in it.windows]
+                col = c['cyan'] if focused else c['blue']
+                if focused:
+                    ww = 14
+                    ui.rounded(cr, it.cx - ww / 2, py + ph - 6, ww, 3, 1.5)
+                    cr.set_source_rgba(*col, 1)
+                    cr.fill()
+                else:
+                    for k in range(min(n, 3)):
+                        dx = (k - (min(n, 3) - 1) / 2) * 7
+                        cr.arc(it.cx + dx, py + ph - 4.5, 2, 0, 2 * math.pi)
+                        cr.set_source_rgba(*col, 1)
+                        cr.fill()
+                glow = cairo.RadialGradient(it.cx, py + ph - 4, 0, it.cx, py + ph - 4, 12)
+                glow.add_color_stop_rgba(0, *col, 0.5)
+                glow.add_color_stop_rgba(1, *col, 0)
+                cr.set_source(glow)
+                cr.arc(it.cx, py + ph - 4, 12, 0, 2 * math.pi)
+                cr.fill()
+
+        # HUD tooltip above the hovered icon
+        if hovered is not None and hovered.name:
+            label = hovered.name.upper() + (f'  ·  {len(hovered.windows)}' if hovered.windows else '')
+            lay_w, lay_h = self.measure(cr, label)
+            tw, th = lay_w + 24, lay_h + 12
+            size = S * hovered.scale
+            tx = max(4, min(self.Wd - tw - 4, hovered.cx - tw / 2))
+            ty = base - size - th - 12
+            a = hovered.hover
+            ui.rounded(cr, tx, ty, tw, th, 8)
+            cr.set_source_rgba(*c['black'], 0.94 * a)
+            cr.fill_preserve()
+            cr.set_source_rgba(*c['blue'], 0.8 * a)
+            cr.set_line_width(1)
+            cr.stroke()
+            cr.move_to(hovered.cx - 5, ty + th)
+            cr.line_to(hovered.cx + 5, ty + th)
+            cr.line_to(hovered.cx, ty + th + 5)
+            cr.close_path()
+            cr.set_source_rgba(*c['blue'], 0.8 * a)
+            cr.fill()
+            ui.text(cr, label, tx + tw / 2, ty + 6, 8, (*c['fg'], a), bold=True, align='center', spacing=2)
+        return True
+
+    @staticmethod
+    def measure(cr, s):
+        layout = ui.PangoCairo.create_layout(cr)
+        layout.set_font_description(ui.Pango.FontDescription(f'{ui.FONT} Bold 8'))
+        attrs = ui.Pango.AttrList()
+        attrs.insert(ui.Pango.attr_letter_spacing_new(2 * ui.Pango.SCALE))
+        layout.set_attributes(attrs)
+        layout.set_text(s, -1)
+        return layout.get_pixel_size()
+
+
+def main():
+    if '--quit' in sys.argv:
+        lock = os.path.join(ui.HOME, '.cache', os.environ.get('USER', 'user'), '.dock.lock')
+        try:
+            os.kill(int(open(lock).read().strip()), signal.SIGTERM)
+        except (OSError, ValueError):
+            pass
+        return
+    if not ui.load_dock_conf().get('enabled', True):
+        return
+    GLib.set_prgname('Dock')
+    _lock = ui.single_instance('dock')  # noqa: F841
+    dock = Dock()
+    ui.quit_on_sigterm(dock.destroy)
+    dock.show_all()
+    Gtk.main()
+
+
+if __name__ == '__main__':
+    main()

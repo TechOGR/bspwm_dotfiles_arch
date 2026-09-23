@@ -9,3 +9,8 @@ $blue: #7aa2f7;
 $magenta: #bb9af7;
 $cyan: #7dcfff;
 $archicon: #0f94d2;
+
+// Glass surfaces shared by the widgets (derived from the palette)
+$glass-bg: rgba(#1a1b26, 0.92);
+$glass-panel: rgba(#222330, 0.85);
+$border-glow: rgba(#7aa2f7, 0.35);

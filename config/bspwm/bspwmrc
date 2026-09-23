@@ -87,6 +87,9 @@ pidof -q eww || { eww -c "${HOME}"/.config/bspwm/eww daemon & }
     run WorkspaceHoverWatcher
 }
 
+# Launch the dock (exits by itself if disabled in RiceEditor -> Dock or already running)
+"${HOME}"/.config/bspwm/bin/Dock &
+
 # Launch clipboard daemon
 run clipcatd
 

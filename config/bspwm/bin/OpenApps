@@ -12,10 +12,7 @@ WIDGET_DIR="$HOME/.config/bspwm/eww"
 
 case "$1" in
 	--menu)
-		RofiLauncher --launcher
-		;;
-	--rice)
-		RiceSelector
+		AppLauncher || RofiLauncher --launcher
 		;;
 	--terminal)
 		Term --terminal
@@ -86,7 +83,7 @@ case "$1" in
 		;;
 		# Eww Widgets
 	--KeyHelp)
-		eww -c "$WIDGET_DIR" open --toggle csheet
+		KeyHelp
 		;;
 	--usercard)
 		eww -c "$WIDGET_DIR" open --toggle launchermenu

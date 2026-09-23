@@ -44,7 +44,7 @@
 (defwindow wspreview
   :monitor 0
   :geometry (geometry
-    :y "3%"
+    :y "44px"
     :anchor "top center"
   )
   :wm-ignore false

@@ -24,10 +24,6 @@ super + {_,alt + }Return
 super + @space
     OpenApps --menu
 
-# Theme Selector
-alt + @space
-    RiceSelector
-
 # Polybar Modules browser/toggler
 super + alt + m
     ModulesList
@@ -83,10 +79,6 @@ super + alt + s
 # PowerMenu
 super + alt + p
     OpenApps --powermenu
-
-# Rofi style
-super + alt + l
-    RofiLauncher --choose-style
 
 # Keyboard Layout Applet
 super + alt + k
