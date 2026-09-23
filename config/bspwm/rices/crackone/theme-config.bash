@@ -40,6 +40,8 @@ P_CORNER_R="10"			# Corner radius (0 = disabled)
 P_BLUR="true"			# Blur true|false
 P_ANIMATIONS="@"		# (@ = enable) (# = disable)
 P_TERM_OPACITY="1.0"	# Terminal transparency. Range: 0.1 - 1.0 (1.0 = disabled)
+P_ACTIVE_OPACITY="0.97"	# Focused windows opacity. Range: 0.5 - 1.0
+P_INACTIVE_OPACITY="0.92"	# Unfocused windows opacity. Range: 0.5 - 1.0
 
 # Dunst
 dunst_offset='(20, 60)'

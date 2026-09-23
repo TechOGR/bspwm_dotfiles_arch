@@ -8,7 +8,9 @@ sed -i "$HOME/.config/bspwm/config/picom/picom-rules.conf" \
     -e "/#-shadow-switch/s/.*#-/\t\tshadow = ${P_SHADOWS};\t#-/" \
     -e "/#-fade-switch/s/.*#-/\t\tfade = ${P_FADE};\t#-/" \
     -e "/#-blur-switch/s/.*#-/\t\tblur-background = ${P_BLUR};\t#-/" \
-    -e "/picom-animations/c\\        ${P_ANIMATIONS}include \"picom-animations.conf\""
+    -e "/picom-animations/c\\        ${P_ANIMATIONS}include \"picom-animations.conf\"" \
+    -e "/#-active-opacity/s/.*#-/\t\topacity = ${P_ACTIVE_OPACITY:-0.97};\t#-/" \
+    -e "/#-inactive-opacity/s/.*#-/\t\topacity = ${P_INACTIVE_OPACITY:-0.92};\t#-/"
 
 _write "$HOME/.config/bspwm/config/picom/picom-dunst-animations.conf" <<-EOF
     animations = (

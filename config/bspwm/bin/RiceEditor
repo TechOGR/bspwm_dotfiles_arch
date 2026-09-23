@@ -1,2017 +1,2349 @@
 #!/usr/bin/env python3
-import gi
+# =============================================================
+#  ██████╗ ██╗ ██████╗███████╗    ███████╗██████╗ ██╗████████╗
+#  ██╔══██╗██║██╔════╝██╔════╝    ██╔════╝██╔══██╗██║╚══██╔══╝
+#  ██████╔╝██║██║     █████╗      █████╗  ██║  ██║██║   ██║
+#  ██╔══██╗██║██║     ██╔══╝      ██╔══╝  ██║  ██║██║   ██║
+#  ██║  ██║██║╚██████╗███████╗    ███████╗██████╔╝██║   ██║
+#  ╚═╝  ╚═╝╚═╝ ╚═════╝╚══════╝    ╚══════╝╚═════╝ ╚═╝   ╚═╝
+# Author: TechOGR
+# Repo:   https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# RiceEditor - futuristic control center for the bspwm rice
+#   ✔ Every option applies LIVE (bspc / picom reload / theme modules)
+#   ✔ Palettes with instant re-theme (the editor re-themes itself too)
+#   ✔ Windows, compositor, terminal, wallpaper, notifications,
+#     lockscreen, GTK/rofi appearance
+#   ✔ Live terminal + lockscreen previews, system HUD gauges
+#   ✔ Snapshots: save / restore the whole rice state (auto daily backup)
+#
+# Shortcuts: Ctrl+1..9,0 sections · Ctrl+S snapshot · Ctrl+R soft reload
+#            Ctrl+L lock screen · Ctrl+Q quit
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
 import os
 import re
+import sys
+import glob
+import math
+import time
+import shutil
+import random
+import hashlib
+import platform
+import threading
 import subprocess
+from datetime import datetime
+
+import gi
 gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, GdkPixbuf, GLib, Gdk
+gi.require_version('PangoCairo', '1.0')
+from gi.repository import Gtk, Gdk, GdkPixbuf, GLib, Pango, PangoCairo  # noqa: E402
+import cairo  # noqa: E402
 
-class RiceEditorApp(Gtk.Window):
-    def __init__(self):
-        Gtk.Window.__init__(self, title=f"Rice Editor: {self.get_current_theme()}")
-        self.set_position(Gtk.WindowPosition.CENTER)
-        self.current_theme = self.get_current_theme()
+HOME = os.path.expanduser('~')
+BSPWM = os.path.join(HOME, '.config/bspwm')
+BIN = os.path.join(BSPWM, 'bin')
+MODULES = os.path.join(BSPWM, 'config/modules')
+PICOM_CONF = os.path.join(BSPWM, 'config/picom/picom.conf')
+PICOM_RULES = os.path.join(BSPWM, 'config/picom/picom-rules.conf')
+BSPWMRC = os.path.join(BSPWM, 'bspwmrc')
+KITTY_CONF = os.path.join(HOME, '.config/kitty/kitty.conf')
+ZSHRC = os.path.join(HOME, '.zshrc')
+SNAP_DIR = os.path.join(HOME, '.local/share/rice-editor/snapshots')
+FONT = 'JetBrainsMono Nerd Font'
+IMG_EXTS = ('.jpg', '.jpeg', '.png', '.webp')
 
-        # Contenedor principal
-        main_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        main_box.set_margin_start(10)
-        main_box.set_margin_end(20)
-        main_box.set_margin_top(20)
-        main_box.set_margin_bottom(20)
-        self.add(main_box)
 
-        # Menú lateral
-        sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        sidebar.set_border_width(10)
-        sidebar.set_size_request(200, -1)  # Ancho fijo para el menú lateral
+def read_rice():
+    try:
+        with open(os.path.join(BSPWM, '.rice')) as f:
+            return f.read().strip()
+    except OSError:
+        return 'crackone'
 
-        # Cargar logo SVG
-        logo_path = os.path.expanduser('~/.config/bspwm/config/assets/profile.png')
+
+RICE = read_rice()
+RICE_DIR = os.path.join(BSPWM, 'rices', RICE)
+THEME_CFG = os.path.join(RICE_DIR, 'theme-config.bash')
+COLORS_FILE = os.path.join(RICE_DIR, 'theme_colors.bash')
+WALL_DIR = os.path.join(RICE_DIR, 'walls')
+THUMB_DIR = os.path.join(HOME, '.cache', os.environ.get('USER', 'user'), RICE, 'wallselect3d')
+
+
+# ════════════════════════════════════════════════════════════ file helpers
+def read_file(path):
+    try:
+        with open(path) as f:
+            return f.read()
+    except OSError:
+        return ''
+
+
+def write_file(path, text):
+    tmp = f'{path}.rice-editor.tmp'
+    with open(tmp, 'w') as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def file_get(path, pattern, default='', group=1):
+    m = re.search(pattern, read_file(path), re.M)
+    return m.group(group) if m else default
+
+
+def file_sub(path, pattern, repl, count=1):
+    """Regex-replace inside a file. Returns True if something changed."""
+    text = read_file(path)
+    new, n = re.subn(pattern, repl, text, count=count, flags=re.M)
+    if n and new != text:
+        write_file(path, new)
+    return n > 0
+
+
+def clean_value(value):
+    """Values go inside quotes in shell files: keep them harmless."""
+    return re.sub(r'["\'`$\\\n]', '', str(value))
+
+
+class ThemeConfig:
+    """Read / write variables of theme-config.bash keeping comments."""
+
+    def __init__(self, path):
+        self.path = path
+
+    def _pattern(self, name):
+        return re.compile(rf'^({re.escape(name)}=)("[^"]*"|\'[^\']*\'|[^\s#]*)(.*)$', re.M)
+
+    def raw(self, name, default=''):
+        m = self._pattern(name).search(read_file(self.path))
+        if not m:
+            return default
+        v = m.group(2)
+        return v[1:-1] if v[:1] in '"\'' and len(v) >= 2 else v
+
+    def set(self, name, value):
+        value = clean_value(value)
+        text = read_file(self.path)
+        m = self._pattern(name).search(text)
+        if m:
+            q = m.group(2)[:1] if m.group(2)[:1] in '"\'' else '"'
+            new = f'{name}={q}{value}{q}{m.group(3)}'
+            text = text[:m.start()] + new + text[m.end():]
+        else:
+            if '# ── RiceEditor ──' not in text:
+                text = text.rstrip('\n') + '\n\n# ── RiceEditor ──\n'
+            text += f'{name}="{value}"\n'
+        write_file(self.path, text)
+
+    def resolve(self, names):
+        """Values as bash sees them (palette references expanded)."""
+        script = ('. "$1" >/dev/null 2>&1; shift; '
+                  'for v in "$@"; do printf "%s\\t%s\\n" "$v" "${!v}"; done')
         try:
-            logo_pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(logo_path, 130, 130, True)
-            logo_image = Gtk.Image.new_from_pixbuf(logo_pixbuf)
-            sidebar.pack_start(logo_image, False, False, 10)
-        except GLib.Error as e:
-            print(f"Error cargando logo: {e}")
+            out = subprocess.run(['bash', '-c', script, '_', self.path, *names],
+                                 capture_output=True, text=True, timeout=4).stdout
+        except Exception:
+            out = ''
+        res = {}
+        for line in out.splitlines():
+            k, _, v = line.partition('\t')
+            res[k] = v
+        return res
 
-        # Contenedor para botones del menú
-        menu_options = [
-            "Rice Options",
-            "General Options",
-            "Help"
+    def active_palette(self):
+        m = re.search(r'^(cargar_\w+)\s*$', read_file(self.path), re.M)
+        return m.group(1) if m else ''
+
+    def set_palette(self, func):
+        lines = read_file(self.path).splitlines(keepends=True)
+        for i, line in enumerate(lines):
+            m = re.match(r'^#?(cargar_\w+)\s*$', line)
+            if m:
+                lines[i] = (m.group(1) if m.group(1) == func else '#' + m.group(1)) + '\n'
+        write_file(self.path, ''.join(lines))
+
+
+def parse_palettes():
+    """{func_name: {var: '#hex'}} from theme_colors.bash, in file order."""
+    text = read_file(COLORS_FILE)
+    palettes = {}
+    for m in re.finditer(r'^(cargar_\w+)\s*\(\)\s*\{(.*?)^\}', text, re.M | re.S):
+        palettes[m.group(1)] = dict(re.findall(r'(\w+)="(#[0-9A-Fa-f]{6})"', m.group(2)))
+        gtk = re.search(r'gtk_themeb="([^"]+)"', m.group(2))
+        if gtk:
+            palettes[m.group(1)]['gtk_themeb'] = gtk.group(1)
+    return palettes
+
+
+def palette_title(func):
+    return func.replace('cargar_', '').replace('_', ' ').upper()
+
+
+def hex_rgb(h, fallback=(0.5, 0.5, 0.5)):
+    h = (h or '').strip().lstrip('#')
+    if len(h) < 6:
+        return fallback
+    try:
+        return tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    except ValueError:
+        return fallback
+
+
+def rgba_hex(rgba):
+    return '#{:02x}{:02x}{:02x}'.format(*(round(c * 255) for c in (rgba.red, rgba.green, rgba.blue)))
+
+
+def valid_hex(h):
+    return bool(re.fullmatch(r'#[0-9A-Fa-f]{6}', h or ''))
+
+
+# ═══════════════════════════════════════════════════════════ system actions
+def spawn(cmd, shell=False):
+    try:
+        subprocess.Popen(cmd if not shell else ['sh', '-c', cmd], start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as e:
+        print(f'RiceEditor: {e}', file=sys.stderr)
+
+
+def run_bg(fn, done=None):
+    """Run fn in a thread; call done(result) back on the GTK thread."""
+    def worker():
+        try:
+            res = fn()
+        except Exception as e:  # keep the UI alive whatever happens
+            print(f'RiceEditor: {e}', file=sys.stderr)
+            res = None
+        if done:
+            GLib.idle_add(lambda: (done(res), False)[1], priority=GLib.PRIORITY_DEFAULT)
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def bspc(*args):
+    try:
+        return subprocess.run(['bspc', *map(str, args)], capture_output=True, text=True,
+                              timeout=2).stdout.strip()
+    except Exception:
+        return ''
+
+
+def run_modules(*mods, reload_picom=False):
+    """Re-run theme modules exactly like Theme.sh does, but only these."""
+    script = ('read -r RICE < "$HOME/.config/bspwm/.rice"; '
+              '. "$HOME/.config/bspwm/rices/$RICE/theme-config.bash"; '
+              '_write() { t=$(mktemp "$(dirname "$1")/.tmp.XXXXXX") || return 1; '
+              'cat > "$t" && mv -f "$t" "$1"; }; '
+              'for m in "$@"; do . "$HOME/.config/bspwm/config/modules/$m"; done')
+    subprocess.run(['bash', '-c', script, '_', *mods], stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL, timeout=30)
+    if reload_picom:
+        reload_picom()
+
+
+# picom v13 occasionally dies on a SIGUSR1 reload: bring it back if so
+PICOM_RUN = f'picom --config "{PICOM_CONF}" >/dev/null 2>&1 &'
+
+
+def reload_picom():
+    spawn('pkill -USR1 -x picom; sleep 1.5; pgrep -x picom >/dev/null || ' + PICOM_RUN, shell=True)
+
+
+def restart_picom():
+    spawn('pkill -x picom; while pgrep -x picom >/dev/null; do sleep 0.1; done; ' + PICOM_RUN, shell=True)
+
+
+def bspwmrc_get(key, default=''):
+    return file_get(BSPWMRC, rf'^bspc config\s+{key}\s+(\S+)', default)
+
+
+def bspwmrc_set(key, value):
+    if not file_sub(BSPWMRC, rf'^(bspc config\s+{key}\s+)\S+', rf'\g<1>{value}'):
+        file_sub(BSPWMRC, r'^(bspc config\s+window_gap\s+\S+)$',
+                 rf'\g<1>\nbspc config {key:<22}{value}')
+
+
+def picom_get(key, default=''):
+    return file_get(PICOM_CONF, rf'^{re.escape(key)}\s*=\s*"?([^";\n]+)"?', default).strip()
+
+
+def picom_set(key, value, quoted=False):
+    val = f'"{value}"' if quoted else value
+    file_sub(PICOM_CONF, rf'^({re.escape(key)}\s*=\s*)[^;\n]+(;?)', rf'\g<1>{val}\g<2>')
+
+
+def blur_get(key, default=''):
+    block = read_file(PICOM_RULES).split('rules:')[0]
+    m = re.search(rf'{key}\s*=\s*"?([\w.]+)"?;', block)
+    return m.group(1) if m else default
+
+
+def blur_set(key, value, quoted=False):
+    text = read_file(PICOM_RULES)
+    head, sep, tail = text.partition('rules:')
+    val = f'"{value}"' if quoted else value
+    head = re.sub(rf'({key}\s*=\s*)"?[\w.]+"?;', rf'\g<1>{val};', head, count=1)
+    write_file(PICOM_RULES, head + sep + tail)
+
+
+def wall_thumb(path):
+    return os.path.join(THUMB_DIR, hashlib.md5(path.encode()).hexdigest() + '.jpg')
+
+
+def ensure_thumb(path):
+    thumb = wall_thumb(path)
+    try:
+        if os.path.getmtime(thumb) >= os.path.getmtime(path):
+            return thumb
+    except OSError:
+        pass
+    os.makedirs(THUMB_DIR, exist_ok=True)
+    subprocess.run(['magick', '-define', 'jpeg:size=1280x720', path + '[0]', '-strip',
+                    '-thumbnail', '640x360^', '-gravity', 'center', '-extent', '640x360',
+                    '-quality', '88', thumb], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return thumb if os.path.exists(thumb) else None
+
+
+def current_wallpaper():
+    link = os.path.join(HOME, '.cache/current_wall')
+    p = os.path.realpath(link) if os.path.islink(link) else ''
+    if os.path.isfile(p):
+        return p
+    m = re.search(r"feh[^']*'([^']+)'", read_file(os.path.join(HOME, '.fehbg')))
+    return m.group(1) if m else ''
+
+
+def list_walls():
+    try:
+        return sorted(os.path.join(WALL_DIR, f) for f in os.listdir(WALL_DIR)
+                      if f.lower().endswith(IMG_EXTS))
+    except OSError:
+        return []
+
+
+def pretty_wall(path):
+    name = os.path.splitext(os.path.basename(path))[0]
+    name = re.split(r'-(4k-)?wallpaper-uhdpaper\.com', name)[0]
+    return name.replace('-', ' ').replace('_', ' ').upper()
+
+
+# ════════════════════════════════════════════════════════════════ styling
+def build_css(c):
+    return f'''
+@define-color bg {c["bg"]};
+@define-color fg {c["fg"]};
+@define-color black {c["black"]};
+@define-color blackb {c["blackb"]};
+@define-color accent {c["blue"]};
+@define-color accent2 {c["magenta"]};
+@define-color cyan {c["cyan"]};
+@define-color green {c["green"]};
+@define-color red {c["red"]};
+@define-color yellow {c["yellow"]};
+
+window.rice-editor, window.rice-editor dialog {{
+    background-color: @bg;
+    color: @fg;
+    font-family: "{FONT}";
+    font-size: 10pt;
+}}
+.rice-editor label {{ color: @fg; }}
+.rice-editor .dim {{ color: alpha(@fg, 0.55); }}
+
+.sidebar {{
+    background-image: linear-gradient(to bottom, alpha(@black, 0.95), alpha(@bg, 0.85));
+    border-right: 1px solid alpha(@accent, 0.22);
+    padding: 18px 12px;
+}}
+.brand {{ font-size: 15pt; font-weight: 800; letter-spacing: 3px; color: @fg; }}
+.brand-accent {{ color: @accent; }}
+.rice-chip {{
+    background-color: alpha(@accent2, 0.14);
+    border: 1px solid alpha(@accent2, 0.5);
+    border-radius: 20px; padding: 2px 12px;
+    color: @accent2; font-size: 8pt; font-weight: bold; letter-spacing: 2px;
+}}
+button.nav {{
+    background: none; border: none; box-shadow: none; text-shadow: none;
+    border-radius: 10px; padding: 8px 12px; margin: 1px 0;
+    color: alpha(@fg, 0.62);
+    transition: all 180ms ease-out;
+}}
+button.nav label {{ color: inherit; }}
+button.nav .nav-icon {{ font-size: 13pt; min-width: 26px; }}
+button.nav:hover {{ background-color: alpha(@accent, 0.10); color: @fg; }}
+button.nav.active {{
+    background-image: linear-gradient(to right, alpha(@accent, 0.28), alpha(@accent, 0.02));
+    color: @accent;
+    box-shadow: inset 3px 0 0 @accent;
+}}
+
+.content {{ background-color: transparent; }}
+.page {{ padding: 4px 26px 26px 26px; }}
+
+.card {{
+    background-color: alpha(@black, 0.55);
+    border: 1px solid alpha(@accent, 0.16);
+    border-radius: 14px;
+    padding: 16px 18px;
+}}
+.card:hover {{ border-color: alpha(@accent, 0.34); }}
+.card-title {{ color: @accent; font-weight: 800; font-size: 9pt; letter-spacing: 3px; }}
+.card-icon {{ color: @accent2; font-size: 12pt; }}
+.card-sub {{ color: alpha(@fg, 0.45); font-size: 8pt; }}
+.row {{ padding: 7px 2px; border-bottom: 1px solid alpha(@fg, 0.05); }}
+.row-title {{ font-weight: bold; }}
+.row-desc {{ color: alpha(@fg, 0.45); font-size: 8pt; }}
+.value {{ color: @cyan; font-weight: bold; min-width: 52px; }}
+.big {{ font-size: 22pt; font-weight: 800; letter-spacing: 2px; }}
+.mono-note {{ color: alpha(@fg, 0.5); font-size: 8pt; }}
+
+scale {{ min-width: 230px; }}
+scale trough {{ background-color: alpha(@fg, 0.10); min-height: 4px; border-radius: 4px; border: none; }}
+scale highlight {{ background-image: linear-gradient(to right, @accent2, @accent); border-radius: 4px; border: none; }}
+scale slider {{
+    background-image: none; background-color: @accent; border: 2px solid @bg;
+    min-width: 16px; min-height: 16px; border-radius: 50%; margin: -7px;
+    box-shadow: 0 0 10px alpha(@accent, 0.75);
+}}
+scale slider:hover {{ background-color: @cyan; }}
+
+switch {{
+    background-image: none; background-color: alpha(@fg, 0.10);
+    border: 1px solid alpha(@accent, 0.30); border-radius: 20px; min-height: 22px;
+}}
+switch:checked {{ background-color: alpha(@accent, 0.85); border-color: @accent; box-shadow: 0 0 10px alpha(@accent, 0.45); }}
+switch slider {{ background-image: none; background-color: @fg; border: none; border-radius: 50%; min-width: 20px; min-height: 20px; }}
+
+button.neon, button.ghost, button.danger, button.color, combobox button {{
+    background-image: none; background-color: alpha(@accent, 0.10);
+    border: 1px solid alpha(@accent, 0.40); border-radius: 10px;
+    color: @accent; padding: 6px 14px; box-shadow: none; text-shadow: none; font-weight: bold;
+}}
+button.neon label, button.ghost label, combobox button label {{ color: inherit; }}
+button.color {{ padding: 4px; }}
+button.color colorswatch {{ border-radius: 6px; min-width: 26px; min-height: 22px; }}
+button.neon:hover, button.color:hover, combobox button:hover {{
+    background-color: alpha(@accent, 0.24); box-shadow: 0 0 14px alpha(@accent, 0.35);
+}}
+button.ghost {{ background-color: transparent; border-color: alpha(@fg, 0.15); color: @fg; }}
+button.ghost:hover {{ border-color: @accent; color: @accent; }}
+button.danger {{ background-color: alpha(@red, 0.10); border-color: alpha(@red, 0.5); color: @red; }}
+button.danger:hover {{ background-color: alpha(@red, 0.25); }}
+button.action {{
+    background-image: linear-gradient(135deg, alpha(@accent, 0.16), alpha(@accent2, 0.10));
+    border: 1px solid alpha(@accent, 0.30); border-radius: 12px; padding: 12px;
+    color: @fg; box-shadow: none; text-shadow: none;
+}}
+button.action:hover {{ border-color: @accent; box-shadow: 0 0 16px alpha(@accent, 0.35); }}
+button.action .action-icon {{ font-size: 18pt; color: @accent; }}
+
+entry, spinbutton {{
+    background-image: none; background-color: alpha(@black, 0.7);
+    border: 1px solid alpha(@accent, 0.25); border-radius: 8px;
+    color: @fg; caret-color: @accent; padding: 5px 9px; box-shadow: none;
+}}
+entry:focus, spinbutton:focus {{ border-color: @accent; box-shadow: 0 0 8px alpha(@accent, 0.4); }}
+spinbutton button {{ background: none; border: none; color: @accent; box-shadow: none; }}
+
+menu, .menu, popover, combobox window {{ background-color: @black; color: @fg; border: 1px solid alpha(@accent, 0.3); }}
+menuitem:hover {{ background-color: alpha(@accent, 0.2); }}
+
+button.palette {{
+    background-image: none; background-color: alpha(@black, 0.55);
+    border: 1px solid alpha(@fg, 0.08); border-radius: 14px; padding: 10px;
+    box-shadow: none; text-shadow: none;
+}}
+button.palette:hover {{ border-color: @accent; box-shadow: 0 0 18px alpha(@accent, 0.30); }}
+button.palette.active {{ border: 2px solid @green; box-shadow: 0 0 18px alpha(@green, 0.35); }}
+.rice-editor .chip-active {{
+    background-color: @green; color: @bg; border-radius: 8px; padding: 1px 8px;
+    font-size: 7pt; font-weight: 800; letter-spacing: 1px;
+}}
+
+button.wall {{
+    background: none; border: 2px solid transparent; border-radius: 10px; padding: 2px; box-shadow: none;
+}}
+button.wall:hover {{ border-color: @accent; box-shadow: 0 0 14px alpha(@accent, 0.4); }}
+button.wall.current {{ border-color: @green; }}
+
+.toast {{
+    background-color: alpha(@black, 0.96);
+    border: 1px solid @green; border-radius: 12px; padding: 10px 18px;
+    box-shadow: 0 0 22px alpha(@green, 0.25);
+}}
+.toast.error {{ border-color: @red; box-shadow: 0 0 22px alpha(@red, 0.3); }}
+.toast label {{ font-weight: bold; }}
+.statusbar {{ border-top: 1px solid alpha(@accent, 0.15); padding: 6px 26px; }}
+.statusbar label {{ font-size: 8pt; color: alpha(@fg, 0.45); }}
+.live-dot {{ color: @green; }}
+
+scrollbar {{ background: transparent; border: none; }}
+scrollbar slider {{ background-color: alpha(@accent, 0.35); border-radius: 6px; min-width: 5px; border: none; }}
+scrollbar slider:hover {{ background-color: @accent; }}
+separator {{ background-color: alpha(@accent, 0.15); }}
+tooltip {{ background-color: @black; border: 1px solid alpha(@accent, 0.4); border-radius: 8px; }}
+tooltip label {{ color: @fg; }}
+'''
+
+
+# ═════════════════════════════════════════════════════════ custom widgets
+def rounded(cr, x, y, w, h, r):
+    cr.new_sub_path()
+    cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+    cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+    cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+    cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
+    cr.close_path()
+
+
+def pango_text(cr, text, size, bold=False, spacing=0, family=FONT):
+    layout = PangoCairo.create_layout(cr)
+    layout.set_font_description(Pango.FontDescription(f'{family} {"Bold " if bold else ""}{size}'))
+    if spacing:
+        attrs = Pango.AttrList()
+        attrs.insert(Pango.attr_letter_spacing_new(int(spacing * Pango.SCALE)))
+        layout.set_attributes(attrs)
+    layout.set_text(text, -1)
+    return layout
+
+
+def draw_text(cr, text, x, y, size, rgba, bold=False, align='left', spacing=0, family=FONT):
+    layout = pango_text(cr, text, size, bold, spacing, family)
+    w, h = layout.get_pixel_size()
+    if align == 'center':
+        x -= w / 2
+    elif align == 'right':
+        x -= w
+    cr.move_to(x, y)
+    cr.set_source_rgba(*rgba)
+    PangoCairo.show_layout(cr, layout)
+    return w, h
+
+
+def load_surface(path, w, h, crop=True):
+    """Image scaled to cover w x h, as a cairo surface (None on failure)."""
+    try:
+        pix = GdkPixbuf.Pixbuf.new_from_file(path)
+    except (GLib.Error, TypeError):
+        return None
+    pw, ph = pix.get_width(), pix.get_height()
+    s = max(w / pw, h / ph) if crop else min(w / pw, h / ph)
+    sw, sh = max(1, int(pw * s)), max(1, int(ph * s))
+    pix = pix.scale_simple(sw, sh, GdkPixbuf.InterpType.BILINEAR)
+    if crop:
+        x, y = (sw - w) // 2, (sh - h) // 2
+        pix = pix.new_subpixbuf(max(0, x), max(0, y), min(w, sw), min(h, sh))
+    return Gdk.cairo_surface_create_from_pixbuf(pix, 1, None)
+
+
+class Animated(Gtk.DrawingArea):
+    """DrawingArea redrawn at a fixed rate while mapped."""
+
+    def __init__(self, app, fps=30):
+        super().__init__()
+        self.app = app
+        self._fps = fps
+        self._timer = None
+        self.connect('map', self._on_map)
+        self.connect('unmap', self._on_unmap)
+        self.connect('draw', lambda w, cr: self.paint(cr, w.get_allocated_width(),
+                                                      w.get_allocated_height()) or True)
+
+    def _on_map(self, *_):
+        if self._timer is None:
+            self._timer = GLib.timeout_add(int(1000 / self._fps), self._tick)
+
+    def _on_unmap(self, *_):
+        if self._timer:
+            GLib.source_remove(self._timer)
+            self._timer = None
+
+    def _tick(self):
+        self.queue_draw()
+        return True
+
+    @property
+    def c(self):
+        return self.app.rgb
+
+    def paint(self, cr, w, h):
+        pass
+
+
+class NeonLogo(Animated):
+    def __init__(self, app, path, size=132):
+        super().__init__(app, fps=30)
+        self.set_size_request(size, size)
+        self.surface = load_surface(path, size - 34, size - 34) if os.path.exists(path) else None
+
+    def paint(self, cr, w, h):
+        t = time.monotonic()
+        cx, cy, r = w / 2, h / 2, min(w, h) / 2 - 4
+        acc, acc2 = self.c['blue'], self.c['magenta']
+        glow = cairo.RadialGradient(cx, cy, r * 0.6, cx, cy, r + 4)
+        glow.add_color_stop_rgba(0, *acc, 0.0)
+        glow.add_color_stop_rgba(0.8, *acc, 0.12 + 0.06 * math.sin(t * 2))
+        glow.add_color_stop_rgba(1, *acc, 0)
+        cr.set_source(glow)
+        cr.paint()
+        # avatar
+        ir = r - 13
+        cr.save()
+        cr.arc(cx, cy, ir, 0, 2 * math.pi)
+        cr.clip()
+        if self.surface:
+            cr.set_source_surface(self.surface, cx - self.surface.get_width() / 2,
+                                  cy - self.surface.get_height() / 2)
+            cr.paint()
+        else:
+            cr.set_source_rgb(*self.c['black'])
+            cr.paint()
+            draw_text(cr, '', cx, cy - 22, 26, (*acc, 1), align='center')
+        cr.restore()
+        # rotating HUD rings
+        cr.set_line_width(2.5)
+        for i in range(3):
+            a0 = t * 1.2 + i * 2 * math.pi / 3
+            cr.arc(cx, cy, r - 4, a0, a0 + 1.4)
+            cr.set_source_rgba(*acc, 0.95)
+            cr.stroke()
+        cr.set_line_width(1.2)
+        for i in range(24):
+            a = -t * 0.5 + i * 2 * math.pi / 24
+            cr.arc(cx, cy, r, a, a + 0.12)
+            cr.set_source_rgba(*acc2, 0.7)
+            cr.stroke()
+        cr.arc(cx, cy, ir + 2, 0, 2 * math.pi)
+        cr.set_source_rgba(*acc, 0.35)
+        cr.stroke()
+
+
+class HudHeader(Animated):
+    GLYPHS = '!<>-_\\/[]{}=+*^?#01ABCDEFXZ'
+
+    def __init__(self, app):
+        super().__init__(app, fps=24)
+        self.set_size_request(-1, 84)
+        self.icon, self.title, self.sub = '', '', ''
+        self.t_change = 0
+
+    def set_section(self, icon, title, sub):
+        self.icon, self.title, self.sub = icon, title, sub
+        self.t_change = time.monotonic()
+
+    def decrypted(self, now):
+        p = min(1.0, (now - self.t_change) / 0.5)
+        n = int(len(self.title) * p)
+        rnd = random.Random(int(now * 30))
+        return self.title[:n] + ''.join(rnd.choice(self.GLYPHS) if ch != ' ' else ' '
+                                        for ch in self.title[n:])
+
+    def paint(self, cr, w, h):
+        now = time.monotonic()
+        acc, acc2, fg = self.c['blue'], self.c['magenta'], self.c['fg']
+        x = 26
+        draw_text(cr, self.icon, x, 16, 20, (*acc2, 1))
+        draw_text(cr, self.decrypted(now), x + 44, 14, 18, (*fg, 1), bold=True, spacing=4)
+        draw_text(cr, self.sub, x + 46, 48, 8, (*fg, 0.45), spacing=1)
+        # clock
+        cw, _ = draw_text(cr, time.strftime('%H:%M:%S'), w - 26, 12, 17, (*acc, 1), bold=True,
+                          align='right', spacing=2)
+        draw_text(cr, time.strftime('%a %d %b %Y').upper(), w - 26, 44, 8, (*fg, 0.5),
+                  align='right', spacing=2)
+        # system status blinker
+        lx = w - 26 - cw - 74
+        blink = 0.4 + 0.6 * (0.5 + 0.5 * math.sin(now * 4))
+        cr.arc(lx, 27, 4, 0, 2 * math.pi)
+        cr.set_source_rgba(*self.c['green'], blink)
+        cr.fill()
+        draw_text(cr, 'LIVE', lx + 10, 20, 8, (*self.c['green'], 0.85), bold=True, spacing=2)
+        # baseline with scanner
+        y = h - 8
+        lg = cairo.LinearGradient(x, 0, w - x, 0)
+        lg.add_color_stop_rgba(0, *acc, 0.85)
+        lg.add_color_stop_rgba(0.55, *acc2, 0.35)
+        lg.add_color_stop_rgba(1, *acc, 0.03)
+        cr.set_line_width(1)
+        cr.move_to(x, y)
+        cr.line_to(w - x, y)
+        cr.set_source(lg)
+        cr.stroke()
+        sx = x + ((now * 0.3) % 1.0) * (w - 2 * x)
+        sg = cairo.LinearGradient(sx - 80, 0, sx, 0)
+        sg.add_color_stop_rgba(0, *acc2, 0)
+        sg.add_color_stop_rgba(1, *acc2, 0.9)
+        cr.rectangle(sx - 80, y - 1, 80, 2)
+        cr.set_source(sg)
+        cr.fill()
+        # ticks
+        for i in range(0, int(w - 2 * x), 42):
+            cr.rectangle(x + i, y + 3, 1, 3)
+        cr.set_source_rgba(*fg, 0.12)
+        cr.fill()
+
+
+class Gauge(Animated):
+    def __init__(self, app, label, icon):
+        super().__init__(app, fps=20)
+        self.set_size_request(150, 150)
+        self.label, self.icon = label, icon
+        self.value = 0.0
+        self.shown = 0.0
+        self.detail = ''
+
+    def paint(self, cr, w, h):
+        self.shown += (self.value - self.shown) * 0.12
+        t = time.monotonic()
+        cx, cy = w / 2, h / 2 - 6
+        r = min(w, h - 20) / 2 - 10
+        acc, acc2, fg = self.c['blue'], self.c['magenta'], self.c['fg']
+        start, span = math.radians(135), math.radians(270)
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        cr.set_line_width(8)
+        cr.arc(cx, cy, r, start, start + span)
+        cr.set_source_rgba(*fg, 0.08)
+        cr.stroke()
+        v = max(0.0, min(1.0, self.shown / 100))
+        col = self.c['red'] if v > 0.85 else (self.c['yellow'] if v > 0.65 else acc)
+        if v > 0.002:
+            for lw, a in ((16, 0.10), (8, 1.0)):
+                cr.set_line_width(lw)
+                cr.arc(cx, cy, r, start, start + span * v)
+                cr.set_source_rgba(*col, a)
+                cr.stroke()
+        # ticks
+        cr.set_line_cap(cairo.LINE_CAP_BUTT)
+        cr.set_line_width(1)
+        for i in range(28):
+            a = start + span * i / 27
+            r0, r1 = r - 14, r - (19 if i % 3 == 0 else 16)
+            cr.move_to(cx + r0 * math.cos(a), cy + r0 * math.sin(a))
+            cr.line_to(cx + r1 * math.cos(a), cy + r1 * math.sin(a))
+        cr.set_source_rgba(*fg, 0.22)
+        cr.stroke()
+        # orbiting dot
+        a = t * 1.5
+        cr.arc(cx + (r + 9) * math.cos(a), cy + (r + 9) * math.sin(a), 1.8, 0, 2 * math.pi)
+        cr.set_source_rgba(*acc2, 0.8)
+        cr.fill()
+        draw_text(cr, f'{self.shown:.0f}%', cx, cy - 18, 16, (*fg, 1), bold=True, align='center')
+        draw_text(cr, self.icon + '  ' + self.label, cx, cy + 10, 8, (*acc, 0.9), bold=True,
+                  align='center', spacing=2)
+        draw_text(cr, self.detail, cx, h - 20, 7, (*fg, 0.45), align='center')
+
+
+class Swatches(Gtk.DrawingArea):
+    def __init__(self, colors, height=22, radius=5):
+        super().__init__()
+        self.colors = colors
+        self.radius = radius
+        self.set_size_request(-1, height)
+        self.connect('draw', self.on_draw)
+
+    def on_draw(self, w, cr):
+        W, H = w.get_allocated_width(), w.get_allocated_height()
+        n = max(1, len(self.colors))
+        rounded(cr, 0, 0, W, H, self.radius)
+        cr.clip()
+        for i, col in enumerate(self.colors):
+            cr.rectangle(W * i / n, 0, W / n + 1, H)
+            cr.set_source_rgb(*hex_rgb(col))
+            cr.fill()
+        return True
+
+
+class PaletteArt(Gtk.DrawingArea):
+    """Mini terminal mock painted with a palette."""
+
+    def __init__(self, pal):
+        super().__init__()
+        self.pal = pal
+        self.set_size_request(236, 118)
+        self.connect('draw', self.on_draw)
+
+    def on_draw(self, w, cr):
+        W, H = w.get_allocated_width(), w.get_allocated_height()
+        p = {k: hex_rgb(v) for k, v in self.pal.items() if isinstance(v, str) and v.startswith('#')}
+        g = lambda k: p.get(k, (0.5, 0.5, 0.5))  # noqa: E731
+        rounded(cr, 0, 0, W, H, 10)
+        cr.set_source_rgb(*g('bg'))
+        cr.fill()
+        rounded(cr, 0, 0, W, 18, 10)
+        cr.rectangle(0, 9, W, 9)
+        cr.set_source_rgb(*g('black'))
+        cr.fill()
+        for i, k in enumerate(('red', 'yellow', 'green')):
+            cr.arc(12 + i * 13, 9, 3.5, 0, 2 * math.pi)
+            cr.set_source_rgb(*g(k))
+            cr.fill()
+        lines = [[('blue', ' ~/rice '), ('magenta', ' '), ('fg', 'neofetch')],
+                 [('green', '✔ '), ('fg', 'bspwm '), ('cyan', 'picom '), ('yellow', 'polybar')],
+                 [('red', '✘ '), ('fg', 'error '), ('blackb', '# comment')]]
+        y = 26
+        for line in lines:
+            x = 10
+            for key, txt in line:
+                tw, _ = draw_text(cr, txt, x, y, 7.5, (*g(key), 1), bold=key != 'fg')
+                x += tw
+            y += 17
+        n = 8
+        bw = (W - 20) / n
+        for i, k in enumerate(('black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white')):
+            rounded(cr, 10 + i * bw + 1, H - 20, bw - 2, 11, 3)
+            cr.set_source_rgb(*g(k))
+            cr.fill()
+        return True
+
+
+class ImageBox(Gtk.DrawingArea):
+    """Rounded image with an optional HUD caption."""
+
+    def __init__(self, app, w, h, caption=''):
+        super().__init__()
+        self.app = app
+        self.set_size_request(w, h)
+        self.surface = None
+        self.caption = caption
+        self.busy = False
+        self.connect('draw', self.on_draw)
+
+    def set_image(self, path):
+        if not path:
+            return
+
+        def load():
+            thumb = ensure_thumb(path) if not path.startswith(os.path.join(HOME, '.cache')) else path
+            return thumb
+
+        def done(thumb):
+            if thumb:
+                w, h = self.get_allocated_width(), self.get_allocated_height()
+                self.surface = load_surface(thumb, max(w, 320), max(h, 180))
+                self.queue_draw()
+        run_bg(load, done)
+
+    def on_draw(self, w, cr):
+        W, H = w.get_allocated_width(), w.get_allocated_height()
+        c = self.app.rgb
+        rounded(cr, 0, 0, W, H, 12)
+        cr.save()
+        cr.clip()
+        if self.surface:
+            sw, sh = self.surface.get_width(), self.surface.get_height()
+            s = max(W / sw, H / sh)
+            cr.save()
+            cr.scale(s, s)
+            cr.set_source_surface(self.surface, (W / s - sw) / 2, (H / s - sh) / 2)
+            cr.paint()
+            cr.restore()
+        else:
+            cr.set_source_rgb(*c['black'])
+            cr.paint()
+        if self.caption:
+            lg = cairo.LinearGradient(0, H * 0.55, 0, H)
+            lg.add_color_stop_rgba(0, 0, 0, 0, 0)
+            lg.add_color_stop_rgba(1, 0, 0, 0, 0.75)
+            cr.rectangle(0, 0, W, H)
+            cr.set_source(lg)
+            cr.fill()
+            draw_text(cr, self.caption, 14, H - 26, 8, (*c['fg'], 0.95), bold=True, spacing=2)
+        cr.restore()
+        rounded(cr, 0.5, 0.5, W - 1, H - 1, 12)
+        cr.set_line_width(1)
+        cr.set_source_rgba(*c['blue'], 0.5)
+        cr.stroke()
+        # HUD corners
+        cr.set_line_width(2)
+        cr.set_source_rgba(*c['magenta'], 0.9)
+        L = 16
+        for x0, y0, dx, dy in ((4, 4, 1, 1), (W - 4, 4, -1, 1), (W - 4, H - 4, -1, -1), (4, H - 4, 1, -1)):
+            cr.move_to(x0, y0 + dy * L)
+            cr.line_to(x0, y0)
+            cr.line_to(x0 + dx * L, y0)
+        cr.stroke()
+        return True
+
+
+class TermPreview(Gtk.DrawingArea):
+    """Fake terminal over the wallpaper: shows opacity, font and colors live."""
+
+    def __init__(self, app):
+        super().__init__()
+        self.app = app
+        self.set_size_request(-1, 230)
+        self.opacity = 1.0
+        self.font = 'JetBrainsMono Nerd Font'
+        self.size = 10
+        self.wall = None
+        self.connect('draw', self.on_draw)
+        path = current_wallpaper()
+        if path:
+            run_bg(lambda: ensure_thumb(path),
+                   lambda t: (setattr(self, 'wall', load_surface(t, 640, 360) if t else None),
+                              self.queue_draw()))
+
+    def on_draw(self, w, cr):
+        W, H = w.get_allocated_width(), w.get_allocated_height()
+        c = self.app.rgb
+        rounded(cr, 0, 0, W, H, 12)
+        cr.clip()
+        if self.wall:
+            sw, sh = self.wall.get_width(), self.wall.get_height()
+            s = max(W / sw, H / sh)
+            cr.save()
+            cr.scale(s, s)
+            cr.set_source_surface(self.wall, 0, 0)
+            cr.paint()
+            cr.restore()
+        # the terminal window
+        tx, ty, tw, th = 36, 26, W - 72, H - 52
+        rounded(cr, tx + 6, ty + 10, tw, th, 10)
+        cr.set_source_rgba(0, 0, 0, 0.35)
+        cr.fill()
+        rounded(cr, tx, ty, tw, th, 10)
+        cr.set_source_rgba(*c['bg'], self.opacity)
+        cr.fill()
+        rounded(cr, tx, ty, tw, th, 10)
+        cr.set_source_rgba(*c['blue'], 0.35)
+        cr.set_line_width(1)
+        cr.stroke()
+        size = max(6, min(18, self.size))
+        lh = size * 1.9
+        lines = [
+            [('blue', ' ~/Documentos '), ('magenta', ' main '), ('green', '❯ '), ('fg', 'fastfetch')],
+            [('cyan', 'OS      '), ('fg', 'CachyOS x86_64')],
+            [('cyan', 'WM      '), ('fg', 'bspwm'), ('blackb', '  (' + RICE + ')')],
+            [('cyan', 'Shell   '), ('fg', 'zsh'), ('yellow', '  '), ('red', '●'), ('green', '●'),
+             ('yellow', '●'), ('blue', '●'), ('magenta', '●'), ('cyan', '●')],
+            [('blue', ' ~ '), ('green', '❯ '), ('fg', 'echo "hello rice"'), ('fg', '▌')],
         ]
-
-        for option in menu_options:
-            button = Gtk.Button(label=option)
-            button.set_name(option.lower().replace(" ", "_"))
-            sidebar.pack_start(button, False, False, 0)
-
-        # Área principal de contenido
-        self.content_stack = Gtk.Stack()
-        self.content_stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
-
-        # Encabezado
-        header = Gtk.Label()
-        header.set_markup(f"<big><b>Rice Editor : </b> <span foreground='yellow'>{self.current_theme}</span></big>")
-        header.set_margin_top(20)
-        header.set_margin_bottom(20)
-
-        # Contenido para cada opción
-        rice_options_content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        notebook = Gtk.Notebook()
-        tabs = ["Bspwm", "Picom", "Terminal", "Misc"]
-
-        for tab_name in tabs:
-            label = Gtk.Label(label=tab_name)
-            content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-            content.set_border_width(10)
-
-            if tab_name == "Bspwm":
-                # Border Width Configuration
-                border_width_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
-                border_width_label = Gtk.Label()
-                border_width_label.set_markup("Border Width <i><small>(0-9)</small></i>")
-                border_width_label.set_halign(Gtk.Align.START)
-
-                self.border_width_entry = Gtk.Entry()
-                self.border_width_entry.set_width_chars(5)
-                self.border_width_entry.set_max_length(1)
-                self.border_width_entry.set_input_purpose(Gtk.InputPurpose.DIGITS)
-
-                # Set initial value
-                initial_border_width = self.get_border_width()
-                self.border_width_entry.set_text(str(initial_border_width))
-
-                # Validation for numeric input
-                self.border_width_entry.connect("insert-text", self.on_border_entry_insert)
-
-                border_width_apply_button = Gtk.Button(label="Apply")
-                border_width_apply_button.connect("clicked", self.on_apply_border_width)
-
-                border_width_box.pack_start(border_width_label, True, True, 0)
-                border_width_box.pack_end(border_width_apply_button, False, False, 0)
-                border_width_box.pack_end(self.border_width_entry, False, False, 0)
-
-                content.pack_start(border_width_box, False, False, 7)
-
-                # Normal Border Color Configuration
-                normal_border_color_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
-                normal_border_color_label = Gtk.Label(label="Normal border color")
-                normal_border_color_label.set_halign(Gtk.Align.START)
-
-                # Color Picker Button
-                color_picker_button = Gtk.ColorButton()
-                color_picker_button.set_title("Select Normal Border Color")
-
-                self.normal_border_color_entry = Gtk.Entry()
-                self.normal_border_color_entry.set_width_chars(8)
-                self.normal_border_color_entry.set_max_length(7)
-
-                # Set initial value
-                initial_normal_border_color = self.get_border_color('NORMAL_BC')
-                self.normal_border_color_entry.set_text(initial_normal_border_color)
-                normal_initial_color = Gdk.RGBA()
-                normal_initial_color.parse(initial_normal_border_color)
-                color_picker_button.set_rgba(normal_initial_color)
-
-                # Connect color picker to entry
-                color_picker_button.connect("color-set", self.on_color_picked, self.normal_border_color_entry)
-
-                # Validation for hex color
-                self.normal_border_color_entry.connect("insert-text", self.on_color_entry_insert)
-
-                normal_border_color_apply_button = Gtk.Button(label="Apply")
-                normal_border_color_apply_button.connect("clicked", self.on_apply_border_color, 'NORMAL_BC', 'normal_border_color')
-
-                normal_border_color_box.pack_start(normal_border_color_label, True, True, 0)
-                normal_border_color_box.pack_end(normal_border_color_apply_button, False, False, 0)
-                normal_border_color_box.pack_end(self.normal_border_color_entry, False, False, 0)
-                normal_border_color_box.pack_end(color_picker_button, False, False, 0)
-
-                content.pack_start(normal_border_color_box, False, False, 7)
-
-                # Focused Border Color Configuration
-                focused_border_color_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
-                focused_border_color_label = Gtk.Label(label="Focused border color")
-                focused_border_color_label.set_halign(Gtk.Align.START)
-
-                # Color Picker Button
-                focused_color_picker_button = Gtk.ColorButton()
-                focused_color_picker_button.set_title("Select Focused Border Color")
-
-                self.focused_border_color_entry = Gtk.Entry()
-                self.focused_border_color_entry.set_width_chars(8)
-                self.focused_border_color_entry.set_max_length(7)
-
-                # Set initial value
-                initial_focused_border_color = self.get_border_color('FOCUSED_BC')
-                self.focused_border_color_entry.set_text(initial_focused_border_color)
-                focused_initial_color = Gdk.RGBA()
-                focused_initial_color.parse(initial_focused_border_color)
-                focused_color_picker_button.set_rgba(focused_initial_color)
-
-                # Connect color picker to entry
-                focused_color_picker_button.connect("color-set", self.on_color_picked, self.focused_border_color_entry)
-
-                # Validation for hex color
-                self.focused_border_color_entry.connect("insert-text", self.on_color_entry_insert)
-
-                focused_border_color_apply_button = Gtk.Button(label="Apply")
-                focused_border_color_apply_button.connect("clicked", self.on_apply_border_color, 'FOCUSED_BC', 'focused_border_color')
-
-                focused_border_color_box.pack_start(focused_border_color_label, True, True, 0)
-                focused_border_color_box.pack_end(focused_border_color_apply_button, False, False, 0)
-                focused_border_color_box.pack_end(self.focused_border_color_entry, False, False, 0)
-                focused_border_color_box.pack_end(focused_color_picker_button, False, False, 0)
-
-                content.pack_start(focused_border_color_box, False, False, 7)
-
-            # Dentro del método __init__, en la sección del notebook, donde está el tab de Picom
-            elif tab_name == "Picom":
-                # Corner Radius Configuration
-                corner_radius_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
-                corner_radius_label = Gtk.Label()
-                corner_radius_label.set_markup("Corner Radius <i><small>(0-99)</small></i>")
-                corner_radius_label.set_halign(Gtk.Align.START)
-
-                self.corner_radius_entry = Gtk.Entry()
-                self.corner_radius_entry.set_width_chars(5)
-                self.corner_radius_entry.set_max_length(2)
-                self.corner_radius_entry.set_input_purpose(Gtk.InputPurpose.DIGITS)
-
-                # Set initial value
-                initial_corner_radius = self.get_corner_radius()
-                self.corner_radius_entry.set_text(str(initial_corner_radius))
-
-                # Validation for numeric input
-                self.corner_radius_entry.connect("insert-text", self.on_corner_radius_entry_insert)
-
-                corner_radius_apply_button = Gtk.Button(label="Apply")
-                corner_radius_apply_button.connect("clicked", self.on_apply_corner_radius)
-
-                corner_radius_box.pack_start(corner_radius_label, True, True, 0)
-                corner_radius_box.pack_end(corner_radius_apply_button, False, False, 0)
-                corner_radius_box.pack_end(self.corner_radius_entry, False, False, 0)
-
-                content.pack_start(corner_radius_box, False, False, 7)
-
-                # Shadows Configuration
-                shadows_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
-                shadows_label = Gtk.Label(label="Shadows")
-                shadows_label.set_halign(Gtk.Align.START)
-
-                self.shadows_switch = Gtk.Switch()
-
-                # Set initial value
-                initial_shadows_state = self.get_shadows_state()
-                self.shadows_switch.set_active(initial_shadows_state)
-
-                # Connect switch to handler
-                self.shadows_switch.connect("state-set", self.on_shadows_switch_toggled)
-
-                shadows_box.pack_start(shadows_label, True, True, 0)
-                shadows_box.pack_end(self.shadows_switch, False, False, 0)
-
-                content.pack_start(shadows_box, False, False, 7)
-
-                # Shadow Color Configuration
-                shadow_color_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
-                shadow_color_label = Gtk.Label(label="Shadow Color")
-                shadow_color_label.set_halign(Gtk.Align.START)
-
-                # Color Picker Button
-                shadow_color_picker_button = Gtk.ColorButton()
-                shadow_color_picker_button.set_title("Select Shadow Color")
-
-                self.shadow_color_entry = Gtk.Entry()
-                self.shadow_color_entry.set_width_chars(8)
-                self.shadow_color_entry.set_max_length(7)
-
-                # Set initial value
-                initial_shadow_color = self.get_shadow_color()
-                self.shadow_color_entry.set_text(initial_shadow_color)
-                shadow_initial_color = Gdk.RGBA()
-                shadow_initial_color.parse(initial_shadow_color)
-                shadow_color_picker_button.set_rgba(shadow_initial_color)
-
-                # Connect color picker to entry
-                shadow_color_picker_button.connect("color-set", self.on_color_picked, self.shadow_color_entry)
-
-                # Validation for hex color
-                self.shadow_color_entry.connect("insert-text", self.on_color_entry_insert)
-
-                shadow_color_apply_button = Gtk.Button(label="Apply")
-                shadow_color_apply_button.connect("clicked", self.on_apply_shadow_color)
-
-                shadow_color_box.pack_start(shadow_color_label, True, True, 0)
-                shadow_color_box.pack_end(shadow_color_apply_button, False, False, 0)
-                shadow_color_box.pack_end(self.shadow_color_entry, False, False, 0)
-                shadow_color_box.pack_end(shadow_color_picker_button, False, False, 0)
-
-                content.pack_start(shadow_color_box, False, False, 7)
-
-                # Fadding Effect Configuration
-                fadding_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
-                fadding_label = Gtk.Label(label="Fadding Effect")
-                fadding_label.set_halign(Gtk.Align.START)
-
-                self.fadding_switch = Gtk.Switch()
-
-                # Set initial value
-                initial_fadding_state = self.get_fadding_state()
-                self.fadding_switch.set_active(initial_fadding_state)
-
-                # Connect switch to handler
-                self.fadding_switch.connect("state-set", self.on_fadding_switch_toggled)
-
-                fadding_box.pack_start(fadding_label, True, True, 0)
-                fadding_box.pack_end(self.fadding_switch, False, False, 0)
-
-                content.pack_start(fadding_box, False, False, 7)
-
-                # Blur Effect Configuration
-                blur_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
-                blur_label = Gtk.Label(label="Blur Effect")
-                blur_label.set_halign(Gtk.Align.START)
-
-                self.blur_switch = Gtk.Switch()
-
-                # Establecer valor inicial
-                initial_blur_state = self.get_blur_state()
-                self.blur_switch.set_active(initial_blur_state)
-
-                # Conectar switch a su manejador
-                self.blur_switch.connect("state-set", self.on_blur_switch_toggled)
-
-                blur_box.pack_start(blur_label, True, True, 0)
-                blur_box.pack_end(self.blur_switch, False, False, 0)
-
-                content.pack_start(blur_box, False, False, 7)
-
-                # Animations Configuration
-                animations_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
-                animations_label = Gtk.Label(label="Animations")
-                animations_label.set_halign(Gtk.Align.START)
-
-                self.animations_switch = Gtk.Switch()
-
-                # Set initial value
-                initial_animations_state = self.get_animations_state()
-                self.animations_switch.set_active(initial_animations_state)
-
-                # Connect switch to handler
-                self.animations_switch.connect("state-set", self.on_animations_switch_toggled)
-
-                animations_box.pack_start(animations_label, True, True, 0)
-                animations_box.pack_end(self.animations_switch, False, False, 0)
-
-                content.pack_start(animations_box, False, False, 7)
-
-            elif tab_name == "Terminal":
-				# Encabezado Transparency
-                transparency_label = Gtk.Label()
-                transparency_label.set_markup("<small>The blur effect only affects terminals with transparency. 1.0 means\nno transparency</small>")
-                transparency_label.set_halign(Gtk.Align.START)
-
-                content.pack_start(transparency_label, False, False, 7)
-
-                # Terminal Transparency Configuration
-                term_opacity_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
-                term_opacity_label = Gtk.Label()
-                term_opacity_label.set_markup("Terminal Transparency <i><small>(Range 0.1 - 1.0)</small></i>")
-                term_opacity_label.set_halign(Gtk.Align.START)
-
-                self.term_opacity_entry = Gtk.Entry()
-                self.term_opacity_entry.set_width_chars(5)
-                self.term_opacity_entry.set_max_length(4)
-
-                # Set initial value
-                initial_term_opacity = self.get_terminal_opacity()
-                self.term_opacity_entry.set_text(str(initial_term_opacity))
-
-                # Validation for numeric input
-                self.term_opacity_entry.connect("insert-text", self.on_terminal_opacity_insert)
-
-                term_opacity_apply_button = Gtk.Button(label="Apply")
-                term_opacity_apply_button.connect("clicked", self.on_apply_terminal_opacity)
-
-                term_opacity_box.pack_start(term_opacity_label, True, True, 0)
-                term_opacity_box.pack_end(term_opacity_apply_button, False, False, 0)
-                term_opacity_box.pack_end(self.term_opacity_entry, False, False, 0)
-
-                content.pack_start(term_opacity_box, False, False, 10)
-
-                # Encabezado Alacritty
-                alacritty_label = Gtk.Label()
-                alacritty_label.set_markup("<small>The following 2 options will change the appearance for both terminals,\nAlacritty and Kitty</small>")
-                alacritty_label.set_halign(Gtk.Align.START)
-
-                content.pack_start(alacritty_label, False, False, 7)
-
-                # Font Size Configuration
-                font_size_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
-                font_size_label = Gtk.Label(label="Font Size")
-                font_size_label.set_halign(Gtk.Align.START)
-
-                self.font_size_entry = Gtk.Entry()
-                self.font_size_entry.set_width_chars(5)
-                self.font_size_entry.set_max_length(2)
-                self.font_size_entry.set_input_purpose(Gtk.InputPurpose.DIGITS)
-
-                # Set initial value
-                initial_font_size = self.get_font_size()
-                self.font_size_entry.set_text(str(initial_font_size))
-
-                # Validation for numeric input
-                self.font_size_entry.connect("insert-text", self.on_font_size_insert)
-
-                font_size_apply_button = Gtk.Button(label="Apply")
-                font_size_apply_button.connect("clicked", self.on_apply_font_size)
-
-                font_size_box.pack_start(font_size_label, True, True, 0)
-                font_size_box.pack_end(font_size_apply_button, False, False, 0)
-                font_size_box.pack_end(self.font_size_entry, False, False, 0)
-
-                content.pack_start(font_size_box, False, False, 7)
-
-                # Font Name Configuration
-                font_name_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
-                font_name_label = Gtk.Label(label="Font Name")
-                font_name_label.set_halign(Gtk.Align.START)
-
-                # Button to open font chooser dialog
-                font_chooser_button = Gtk.Button(label="Select")
-                font_chooser_button.connect("clicked", self.on_font_chooser_clicked)
-
-                # Entry for manual font name input
-                self.font_name_entry = Gtk.Entry()
-                self.font_name_entry.set_width_chars(20)
-
-                # Set initial value
-                initial_font_name = self.get_font_name()
-                self.font_name_entry.set_text(initial_font_name)
-
-                # Apply button
-                font_name_apply_button = Gtk.Button(label="Apply")
-                font_name_apply_button.connect("clicked", self.on_apply_font_name)
-
-                font_name_box.pack_start(font_name_label, True, True, 0)
-                font_name_box.pack_end(font_name_apply_button, False, False, 0)
-                font_name_box.pack_end(self.font_name_entry, False, False, 0)
-                font_name_box.pack_end(font_chooser_button, False, False, 0)
-
-                content.pack_start(font_name_box, False, False, 7)
-
-            elif tab_name == "Misc":
-                # Wall Engine Configuration
-                wall_engine_label = Gtk.Label(label="Wall Engine")
-                wall_engine_label.set_halign(Gtk.Align.START)
-
-                # Dropdown for Wall Engine options
-                self.wall_engine_combo = Gtk.ComboBoxText()
-                self.wall_engine_combo.append("Random", "Random")
-                self.wall_engine_combo.append("CustomDir", "Custom Dir")
-                self.wall_engine_combo.append("Default", "Default")
-                self.wall_engine_combo.append("Animated", "Custom Animated")
-                self.wall_engine_combo.append("Slideshow", "SlideShow")
-
-                # Set initial value
-                initial_engine = self.get_wall_engine()
-                self.wall_engine_combo.set_active_id(initial_engine)
-                self.wall_engine_combo.connect("changed", self.on_wall_engine_changed)
-
-                # Container for dynamic options
-                self.wall_engine_options_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-
-                # Pack components
-                content.pack_start(wall_engine_label, False, False, 7)
-                content.pack_start(self.wall_engine_combo, False, False, 10)
-                content.pack_start(self.wall_engine_options_box, False, False, 7)
-
-                # Initial display based on current value
-                self.update_wall_engine_options(initial_engine)
-
-            else:
-                # Un label temporal para mostrar el contenido de cada tab
-                placeholder = Gtk.Label(label=f"Configuraciones de {tab_name}")
-                content.pack_start(placeholder, True, True, 0)
-
-            notebook.append_page(content, label)
-
-        rice_options_content.pack_start(notebook, True, True, 0)
-
-        # Contenido para General Options
-        general_frame = Gtk.Frame()  # Crear un Gtk.Frame
-        general_frame.set_shadow_type(Gtk.ShadowType.IN)  # Configurar el tipo de sombra del borde
-
-        general_options_content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        general_label = Gtk.Label(label="These options will affect all themes and the environment.")
-        general_label.set_margin_bottom(10)
-        general_label.set_margin_top(10)
-        general_options_content.pack_start(general_label, False, False, 0)
-
-        # Configuración de Picom Backend
-        picom_backend_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
-        picom_backend_label = Gtk.Label(label="Picom Backend")
-        picom_backend_label.set_halign(Gtk.Align.START)
-
-        # ComboBox para opciones de backend
-        self.picom_backend_combo = Gtk.ComboBoxText()
-        self.picom_backend_combo.append("xrender", "xrender")
-        self.picom_backend_combo.append("glx", "glx")
-        self.picom_backend_combo.append("egl", "egl")
-
-        # Establecer valor inicial
-        initial_backend = self.get_picom_backend()
-        self.picom_backend_combo.set_active_id(initial_backend)
-
-        # Conectar el evento de cambio
-        self.picom_backend_combo.connect("changed", self.on_apply_picom_backend)
-
-        picom_backend_box.pack_start(picom_backend_label, True, True, 10)
-        picom_backend_box.pack_end(self.picom_backend_combo, False, False, 10)
-
-        general_options_content.pack_start(picom_backend_box, False, False, 7)
-
-        # Configuración de vSync
-        vsync_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
-        vsync_label = Gtk.Label(label="vSync")
-        vsync_label.set_halign(Gtk.Align.START)
-
-        self.vsync_switch = Gtk.Switch()
-
-        # Establecer valor inicial
-        initial_vsync_state = self.get_vsync_state()
-        self.vsync_switch.set_active(initial_vsync_state)
-
-        # Conectar el evento de cambio
-        self.vsync_switch.connect("state-set", self.on_vsync_switch_toggled)
-
-        vsync_box.pack_start(vsync_label, True, True, 10)
-        vsync_box.pack_end(self.vsync_switch, False, False, 10)
-
-        general_options_content.pack_start(vsync_box, False, False, 7)
-
-        # Configuración de Bspwm Window Gap
-        window_gap_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
-        window_gap_label = Gtk.Label(label="Bspwm Window Gap")
-        window_gap_label.set_halign(Gtk.Align.START)
-
-        self.window_gap_entry = Gtk.Entry()
-        self.window_gap_entry.set_width_chars(5)
-        self.window_gap_entry.set_max_length(2)
-        self.window_gap_entry.set_input_purpose(Gtk.InputPurpose.DIGITS)
-
-        # Establecer valor inicial
-        initial_window_gap = self.get_window_gap()
-        self.window_gap_entry.set_text(str(initial_window_gap))
-
-        # Validación para permitir solo números entre 0 y 20
-        self.window_gap_entry.connect("insert-text", self.on_window_gap_entry_insert)
-
-        apply_button = Gtk.Button(label="Apply")
-        apply_button.connect("clicked", self.on_apply_window_gap)
-
-        window_gap_box.pack_start(window_gap_label, True, True, 10)
-        window_gap_box.pack_end(apply_button, False, False, 10)
-        window_gap_box.pack_end(self.window_gap_entry, False, False, 0)
-
-        general_options_content.pack_start(window_gap_box, False, False, 7)
-
-        general_frame.add(general_options_content)  # Añadir el contenido al Gtk.Frame
-
-        # Configuración de Pixel-Art on Terminal
-        pixel_art_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
-        pixel_art_label = Gtk.Label(label="Pixel-Art on Terminal")
-        pixel_art_label.set_halign(Gtk.Align.START)
-
-        self.pixel_art_switch = Gtk.Switch()
-
-        # Establecer valor inicial
-        initial_pixel_art_state = self.get_pixel_art_state()
-        self.pixel_art_switch.set_active(initial_pixel_art_state)
-
-        # Conectar el evento de cambio
-        self.pixel_art_switch.connect("state-set", self.on_pixel_art_switch_toggled)
-
-        pixel_art_box.pack_start(pixel_art_label, True, True, 10)
-        pixel_art_box.pack_end(self.pixel_art_switch, False, False, 10)
-
-        general_options_content.pack_start(pixel_art_box, False, False, 7)
-
-        # Configuración de fzf-tab completion
-        fzf_tab_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
-        fzf_tab_label = Gtk.Label(label="Disable fzf-tab completion")
-        fzf_tab_label.set_halign(Gtk.Align.START)
-
-        self.fzf_tab_switch = Gtk.Switch()
-
-        # Establecer valor inicial
-        initial_fzf_tab_state = self.get_fzf_tab_state()
-        self.fzf_tab_switch.set_active(initial_fzf_tab_state)
-
-        # Conectar el evento de cambio
-        self.fzf_tab_switch.connect("state-set", self.on_fzf_tab_switch_toggled)
-
-        fzf_tab_box.pack_start(fzf_tab_label, True, True, 10)
-        fzf_tab_box.pack_end(self.fzf_tab_switch, False, False, 10)
-
-        general_options_content.pack_start(fzf_tab_box, False, False, 7)
-
-        # Contenido para Help
-        help_frame = Gtk.Frame()  # Crear un Gtk.Frame
-        help_frame.set_shadow_type(Gtk.ShadowType.IN)  # Configurar el tipo de sombra del borde
-
-        help_content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        help_label = Gtk.Label(label="If you open RiceEditor in a theme, and switch to another\ntheme, you will continue editing the theme you were in before.\nYou need to close RiceEditor and open it again.\nThe name of the theme you are editing is in yellow letters.\nBe careful!!")
-        help_content.pack_start(help_label, True, True, 10)
-
-        help_frame.add(help_content)  # Añadir el contenido al Gtk.Frame
-
-        # Agregar contenidos al stack
-        self.content_stack.add_named(rice_options_content, "rice_options")
-        self.content_stack.add_named(general_frame, "general_options")
-        self.content_stack.add_named(help_frame, "help")
-
-        # Contenedor de contenido principal
-        content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        content_box.pack_start(header, False, False, 0)
-        content_box.pack_start(self.content_stack, True, True, 0)
-
-        # Agregar menú lateral y área de contenido al contenedor principal
-        main_box.pack_start(sidebar, False, False, 0)
-        main_box.pack_start(content_box, True, True, 0)
-
-        # Conectar botones del menú
-        sidebar.get_children()[1].connect("clicked", self.on_menu_clicked, "rice_options")
-        sidebar.get_children()[2].connect("clicked", self.on_menu_clicked, "general_options")
-        sidebar.get_children()[3].connect("clicked", self.on_menu_clicked, "help")
-
-        # Conexión de señales
-        self.connect("destroy", Gtk.main_quit)
-
-    def on_menu_clicked(self, button, page_name):
-        self.content_stack.set_visible_child_name(page_name)
-
-    def get_current_theme(self):
-        """
-        Lee el archivo .rice para obtener el tema actual
-        """
-        rice_file = os.path.expanduser('~/.config/bspwm/.rice')
-        try:
-            with open(rice_file, 'r') as f:
-                theme = f.read().strip()
-                return theme
-        except FileNotFoundError:
-            return "Tema no encontrado"
-        except Exception as e:
-            print(f"Error al leer el tema: {e}")
-            return "Error"
-
-    def get_border_width(self):
-        """
-        Lee el ancho del borde desde el archivo de configuración del tema
-        """
-        current_theme = self.get_current_theme()
-        config_file = os.path.expanduser(f'~/.config/bspwm/rices/{current_theme}/theme-config.bash')
-        try:
-            with open(config_file, 'r') as f:
-                for line in f:
-                    if line.startswith('BORDER_WIDTH='):
-                        match = re.search(r'BORDER_WIDTH="(\d)"', line)
-                        if match:
-                            return int(match.group(1))
-        except FileNotFoundError:
-            print(f"Archivo de configuración no encontrado: {config_file}")
-        except Exception as e:
-            print(f"Error al leer el ancho del borde: {e}")
-        return 1  # Valor por defecto
-
-    def get_border_color(self, color_var):
-        """
-        Lee el color del borde desde el archivo de configuración del tema
-        """
-        current_theme = self.get_current_theme()
-        config_file = os.path.expanduser(f'~/.config/bspwm/rices/{current_theme}/theme-config.bash')
-        try:
-            with open(config_file, 'r') as f:
-                for line in f:
-                    if line.startswith(f'{color_var}='):
-                        match = re.search(r'{color_var}="(#[0-9A-Fa-f]{{6}})"'.format(color_var=color_var), line)
-                        if match:
-                            return match.group(1)
-        except FileNotFoundError:
-            print(f"Archivo de configuración no encontrado: {config_file}")
-        except Exception as e:
-            print(f"Error al leer el color del borde: {e}")
-        return "#000000"  # Valor por defecto
-
-    def on_border_entry_insert(self, entry, new_text, new_text_length, position):
-        """
-        Validación para permitir solo números del 0 al 9
-        """
-        if not new_text.isdigit():
-            entry.stop_emission_by_name("insert-text")
-
-    def on_color_entry_insert(self, entry, new_text, new_text_length, position):
-        """
-        Validación para permitir solo caracteres hexadecimales y #
-        """
-        valid_chars = set('0123456789ABCDEFabcdef#')
-        for char in new_text:
-            if char not in valid_chars:
-                entry.stop_emission_by_name("insert-text")
-                return
-
-    def on_color_picked(self, color_button, entry):
-        """
-        Maneja la selección de color del color picker
-        """
-        color = color_button.get_rgba()
-        hex_color = '#{:02x}{:02x}{:02x}'.format(
-            int(color.red * 255),
-            int(color.green * 255),
-            int(color.blue * 255)
-        )
-        entry.set_text(hex_color.upper())
-
-    def on_apply_border_width(self, button):
-        """
-        Aplica el nuevo ancho de borde
-        """
-        new_border_width = self.border_width_entry.get_text()
-
-        # Validar que el valor esté entre 0 y 9
-        try:
-            width = int(new_border_width)
-            if 0 <= width <= 9:
-                # Actualizar archivo de configuración
-                current_theme = self.get_current_theme()
-                config_file = os.path.expanduser(f'~/.config/bspwm/rices/{current_theme}/theme-config.bash')
-
-                try:
-                    # Leer el archivo
-                    with open(config_file, 'r') as f:
-                        content = f.readlines()
-
-                    # Modificar la línea de BORDER_WIDTH
-                    for i, line in enumerate(content):
-                        if line.startswith('BORDER_WIDTH='):
-                            # Usamos regex para preservar el comentario y las tabulaciones
-                            match = re.match(r'(BORDER_WIDTH=)"(\d)"(\s*#.*)$', line)
-                            if match:
-                                content[i] = f'{match.group(1)}"{width}"{match.group(3)}\n'
-                            break
-
-                    # Escribir de vuelta al archivo
-                    with open(config_file, 'w') as f:
-                        f.writelines(content)
-
-                    # Aplicar cambios en tiempo real
-                    subprocess.run(['bspc', 'config', 'border_width', str(width)], check=True)
-
-                except Exception as e:
-                    print(f"Error al actualizar configuración: {e}")
-            else:
-                print("Valor fuera de rango (0-9)")
-        except ValueError:
-            print("Valor inválido")
-
-    def on_apply_border_color(self, button, color_var, bspc_config_key):
-        """
-        Aplica el nuevo color del borde
-        """
-        # Cambio aquí: usa directamente el nombre correcto del atributo
-        if color_var == 'NORMAL_BC':
-            new_color = self.normal_border_color_entry.get_text()
-        elif color_var == 'FOCUSED_BC':
-            new_color = self.focused_border_color_entry.get_text()
-
-        # El resto del código permanece igual
-        # Validar formato del color
-        if re.match(r'^#[0-9A-Fa-f]{6}$', new_color):
-            current_theme = self.get_current_theme()
-            config_file = os.path.expanduser(f'~/.config/bspwm/rices/{current_theme}/theme-config.bash')
-
-            try:
-                # Leer el archivo
-                with open(config_file, 'r') as f:
-                    content = f.readlines()
-
-                # Modificar la línea del color
-                for i, line in enumerate(content):
-                    if line.startswith(f'{color_var}='):
-                        # Usamos regex para preservar el comentario y las tabulaciones
-                        match = re.match(r'({color_var}=)"(#[0-9A-Fa-f]{{6}})"(\s*#.*)$'.format(color_var=color_var), line)
-                        if match:
-                            content[i] = f'{match.group(1)}"{new_color}"{match.group(3)}\n'
-                        break
-
-                # Escribir de vuelta al archivo
-                with open(config_file, 'w') as f:
-                    f.writelines(content)
-
-                # Aplicar cambios en tiempo real
-                subprocess.run(['bspc', 'config', bspc_config_key, new_color], check=True)
-
-            except Exception as e:
-                print(f"Error al actualizar configuración: {e}")
+        y = ty + 16
+        cr.save()
+        rounded(cr, tx, ty, tw, th, 10)
+        cr.clip()
+        for line in lines:
+            x = tx + 16
+            for key, txt in line:
+                tw_, _ = draw_text(cr, txt, x, y, size, (*c.get(key, c['fg']), 1), family=self.font)
+                x += tw_
+            y += lh
+        cr.restore()
+        draw_text(cr, f'{self.font} · {self.size}pt · opacity {self.opacity:.2f}', W - 14, H - 20, 7,
+                  (*c['fg'], 0.7), align='right')
+        return True
+
+
+class LockPreview(Animated):
+    """Lockscreen mock: cached render + ring/clock at their real positions."""
+
+    def __init__(self, app):
+        super().__init__(app, fps=12)
+        self.set_size_request(-1, 300)
+        self.surface = None
+        self.busy = False
+        self.opts = {}
+        self.reload()
+
+    def reload(self):
+        files = sorted(glob.glob(os.path.join(HOME, '.cache/lockscreen/lock-*.png')),
+                       key=os.path.getmtime)
+        if files:
+            run_bg(lambda: files[-1], lambda f: (setattr(self, 'surface', load_surface(f, 960, 540)),
+                                                 self.queue_draw()))
+
+    def paint(self, cr, W, H):
+        c = self.app.rgb
+        o = self.opts
+        # keep 16:9 inside the allocation
+        pw = min(W, H * 16 / 9)
+        ph = pw * 9 / 16
+        ox, oy = (W - pw) / 2, (H - ph) / 2
+        cr.save()
+        rounded(cr, ox, oy, pw, ph, 12)
+        cr.clip()
+        if self.surface:
+            sw, sh = self.surface.get_width(), self.surface.get_height()
+            cr.save()
+            cr.translate(ox, oy)
+            cr.scale(pw / sw, ph / sh)
+            cr.set_source_surface(self.surface, 0, 0)
+            cr.paint()
+            cr.restore()
         else:
-            print("Color inválido")
+            cr.set_source_rgb(*c['black'])
+            cr.paint()
+        pos = {'center': 0.5, 'right': 0.75}.get(o.get('pos'), 0.25)
+        cx = ox + pw * pos
+        s = pw / 1920
+        clock = time.strftime(o.get('clock', '%H:%M')) if o.get('clock') else time.strftime('%H:%M')
+        tcol = hex_rgb(o.get('date'), c['fg'])
+        draw_text(cr, clock, cx, oy + ph * 0.36 - 140 * s * 1.25, 140 * s * 0.75, (*tcol, 1),
+                  bold=True, align='center')
+        draw_text(cr, time.strftime('%a, %d %b'), cx, oy + ph * 0.42 - 45 * s * 1.1, 45 * s * 0.75,
+                  (*tcol, 1), align='center')
+        ry = oy + ph * 0.56
+        rr = 30 * s
+        cr.set_line_width(60 * s * 0.25 + 2)
+        cr.arc(cx, ry, rr + 6 * s, 0, 2 * math.pi)
+        cr.set_source_rgb(*hex_rgb(o.get('ring'), c['black']))
+        cr.stroke()
+        a = time.monotonic() * 2
+        cr.arc(cx, ry, rr + 6 * s, a, a + 0.9)
+        cr.set_source_rgb(*hex_rgb(o.get('accent'), c['blue']))
+        cr.stroke()
+        cr.arc(cx, ry, rr, 0, 2 * math.pi)
+        cr.set_source_rgba(*hex_rgb(o.get('bg'), c['bg']), 0.8)
+        cr.fill()
+        draw_text(cr, o.get('greeter', ''), cx, oy + ph * 0.72 - 10, 23 * s * 0.8,
+                  (*hex_rgb(o.get('fg'), c['fg']), 1), align='center')
+        if self.busy:
+            cr.set_source_rgba(0, 0, 0, 0.55)
+            cr.paint()
+            dots = '.' * (int(time.monotonic() * 3) % 4)
+            draw_text(cr, f'RENDERING{dots}', ox + pw / 2, oy + ph / 2 - 10, 11, (*c['blue'], 1),
+                      bold=True, align='center', spacing=3)
+        cr.restore()
+        rounded(cr, ox + 0.5, oy + 0.5, pw - 1, ph - 1, 12)
+        cr.set_line_width(1)
+        cr.set_source_rgba(*c['blue'], 0.5)
+        cr.stroke()
 
-    def get_corner_radius(self):
-        """
-        Lee el radio de esquina desde el archivo de configuración del tema
-        """
-        current_theme = self.get_current_theme()
-        config_file = os.path.expanduser(f'~/.config/bspwm/rices/{current_theme}/theme-config.bash')
+
+# ═══════════════════════════════════════════════════════════ main window
+class RiceEditor(Gtk.Window):
+    SECTIONS = [
+        ('dashboard', '󰕮', 'Dashboard', 'SYSTEM OVERVIEW · QUICK ACTIONS'),
+        ('palette', '󰏘', 'Palette', 'COLOR SCHEMES OF THE RICE · APPLIED INSTANTLY'),
+        ('windows', '󰖲', 'Windows', 'BSPWM · BORDERS · GAPS · BEHAVIOUR'),
+        ('compositor', '󰨇', 'Compositor', 'PICOM · CORNERS · SHADOWS · BLUR · OPACITY'),
+        ('terminal', '󰆍', 'Terminal', 'KITTY · ALACRITTY · GHOSTTY · SHELL'),
+        ('wallpaper', '󰸉', 'Wallpaper', 'ENGINE · GALLERY · 3D SELECTOR'),
+        ('notifications', '󰂚', 'Notifications', 'DUNST · PLACEMENT · STYLE · MOTION'),
+        ('lockscreen', '󰌾', 'Lockscreen', 'I3LOCK-COLOR · BETTERLOCKSCREEN'),
+        ('appearance', '󰉼', 'Appearance', 'GTK · ICONS · CURSOR · ROFI'),
+        ('snapshots', '󰁯', 'Snapshots', 'SAVE · RESTORE THE WHOLE RICE STATE'),
+        ('help', '󰋗', 'Help', 'SHORTCUTS · HOW IT WORKS'),
+    ]
+
+    def __init__(self):
+        super().__init__(title=f'Rice Editor: {RICE}')
+        self.get_style_context().add_class('rice-editor')
+        self.set_default_size(1220, 800)
+        self.set_position(Gtk.WindowPosition.CENTER)
+        self.cfg = ThemeConfig(THEME_CFG)
+        self.timers = {}
+        self.loading = True
+        self.css = Gtk.CssProvider()
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), self.css,
+                                                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1)
+        settings = Gtk.Settings.get_default()
+        settings.set_property('gtk-application-prefer-dark-theme', True)
+        self.load_colors()
+
+        overlay = Gtk.Overlay()
+        self.add(overlay)
+        root = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        overlay.add(root)
+        root.pack_start(self.build_sidebar(), False, False, 0)
+
+        right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        right.get_style_context().add_class('content')
+        self.header = HudHeader(self)
+        right.pack_start(self.header, False, False, 0)
+        self.stack = Gtk.Stack()
+        self.stack.set_transition_type(Gtk.StackTransitionType.SLIDE_UP_DOWN)
+        self.stack.set_transition_duration(320)
+        right.pack_start(self.stack, True, True, 0)
+        right.pack_start(self.build_statusbar(), False, False, 0)
+        root.pack_start(right, True, True, 0)
+
+        # toast
+        self.toast_rev = Gtk.Revealer()
+        self.toast_rev.set_transition_type(Gtk.RevealerTransitionType.SLIDE_UP)
+        self.toast_rev.set_transition_duration(220)
+        self.toast_rev.set_halign(Gtk.Align.END)
+        self.toast_rev.set_valign(Gtk.Align.END)
+        self.toast_rev.set_margin_end(26)
+        self.toast_rev.set_margin_bottom(42)
+        self.toast_box = Gtk.Box()
+        self.toast_box.get_style_context().add_class('toast')
+        self.toast_label = Gtk.Label()
+        self.toast_box.pack_start(self.toast_label, False, False, 0)
+        self.toast_rev.add(self.toast_box)
+        overlay.add_overlay(self.toast_rev)
+        self.toast_timer = None
+
+        builders = {
+            'dashboard': self.page_dashboard, 'palette': self.page_palette,
+            'windows': self.page_windows, 'compositor': self.page_compositor,
+            'terminal': self.page_terminal, 'wallpaper': self.page_wallpaper,
+            'notifications': self.page_notifications, 'lockscreen': self.page_lockscreen,
+            'appearance': self.page_appearance, 'snapshots': self.page_snapshots,
+            'help': self.page_help,
+        }
+        for key, *_ in self.SECTIONS:
+            page = builders[key]()
+            scroller = Gtk.ScrolledWindow()
+            scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            scroller.add(page)
+            self.stack.add_named(scroller, key)
+
+        self.connect('key-press-event', self.on_key)
+        self.connect('destroy', Gtk.main_quit)
+        self.go('dashboard')
+        self.loading = False
+        GLib.timeout_add_seconds(1, self.update_stats)
+        self.auto_snapshot()
+
+    # ──────────────────────────────────────────────────────────── colors
+    def load_colors(self):
+        names = ['bg', 'fg', 'black', 'blackb', 'red', 'green', 'yellow', 'blue', 'magenta',
+                 'cyan', 'white', 'accent_color']
+        vals = self.cfg.resolve(names)
+        defaults = dict(bg='#1a1b26', fg='#c0caf5', black='#15161e', blackb='#414868',
+                        red='#f7768e', green='#9ece6a', yellow='#e0af68', blue='#7aa2f7',
+                        magenta='#bb9af7', cyan='#7dcfff', white='#a9b1d6', accent_color='#222330')
+        self.hex = {k: vals.get(k) if valid_hex(vals.get(k)) else defaults[k] for k in names}
+        self.rgb = {k: hex_rgb(v) for k, v in self.hex.items()}
+        self.css.load_from_data(build_css(self.hex).encode())
+        if hasattr(self, 'brand'):
+            self.paint_brand()
+        self.queue_draw()
+
+    def paint_brand(self):
+        self.brand.set_markup('RICE<span foreground="{}">//</span>EDITOR'.format(self.hex['blue']))
+
+    # ────────────────────────────────────────────────────────── layout
+    def build_sidebar(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        box.get_style_context().add_class('sidebar')
+        box.set_size_request(236, -1)
+        logo = NeonLogo(self, os.path.join(BSPWM, 'config/assets/profile.png'))
+        logo.set_halign(Gtk.Align.CENTER)
+        box.pack_start(logo, False, False, 4)
+
+        self.brand = Gtk.Label()
+        self.brand.get_style_context().add_class('brand')
+        self.paint_brand()
+        box.pack_start(self.brand, False, False, 2)
+        chip = Gtk.Label(label=f'◉ {RICE.upper()}')
+        chip.get_style_context().add_class('rice-chip')
+        chip.set_halign(Gtk.Align.CENTER)
+        box.pack_start(chip, False, False, 8)
+
+        self.nav = {}
+        for i, (key, icon, title, _sub) in enumerate(self.SECTIONS):
+            btn = Gtk.Button()
+            btn.get_style_context().add_class('nav')
+            inner = Gtk.Box(spacing=10)
+            ic = Gtk.Label(label=icon)
+            ic.get_style_context().add_class('nav-icon')
+            inner.pack_start(ic, False, False, 0)
+            lb = Gtk.Label(label=title, xalign=0)
+            inner.pack_start(lb, True, True, 0)
+            num = Gtk.Label(label=str((i + 1) % 10) if i < 10 else '')
+            num.get_style_context().add_class('dim')
+            inner.pack_end(num, False, False, 0)
+            btn.add(inner)
+            btn.connect('clicked', lambda _b, k=key: self.go(k))
+            btn.set_tooltip_text(f'Ctrl+{(i + 1) % 10}' if i < 10 else None)
+            box.pack_start(btn, False, False, 0)
+            self.nav[key] = btn
+
+        bottom = Gtk.Box(spacing=6)
+        b1 = self.button('󰑓 Reload', 'neon', lambda *_: self.soft_reload())
+        b1.set_tooltip_text('Soft reload: polybar, picom, dunst, sxhkd… (Ctrl+R)')
+        b2 = self.button('󰔎 Rebuild', 'ghost', lambda *_: self.full_reload())
+        b2.set_tooltip_text('Re-apply the whole rice (Theme.sh)')
+        bottom.pack_start(b1, True, True, 0)
+        bottom.pack_start(b2, True, True, 0)
+        box.pack_end(bottom, False, False, 6)
+        return box
+
+    def build_statusbar(self):
+        bar = Gtk.Box(spacing=8)
+        bar.get_style_context().add_class('statusbar')
+        dot = Gtk.Label(label='●')
+        dot.get_style_context().add_class('live-dot')
+        bar.pack_start(dot, False, False, 0)
+        bar.pack_start(Gtk.Label(label='LIVE MODE — every change is applied and saved instantly'),
+                       False, False, 0)
+        bar.pack_end(Gtk.Label(label=THEME_CFG.replace(HOME, '~')), False, False, 0)
+        return bar
+
+    def go(self, key):
+        self.stack.set_visible_child_name(key)
+        for k, b in self.nav.items():
+            ctx = b.get_style_context()
+            (ctx.add_class if k == key else ctx.remove_class)('active')
+        for k, icon, title, sub in self.SECTIONS:
+            if k == key:
+                self.header.set_section(icon, title.upper(), sub)
+        if key == 'lockscreen':
+            self.lock_prev.reload()
+
+    def on_key(self, _w, ev):
+        ctrl = ev.state & Gdk.ModifierType.CONTROL_MASK
+        k = ev.keyval
+        if ctrl and k in (Gdk.KEY_q, Gdk.KEY_w):
+            self.destroy()
+            return True
+        if ctrl and Gdk.KEY_0 <= k <= Gdk.KEY_9:
+            idx = (k - Gdk.KEY_0 - 1) % 10
+            if idx < len(self.SECTIONS):
+                self.go(self.SECTIONS[idx][0])
+            return True
+        if ctrl and k == Gdk.KEY_s:
+            self.snapshot_create('manual')
+            return True
+        if ctrl and k == Gdk.KEY_r:
+            self.soft_reload()
+            return True
+        if ctrl and k == Gdk.KEY_l:
+            spawn(['ScreenLocker'])
+            return True
+        return False
+
+    # ──────────────────────────────────────────────────────── ui helpers
+    def toast(self, msg, error=False):
+        ctx = self.toast_box.get_style_context()
+        (ctx.add_class if error else ctx.remove_class)('error')
+        self.toast_label.set_text(('  ' if error else '  ') + msg)
+        self.toast_rev.set_reveal_child(True)
+        if self.toast_timer:
+            GLib.source_remove(self.toast_timer)
+        self.toast_timer = GLib.timeout_add(2400, self._hide_toast)
+
+    def _hide_toast(self):
+        self.toast_rev.set_reveal_child(False)
+        self.toast_timer = None
+        return False
+
+    def debounce(self, key, ms, fn):
+        if key in self.timers:
+            GLib.source_remove(self.timers[key])
+
+        def fire():
+            self.timers.pop(key, None)
+            fn()
+            return False
+        self.timers[key] = GLib.timeout_add(ms, fire)
+
+    def page(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        box.get_style_context().add_class('page')
+        return box
+
+    def card(self, icon, title, sub=''):
+        frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        frame.get_style_context().add_class('card')
+        head = Gtk.Box(spacing=10)
+        ic = Gtk.Label(label=icon)
+        ic.get_style_context().add_class('card-icon')
+        head.pack_start(ic, False, False, 0)
+        tl = Gtk.Label(label=title.upper(), xalign=0)
+        tl.get_style_context().add_class('card-title')
+        head.pack_start(tl, False, False, 0)
+        if sub:
+            sl = Gtk.Label(label=sub, xalign=1)
+            sl.get_style_context().add_class('card-sub')
+            head.pack_end(sl, False, False, 0)
+        frame.pack_start(head, False, False, 4)
+        return frame
+
+    def row(self, title, desc, *widgets):
+        r = Gtk.Box(spacing=12)
+        r.get_style_context().add_class('row')
+        texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        t = Gtk.Label(label=title, xalign=0)
+        t.get_style_context().add_class('row-title')
+        texts.pack_start(t, False, False, 0)
+        if desc:
+            d = Gtk.Label(label=desc, xalign=0)
+            d.set_line_wrap(True)
+            d.get_style_context().add_class('row-desc')
+            texts.pack_start(d, False, False, 0)
+        texts.set_valign(Gtk.Align.CENTER)
+        r.pack_start(texts, True, True, 0)
+        for wdg in reversed(widgets):
+            wdg.set_valign(Gtk.Align.CENTER)
+            r.pack_end(wdg, False, False, 0)
+        return r
+
+    def button(self, label, cls, cb):
+        b = Gtk.Button(label=label)
+        b.get_style_context().add_class(cls)
+        b.connect('clicked', cb)
+        return b
+
+    def scale(self, lo, hi, step, value, digits, on_change, fmt=None, delay=180):
+        sc = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, lo, hi, step)
+        sc.set_draw_value(False)
+        sc.set_digits(digits)
         try:
-            with open(config_file, 'r') as f:
+            sc.set_value(float(value))
+        except (TypeError, ValueError):
+            sc.set_value(lo)
+        lab = Gtk.Label(xalign=1)
+        lab.get_style_context().add_class('value')
+        fmt = fmt or (lambda v: f'{v:.{digits}f}')
+        lab.set_text(fmt(sc.get_value()))
+
+        def changed(s):
+            v = round(s.get_value(), digits) if digits else int(round(s.get_value()))
+            lab.set_text(fmt(v))
+            if not self.loading:
+                self.debounce(id(s), delay, lambda: on_change(v))
+        sc.connect('value-changed', changed)
+        return sc, lab
+
+    def switch(self, active, on_change):
+        sw = Gtk.Switch()
+        sw.set_active(bool(active))
+
+        def changed(s, _p):
+            if not self.loading:
+                on_change(s.get_active())
+        sw.connect('notify::active', changed)
+        return sw
+
+    def color(self, hexv, on_change):
+        rgba = Gdk.RGBA()
+        rgba.parse(hexv if valid_hex(hexv) else '#000000')
+        cb = Gtk.ColorButton.new_with_rgba(rgba)
+        entry = Gtk.Entry()
+        entry.set_width_chars(8)
+        entry.set_max_length(7)
+        entry.set_text(hexv if valid_hex(hexv) else '')
+
+        def picked(b):
+            h = rgba_hex(b.get_rgba())
+            entry.set_text(h)
+            on_change(h)
+
+        def typed(e):
+            h = e.get_text().strip()
+            if valid_hex(h):
+                r = Gdk.RGBA()
+                r.parse(h)
+                cb.set_rgba(r)
+                on_change(h)
+        cb.connect('color-set', picked)
+        entry.connect('activate', typed)
+        box = Gtk.Box(spacing=6)
+        box.pack_start(entry, False, False, 0)
+        box.pack_start(cb, False, False, 0)
+        return box
+
+    def combo(self, items, active, on_change):
+        cb = Gtk.ComboBoxText()
+        for item_id, label in items:
+            cb.append(item_id, label)
+        if not cb.set_active_id(active):
+            cb.set_active(0)
+
+        def changed(c):
+            if not self.loading:
+                on_change(c.get_active_id())
+        cb.connect('changed', changed)
+        return cb
+
+    def spin(self, lo, hi, value, on_change):
+        sp = Gtk.SpinButton.new_with_range(lo, hi, 1)
+        try:
+            sp.set_value(float(value))
+        except (TypeError, ValueError):
+            pass
+
+        def changed(s):
+            if not self.loading:
+                self.debounce(id(s), 300, lambda: on_change(int(s.get_value())))
+        sp.connect('value-changed', changed)
+        return sp
+
+    def fontbutton(self, font, on_change, mono=False):
+        """Button showing the font string; opens a font chooser."""
+        b = Gtk.Button(label=f'󰛖  {font}')
+        b.get_style_context().add_class('neon')
+
+        def pick(_b):
+            dlg = Gtk.FontChooserDialog(title='Select font', transient_for=self)
+            dlg.set_font(font)
+            if mono:
+                dlg.set_filter_func(lambda family, face: family.is_monospace())
+            if dlg.run() == Gtk.ResponseType.OK and dlg.get_font():
+                desc = Pango.FontDescription.from_string(dlg.get_font())
+                size = max(1, int(desc.get_size() / Pango.SCALE))
+                full = dlg.get_font()
+                b.set_label(f'󰛖  {full}')
+                on_change(desc.get_family(), size, full)
+            dlg.destroy()
+        b.connect('clicked', pick)
+        return b
+
+    # ─────────────────────────────────────────────────────── actions
+    def soft_reload(self):
+        spawn([os.path.join(BIN, 'SoftReload')])
+        self.toast('Environment soft-reloaded')
+
+    def full_reload(self, msg='Rice rebuilt'):
+        spawn([os.path.join(BIN, 'Theme.sh')])
+        self.toast(msg)
+
+    def apply_modules(self, msg, *mods, reload_picom=False):
+        run_bg(lambda: run_modules(*mods, reload_picom=reload_picom), lambda _r: self.toast(msg))
+
+    # ══════════════════════════════════════════════════════════ PAGES
+    # ─────────────────────────────────────────────────────── dashboard
+    def page_dashboard(self):
+        p = self.page()
+        hero = self.card('󰍹', 'Current rice', 'active setup')
+        hb = Gtk.Box(spacing=20)
+        self.dash_wall = ImageBox(self, 420, 236, caption='NOW ON SCREEN')
+        self.dash_wall.set_image(current_wallpaper())
+        hb.pack_start(self.dash_wall, False, False, 0)
+        info = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        name = Gtk.Label(label=RICE.upper(), xalign=0)
+        name.get_style_context().add_class('big')
+        info.pack_start(name, False, False, 0)
+        self.dash_pal = Gtk.Label(xalign=0)
+        self.dash_pal.get_style_context().add_class('dim')
+        info.pack_start(self.dash_pal, False, False, 0)
+        self.dash_sw = Swatches([], height=24)
+        info.pack_start(self.dash_sw, False, False, 4)
+        grid = Gtk.Grid(column_spacing=18, row_spacing=6)
+        self.sysinfo = {}
+        for i, key in enumerate(('KERNEL', 'UPTIME', 'WM', 'COMPOSITOR', 'DISPLAY', 'PACKAGES')):
+            k = Gtk.Label(label=key, xalign=0)
+            k.get_style_context().add_class('card-title')
+            v = Gtk.Label(label='…', xalign=0)
+            v.set_ellipsize(Pango.EllipsizeMode.END)
+            grid.attach(k, (i % 2) * 2, i // 2, 1, 1)
+            grid.attach(v, (i % 2) * 2 + 1, i // 2, 1, 1)
+            self.sysinfo[key] = v
+        info.pack_start(grid, False, False, 8)
+        hb.pack_start(info, True, True, 0)
+        hero.pack_start(hb, False, False, 6)
+        p.pack_start(hero, False, False, 0)
+        self.refresh_dashboard_palette()
+        run_bg(self.collect_sysinfo, self.show_sysinfo)
+
+        gcard = self.card('󰓅', 'Telemetry', 'live')
+        gb = Gtk.Box(spacing=10, homogeneous=True)
+        self.gauges = {k: Gauge(self, k, i) for k, i in
+                       (('CPU', '󰻠'), ('RAM', '󰍛'), ('DISK', '󰋊'), ('SWAP', '󰾴'))}
+        for g in self.gauges.values():
+            gb.pack_start(g, True, True, 0)
+        gcard.pack_start(gb, False, False, 0)
+        p.pack_start(gcard, False, False, 0)
+        self._cpu_prev = None
+
+        qa = self.card('󱐋', 'Quick actions')
+        grid = Gtk.Grid(column_spacing=12, row_spacing=12, column_homogeneous=True)
+        actions = [
+            ('󰸉', 'Wallpapers', '3D selector', lambda: spawn(['WallSelect'])),
+            ('󰏘', 'Rices', 'switch rice', lambda: spawn(['RiceSelector'])),
+            ('󰌾', 'Lock', 'lock screen now', lambda: spawn(['ScreenLocker'])),
+            ('󰑓', 'Soft reload', 'bars · picom · dunst', self.soft_reload),
+            ('󰄀', 'Screenshot', 'ScreenShoTer', lambda: spawn(['ScreenShoTer'])),
+            ('󰁯', 'Snapshot', 'save rice state', lambda: self.snapshot_create('manual')),
+        ]
+        for i, (icon, title, sub, fn) in enumerate(actions):
+            b = Gtk.Button()
+            b.get_style_context().add_class('action')
+            inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            ic = Gtk.Label(label=icon)
+            ic.get_style_context().add_class('action-icon')
+            inner.pack_start(ic, False, False, 2)
+            inner.pack_start(Gtk.Label(label=title), False, False, 0)
+            sl = Gtk.Label(label=sub)
+            sl.get_style_context().add_class('row-desc')
+            inner.pack_start(sl, False, False, 0)
+            b.add(inner)
+            b.connect('clicked', lambda _b, f=fn: f())
+            grid.attach(b, i % 3, i // 3, 1, 1)
+        qa.pack_start(grid, False, False, 4)
+        p.pack_start(qa, False, False, 0)
+        return p
+
+    def refresh_dashboard_palette(self):
+        active = self.cfg.active_palette()
+        self.dash_pal.set_text(f'PALETTE  ·  {palette_title(active) if active else "CUSTOM"}')
+        self.dash_sw.colors = [self.hex[k] for k in ('bg', 'black', 'blackb', 'red', 'green', 'yellow',
+                                                     'blue', 'magenta', 'cyan', 'white', 'fg')]
+        self.dash_sw.queue_draw()
+
+    @staticmethod
+    def collect_sysinfo():
+        info = {'KERNEL': platform.release()}
+        try:
+            with open('/proc/uptime') as f:
+                s = int(float(f.read().split()[0]))
+            info['UPTIME'] = f'{s // 86400}d {s % 86400 // 3600}h {s % 3600 // 60}m'
+        except OSError:
+            info['UPTIME'] = '?'
+        info['WM'] = 'bspwm ' + (subprocess.run(['bspwm', '-v'], capture_output=True, text=True)
+                                 .stdout.strip() if shutil.which('bspwm') else '')
+        info['COMPOSITOR'] = f'picom · {picom_get("backend", "?")}'
+        try:
+            out = subprocess.run(['xrandr'], capture_output=True, text=True, timeout=2).stdout
+            m = re.search(r'current (\d+) x (\d+)', out)
+            info['DISPLAY'] = f'{m.group(1)}x{m.group(2)}' if m else '?'
+        except Exception:
+            info['DISPLAY'] = '?'
+        try:
+            n = len(subprocess.run(['pacman', '-Qq'], capture_output=True, text=True,
+                                   timeout=5).stdout.split())
+            info['PACKAGES'] = f'{n} (pacman)'
+        except Exception:
+            info['PACKAGES'] = '?'
+        return info
+
+    def show_sysinfo(self, info):
+        for k, v in (info or {}).items():
+            if k in self.sysinfo:
+                self.sysinfo[k].set_text(v)
+
+    def update_stats(self):
+        try:
+            with open('/proc/stat') as f:
+                vals = list(map(int, f.readline().split()[1:]))
+            idle, total = vals[3] + vals[4], sum(vals)
+            if self._cpu_prev:
+                di, dt = idle - self._cpu_prev[0], total - self._cpu_prev[1]
+                self.gauges['CPU'].value = 100 * (1 - di / dt) if dt else 0
+                self.gauges['CPU'].detail = f'{os.cpu_count()} threads'
+            self._cpu_prev = (idle, total)
+            mem = {}
+            with open('/proc/meminfo') as f:
                 for line in f:
-                    if line.startswith('P_CORNER_R='):
-                        match = re.search(r'P_CORNER_R="(\d+)"', line)
-                        if match:
-                            return int(match.group(1))
-        except FileNotFoundError:
-            print(f"Archivo de configuración no encontrado: {config_file}")
-        except Exception as e:
-            print(f"Error al leer el radio de esquina: {e}")
-        return 6  # Valor por defecto
-
-    def on_corner_radius_entry_insert(self, entry, new_text, new_text_length, position):
-        """
-        Validación para permitir solo números del 0 al 99
-        """
-        if not new_text.isdigit():
-            entry.stop_emission_by_name("insert-text")
-
-    def on_apply_corner_radius(self, button):
-        """
-        Aplica el nuevo radio de esquina
-        """
-        new_corner_radius = self.corner_radius_entry.get_text()
-
-        # Validar que el valor esté entre 0 y 99
-        try:
-            radius = int(new_corner_radius)
-            if 0 <= radius <= 99:
-                # Actualizar archivo de configuración del tema
-                current_theme = self.get_current_theme()
-                config_file = os.path.expanduser(f'~/.config/bspwm/rices/{current_theme}/theme-config.bash')
-                picom_config_file = os.path.expanduser('~/.config/bspwm/config/picom/picom.conf')
-
-                try:
-                    # Leer el archivo de tema
-                    with open(config_file, 'r') as f:
-                        content = f.readlines()
-
-                    # Modificar la línea de P_CORNER_R
-                    for i, line in enumerate(content):
-                        if line.startswith('P_CORNER_R='):
-                            match = re.match(r'(P_CORNER_R=)"(\d+)"(\s*#.*)$', line)
-                            if match:
-                                content[i] = f'{match.group(1)}"{radius}"{match.group(3)}\n'
-                            break
-
-                    # Escribir de vuelta al archivo de tema
-                    with open(config_file, 'w') as f:
-                        f.writelines(content)
-
-                    # Modificar primera línea de corner-radius en picom.conf
-                    with open(picom_config_file, 'r') as f:
-                        lines = f.readlines()
-
-                    for i, line in enumerate(lines):
-                        if 'corner-radius =' in line:
-                            lines[i] = f'corner-radius = {radius}\n'
-                            break
-
-                    # Escribir de vuelta a picom.conf
-                    with open(picom_config_file, 'w') as f:
-                        f.writelines(lines)
-
-                except Exception as e:
-                    print(f"Error al actualizar configuración: {e}")
+                    k, v = line.split(':')
+                    mem[k] = int(v.split()[0])
+            used = mem['MemTotal'] - mem['MemAvailable']
+            self.gauges['RAM'].value = 100 * used / mem['MemTotal']
+            self.gauges['RAM'].detail = f'{used / 1048576:.1f} / {mem["MemTotal"] / 1048576:.1f} GiB'
+            if mem.get('SwapTotal'):
+                su = mem['SwapTotal'] - mem['SwapFree']
+                self.gauges['SWAP'].value = 100 * su / mem['SwapTotal']
+                self.gauges['SWAP'].detail = f'{su / 1048576:.1f} / {mem["SwapTotal"] / 1048576:.1f} GiB'
             else:
-                print("Valor fuera de rango (0-99)")
-        except ValueError:
-            print("Valor inválido")
+                self.gauges['SWAP'].detail = 'no swap'
+            st = os.statvfs('/')
+            tot, free = st.f_blocks * st.f_frsize, st.f_bavail * st.f_frsize
+            self.gauges['DISK'].value = 100 * (tot - free) / tot
+            self.gauges['DISK'].detail = f'{(tot - free) / 2**30:.0f} / {tot / 2**30:.0f} GiB  /'
+        except (OSError, ValueError, KeyError, ZeroDivisionError):
+            pass
+        return True
 
-    def get_shadows_state(self):
-        """
-        Read the current shadows state from the theme configuration file
-        """
-        current_theme = self.get_current_theme()
-        config_file = os.path.expanduser(f'~/.config/bspwm/rices/{current_theme}/theme-config.bash')
-        try:
-            with open(config_file, 'r') as f:
-                for line in f:
-                    if line.startswith('P_SHADOWS='):
-                        match = re.search(r'P_SHADOWS="(true|false)"', line)
-                        if match:
-                            return match.group(1) == 'true'
-        except FileNotFoundError:
-            print(f"Archivo de configuración no encontrado: {config_file}")
-        except Exception as e:
-            print(f"Error al leer el estado de sombras: {e}")
-        return False  # Default to False if not found
+    # ───────────────────────────────────────────────────────── palette
+    def page_palette(self):
+        p = self.page()
+        c = self.card('󰏘', 'Color schemes', 'click to apply · the editor re-themes too')
+        self.pal_flow = Gtk.FlowBox()
+        self.pal_flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.pal_flow.set_max_children_per_line(4)
+        self.pal_flow.set_min_children_per_line(2)
+        self.pal_flow.set_column_spacing(14)
+        self.pal_flow.set_row_spacing(14)
+        self.pal_buttons = {}
+        active = self.cfg.active_palette()
+        for func, pal in parse_palettes().items():
+            b = Gtk.Button()
+            b.get_style_context().add_class('palette')
+            if func == active:
+                b.get_style_context().add_class('active')
+            v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            v.pack_start(PaletteArt(pal), False, False, 0)
+            h = Gtk.Box(spacing=6)
+            h.pack_start(Gtk.Label(label=palette_title(func), xalign=0), True, True, 0)
+            chip = Gtk.Label(label='ACTIVE')
+            chip.get_style_context().add_class('chip-active')
+            chip.set_no_show_all(True)
+            chip.set_visible(func == active)
+            h.pack_end(chip, False, False, 0)
+            v.pack_start(h, False, False, 0)
+            b.add(v)
+            b.connect('clicked', lambda _b, f=func: self.apply_palette(f))
+            self.pal_flow.add(b)
+            self.pal_buttons[func] = (b, chip)
+        c.pack_start(self.pal_flow, False, False, 6)
+        note = Gtk.Label(label='Palettes live in ' + COLORS_FILE.replace(HOME, '~') +
+                         ' — add your own cargar_<name>() function and it shows up here.', xalign=0)
+        note.get_style_context().add_class('mono-note')
+        note.set_line_wrap(True)
+        c.pack_start(note, False, False, 6)
+        p.pack_start(c, False, False, 0)
+        return p
 
-    def on_shadows_switch_toggled(self, switch, state):
-        """
-        Handle shadows switch state changes
-        """
-        # Convert boolean state to string 'true' or 'false'
-        new_state = 'true' if state else 'false'
+    def apply_palette(self, func):
+        self.cfg.set_palette(func)
+        for f, (b, chip) in self.pal_buttons.items():
+            ctx = b.get_style_context()
+            (ctx.add_class if f == func else ctx.remove_class)('active')
+            chip.set_visible(f == func)
+        self.load_colors()
+        self.refresh_dashboard_palette()
+        self.full_reload(f'Palette {palette_title(func)} applied')
 
-        current_theme = self.get_current_theme()
-        config_file = os.path.expanduser(f'~/.config/bspwm/rices/{current_theme}/theme-config.bash')
-        picom_config_file = os.path.expanduser('~/.config/bspwm/config/picom/picom-rules.conf')
+    # ───────────────────────────────────────────────────────── windows
+    def page_windows(self):
+        p = self.page()
+        cfg = self.cfg
 
-        try:
-            # Update theme-config.bash
-            with open(config_file, 'r') as f:
-                content = f.readlines()
+        c = self.card('󰢡', 'Borders')
+        sc, lab = self.scale(0, 10, 1, cfg.raw('BORDER_WIDTH', '0'), 0, self.set_border_width,
+                             fmt=lambda v: f'{int(v)} px')
+        c.pack_start(self.row('Border width', 'Width of the window border', sc, lab), False, False, 0)
+        c.pack_start(self.row('Normal border', 'Unfocused windows',
+                              self.color(cfg.raw('NORMAL_BC'), lambda h: self.set_border_color('NORMAL_BC', 'normal_border_color', h))),
+                     False, False, 0)
+        c.pack_start(self.row('Focused border', 'The window with focus',
+                              self.color(cfg.raw('FOCUSED_BC'), lambda h: self.set_border_color('FOCUSED_BC', 'focused_border_color', h))),
+                     False, False, 0)
+        p.pack_start(c, False, False, 0)
 
-            for i, line in enumerate(content):
-                if line.startswith('P_SHADOWS='):
-                    match = re.match(r'(P_SHADOWS=)"(true|false)"(\s*#.*)$', line)
-                    if match:
-                        content[i] = f'{match.group(1)}"{new_state}"{match.group(3)}\n'
-                    break
+        c = self.card('󰕰', 'Gaps & padding', 'bspwmrc / theme-config')
+        sc, lab = self.scale(0, 40, 1, bspc('config', 'window_gap') or bspwmrc_get('window_gap', '5'), 0,
+                             self.set_gap, fmt=lambda v: f'{int(v)} px')
+        c.pack_start(self.row('Window gap', 'Space between tiled windows', sc, lab), False, False, 0)
+        pads = Gtk.Box(spacing=8)
+        for side in ('TOP', 'BOTTOM', 'LEFT', 'RIGHT'):
+            v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            lb = Gtk.Label(label=side)
+            lb.get_style_context().add_class('row-desc')
+            v.pack_start(lb, False, False, 0)
+            v.pack_start(self.spin(0, 200, cfg.raw(f'{side}_PADDING', '0'),
+                                   lambda val, s=side: self.set_padding(s, val)), False, False, 0)
+            pads.pack_start(v, False, False, 0)
+        c.pack_start(self.row('Screen padding', 'Reserved space at each edge (the bar lives in TOP)', pads),
+                     False, False, 0)
+        p.pack_start(c, False, False, 0)
 
-            with open(config_file, 'w') as f:
-                f.writelines(content)
+        c = self.card('󰙵', 'Behaviour', 'bspwmrc')
+        sc, lab = self.scale(0.3, 0.7, 0.01, bspc('config', 'split_ratio') or bspwmrc_get('split_ratio', '0.5'), 2,
+                             lambda v: self.set_bspwm('split_ratio', f'{v:.2f}', 'Split ratio'))
+        c.pack_start(self.row('Split ratio', 'Size of the new window when splitting', sc, lab), False, False, 0)
+        for key, title, desc in (
+                ('focus_follows_pointer', 'Focus follows pointer', 'Focus the window under the mouse'),
+                ('pointer_follows_focus', 'Pointer follows focus', 'Warp the mouse to the focused window'),
+                ('single_monocle', 'Single monocle', 'Monocle layout when only one window is open'),
+                ('borderless_monocle', 'Borderless monocle', 'Remove borders in monocle layout'),
+                ('gapless_monocle', 'Gapless monocle', 'Remove gaps in monocle layout')):
+            live = bspc('config', key) or bspwmrc_get(key, 'false')
+            c.pack_start(self.row(title, desc, self.switch(live == 'true',
+                                                           lambda on, k=key, t=title: self.set_bspwm(k, 'true' if on else 'false', t))),
+                         False, False, 0)
+        c.pack_start(self.row('Automatic scheme', 'Where new windows are inserted',
+                              self.combo([(x, x.replace('_', ' ')) for x in ('longest_side', 'alternate', 'spiral')],
+                                         bspwmrc_get('automatic_scheme', 'longest_side'),
+                                         lambda v: self.set_bspwm('automatic_scheme', v, 'Scheme'))),
+                     False, False, 0)
+        p.pack_start(c, False, False, 0)
+        return p
 
-            # Update picom.conf
-            with open(picom_config_file, 'r') as f:
-                lines = f.readlines()
+    def set_border_width(self, v):
+        self.cfg.set('BORDER_WIDTH', v)
+        bspc('config', 'border_width', v)
+        self.toast(f'Border width → {v}px')
 
-            for i, line in enumerate(lines):
-                if '#-shadow-switch' in line:
-                    # Preserve initial indentation
-                    match = re.match(r'(\s*)shadow\s*=\s*(true|false);(\s*)#-shadow-switch', line)
-                    if match:
-                        lines[i] = f'{match.group(1)}shadow = {new_state};{match.group(3)}#-shadow-switch\n'
+    def set_border_color(self, var, key, h):
+        self.cfg.set(var, h)
+        bspc('config', key, h)
+        self.toast(f'{var} → {h}')
 
-            with open(picom_config_file, 'w') as f:
-                f.writelines(lines)
+    def set_gap(self, v):
+        bspwmrc_set('window_gap', v)
+        bspc('config', 'window_gap', v)
+        self.toast(f'Window gap → {v}px')
 
-        except Exception as e:
-            print(f"Error al actualizar configuración de sombras: {e}")
+    def set_padding(self, side, v):
+        self.cfg.set(f'{side}_PADDING', v)
+        bspc('config', f'{side.lower()}_padding', v)
+        self.toast(f'{side.title()} padding → {v}px')
 
-        return False  # Must return False to allow switch state change
+    def set_bspwm(self, key, value, title):
+        bspwmrc_set(key, value)
+        bspc('config', key, value)
+        self.toast(f'{title} → {value}')
 
-    def get_shadow_color(self):
-        """
-        Read the shadow color from the theme configuration file
-        """
-        current_theme = self.get_current_theme()
-        config_file = os.path.expanduser(f'~/.config/bspwm/rices/{current_theme}/theme-config.bash')
-        try:
-            with open(config_file, 'r') as f:
-                for line in f:
-                    if line.startswith('SHADOW_C='):
-                        match = re.search(r'SHADOW_C="(#[0-9A-Fa-f]{6})"', line)
-                        if match:
-                            return match.group(1)
-        except FileNotFoundError:
-            print(f"Archivo de configuración no encontrado: {config_file}")
-        except Exception as e:
-            print(f"Error al leer el color de sombra: {e}")
-        return "#000000"  # Default color
+    # ────────────────────────────────────────────────────── compositor
+    def page_compositor(self):
+        p = self.page()
+        cfg = self.cfg
 
-    def on_apply_shadow_color(self, button):
-        """
-        Apply the new shadow color
-        """
-        new_color = self.shadow_color_entry.get_text()
+        c = self.card('󰍹', 'Engine', 'needs a picom restart')
+        c.pack_start(self.row('Backend', 'glx is the fastest; xrender works everywhere',
+                              self.combo([('glx', 'glx'), ('egl', 'egl'), ('xrender', 'xrender')],
+                                         picom_get('backend', 'glx'), self.set_backend)), False, False, 0)
+        c.pack_start(self.row('VSync', 'Avoid tearing', self.switch(picom_get('vsync') == 'true', self.set_vsync)),
+                     False, False, 0)
+        p.pack_start(c, False, False, 0)
 
-        # Validate color format
-        if re.match(r'^#[0-9A-Fa-f]{6}$', new_color):
-            current_theme = self.get_current_theme()
-            config_file = os.path.expanduser(f'~/.config/bspwm/rices/{current_theme}/theme-config.bash')
-            picom_config_file = os.path.expanduser('~/.config/bspwm/config/picom/picom.conf')
+        c = self.card('󰢡', 'Corners & opacity')
+        sc, lab = self.scale(0, 30, 1, cfg.raw('P_CORNER_R', '10'), 0, self.set_corners,
+                             fmt=lambda v: f'{int(v)} px')
+        c.pack_start(self.row('Corner radius', 'Rounded window corners (0 = square)', sc, lab), False, False, 0)
+        sc, lab = self.scale(0.5, 1.0, 0.01, cfg.raw('P_ACTIVE_OPACITY', '0.97'), 2,
+                             lambda v: self.set_opacity('P_ACTIVE_OPACITY', v, 'Focused'))
+        c.pack_start(self.row('Focused opacity', 'Opacity of the focused window', sc, lab), False, False, 0)
+        sc, lab = self.scale(0.5, 1.0, 0.01, cfg.raw('P_INACTIVE_OPACITY', '0.92'), 2,
+                             lambda v: self.set_opacity('P_INACTIVE_OPACITY', v, 'Unfocused'))
+        c.pack_start(self.row('Unfocused opacity', 'Opacity of the other windows', sc, lab), False, False, 0)
+        p.pack_start(c, False, False, 0)
 
-            try:
-                # Read and update theme-config.bash
-                with open(config_file, 'r') as f:
-                    content = f.readlines()
+        c = self.card('󰊠', 'Shadows')
+        c.pack_start(self.row('Shadows', 'Drop shadow under windows',
+                              self.switch(cfg.raw('P_SHADOWS') == 'true',
+                                          lambda on: self.set_picom_flag('P_SHADOWS', on, 'Shadows'))), False, False, 0)
+        c.pack_start(self.row('Shadow color', '', self.color(cfg.raw('SHADOW_C', '#000000'), self.set_shadow_color)),
+                     False, False, 0)
+        for key, title, lo, hi, step, dg in (('shadow-radius', 'Shadow radius', 0, 60, 1, 0),
+                                             ('shadow-opacity', 'Shadow opacity', 0, 1, 0.05, 2),
+                                             ('shadow-offset-x', 'Offset X', -40, 40, 1, 0),
+                                             ('shadow-offset-y', 'Offset Y', -40, 40, 1, 0)):
+            sc, lab = self.scale(lo, hi, step, picom_get(key, '0'), dg,
+                                 lambda v, k=key, t=title: self.set_picom_value(k, v, t))
+            c.pack_start(self.row(title, '', sc, lab), False, False, 0)
+        p.pack_start(c, False, False, 0)
 
-                # Modify the SHADOW_C line
-                for i, line in enumerate(content):
-                    if line.startswith('SHADOW_C='):
-                        match = re.match(r'(SHADOW_C=)"(#[0-9A-Fa-f]{6})"(\s*#.*)$', line)
-                        if match:
-                            content[i] = f'{match.group(1)}"{new_color}"{match.group(3)}\n'
-                        break
+        c = self.card('󰂵', 'Blur & fading')
+        c.pack_start(self.row('Blur', 'Frosted background behind transparent windows',
+                              self.switch(cfg.raw('P_BLUR') == 'true',
+                                          lambda on: self.set_picom_flag('P_BLUR', on, 'Blur'))), False, False, 0)
+        c.pack_start(self.row('Blur method', '',
+                              self.combo([(m, m) for m in ('gaussian', 'dual_kawase', 'box')],
+                                         blur_get('method', 'gaussian'), self.set_blur_method)), False, False, 0)
+        sc, lab = self.scale(1, 20, 1, blur_get('size', '4'), 0, lambda v: self.set_blur('size', v))
+        c.pack_start(self.row('Blur size', 'Kernel size (gaussian / box)', sc, lab), False, False, 0)
+        sc, lab = self.scale(0.5, 10, 0.5, blur_get('deviation', '2.5'), 1, lambda v: self.set_blur('deviation', v))
+        c.pack_start(self.row('Blur deviation', 'Softness (gaussian)', sc, lab), False, False, 0)
+        c.pack_start(self.row('Fading', 'Fade windows in and out',
+                              self.switch(cfg.raw('P_FADE') == 'true',
+                                          lambda on: self.set_picom_flag('P_FADE', on, 'Fading'))), False, False, 0)
+        sc, lab = self.scale(0.01, 0.15, 0.01, picom_get('fade-in-step', '0.03'), 2, self.set_fade_speed)
+        c.pack_start(self.row('Fade speed', 'Opacity step per frame', sc, lab), False, False, 0)
+        c.pack_start(self.row('Animations', 'Open/close/move animations (picom v12+)',
+                              self.switch(cfg.raw('P_ANIMATIONS') == '@', self.set_animations)), False, False, 0)
+        p.pack_start(c, False, False, 0)
+        return p
 
-                with open(config_file, 'w') as f:
-                    f.writelines(content)
+    def set_backend(self, v):
+        picom_set('backend', v, quoted=True)
+        restart_picom()
+        self.toast(f'Picom backend → {v} (restarted)')
 
-                # Update picom.conf
-                with open(picom_config_file, 'r') as f:
-                    lines = f.readlines()
+    def set_vsync(self, on):
+        picom_set('vsync', 'true' if on else 'false')
+        restart_picom()
+        self.toast(f'VSync {"on" if on else "off"} (picom restarted)')
 
-                # Modify the shadow-color line
-                for i, line in enumerate(lines):
-                    if line.strip().startswith('shadow-color ='):
-                        lines[i] = f'shadow-color = "{new_color}";\n'
-                        break
+    def set_corners(self, v):
+        self.cfg.set('P_CORNER_R', v)
+        file_sub(PICOM_CONF, r'^corner-radius = .*$', f'corner-radius = {v}')
+        reload_picom()
+        self.toast(f'Corner radius → {v}px')
 
-                with open(picom_config_file, 'w') as f:
-                    f.writelines(lines)
+    def set_opacity(self, var, v, title):
+        self.cfg.set(var, f'{v:.2f}')
+        tag = '#-active-opacity' if var == 'P_ACTIVE_OPACITY' else '#-inactive-opacity'
+        file_sub(PICOM_RULES, rf'^(\s*)opacity\s*=\s*[0-9.]+;(\s*){tag}', rf'\g<1>opacity = {v:.2f};\g<2>{tag}')
+        reload_picom()
+        self.toast(f'{title} opacity → {v:.2f}')
 
-            except Exception as e:
-                print(f"Error al actualizar configuración de color de sombra: {e}")
+    def set_picom_flag(self, var, on, title):
+        self.cfg.set(var, 'true' if on else 'false')
+        self.apply_modules(f'{title} {"enabled" if on else "disabled"}', '00-picom.sh', reload_picom=True)
+
+    def set_shadow_color(self, h):
+        self.cfg.set('SHADOW_C', h)
+        self.apply_modules(f'Shadow color → {h}', '00-picom.sh', reload_picom=True)
+
+    def set_picom_value(self, key, v, title):
+        picom_set(key, v)
+        reload_picom()
+        self.toast(f'{title} → {v}')
+
+    def set_blur_method(self, m):
+        blur_set('method', m, quoted=True)
+        if m == 'dual_kawase' and not re.search(r'strength\s*=', read_file(PICOM_RULES).split('rules:')[0]):
+            file_sub(PICOM_RULES, r'(method\s*=\s*"dual_kawase";)', r'\g<1>\n\t\tstrength = 5;')
+        reload_picom()
+        self.toast(f'Blur method → {m}')
+
+    def set_blur(self, key, v):
+        blur_set(key, v)
+        reload_picom()
+        self.toast(f'Blur {key} → {v}')
+
+    def set_fade_speed(self, v):
+        picom_set('fade-in-step', v)
+        picom_set('fade-out-step', v)
+        reload_picom()
+        self.toast(f'Fade speed → {v}')
+
+    def set_animations(self, on):
+        self.cfg.set('P_ANIMATIONS', '@' if on else '#')
+        self.apply_modules(f'Animations {"enabled" if on else "disabled"}', '00-picom.sh', reload_picom=True)
+
+    # ──────────────────────────────────────────────────────── terminal
+    def page_terminal(self):
+        p = self.page()
+        cfg = self.cfg
+        self.term_prev = TermPreview(self)
+        self.term_prev.opacity = float(cfg.raw('P_TERM_OPACITY', '1.0') or 1)
+        self.term_prev.font = cfg.raw('term_font_name', 'JetBrainsMono Nerd Font')
+        self.term_prev.size = int(cfg.raw('term_font_size', '10') or 10)
+        c = self.card('󰍹', 'Live preview')
+        c.pack_start(self.term_prev, False, False, 4)
+        p.pack_start(c, False, False, 0)
+
+        c = self.card('󰆍', 'Appearance', 'kitty · alacritty · ghostty')
+        sc, lab = self.scale(0.1, 1.0, 0.05, self.term_prev.opacity, 2, self.set_term_opacity, delay=350)
+        sc.connect('value-changed', lambda s: (setattr(self.term_prev, 'opacity', s.get_value()),
+                                               self.term_prev.queue_draw()))
+        c.pack_start(self.row('Background opacity', '1.0 = solid. Blur only shows through transparency',
+                              sc, lab), False, False, 0)
+        fb = self.fontbutton(f'{self.term_prev.font} {self.term_prev.size}', self.set_term_font, mono=True)
+        c.pack_start(self.row('Font', 'Monospace family and size', fb), False, False, 0)
+        p.pack_start(c, False, False, 0)
+
+        c = self.card('󰞷', 'Shell', '~/.zshrc')
+        c.pack_start(self.row('Pixel-art on startup', 'Run colorscript when a terminal opens',
+                              self.switch(self.zsh_line_active('$HOME/.local/bin/colorscript -r'),
+                                          lambda on: self.zsh_toggle('$HOME/.local/bin/colorscript -r', on, 'Pixel-art'))),
+                     False, False, 0)
+        c.pack_start(self.row('Disable fzf-tab', 'Use plain zsh completion instead of fzf-tab',
+                              self.switch(self.zsh_line_active('disable-fzf-tab'),
+                                          lambda on: self.zsh_toggle('disable-fzf-tab', on, 'fzf-tab disabled'))),
+                     False, False, 0)
+        p.pack_start(c, False, False, 0)
+        return p
+
+    def set_term_opacity(self, v):
+        self.cfg.set('P_TERM_OPACITY', f'{v:.2f}')
+        self.apply_modules(f'Terminal opacity → {v:.2f}', '05-kitty.sh', '05-alacritty.sh', '05-ghostty.sh')
+
+    def set_term_font(self, family, size, _full):
+        self.cfg.set('term_font_name', family)
+        self.cfg.set('term_font_size', size)
+        file_sub(KITTY_CONF, r'^font_family\s+.*$', f'font_family {family}')
+        file_sub(KITTY_CONF, r'^font_size\s+.*$', f'font_size {size}')
+        self.term_prev.font, self.term_prev.size = family, size
+        self.term_prev.queue_draw()
+        self.apply_modules(f'Terminal font → {family} {size}', '05-alacritty.sh')
+        spawn(['pkill', '-USR1', '-x', 'kitty'])
+
+    @staticmethod
+    def zsh_line_active(needle):
+        for line in read_file(ZSHRC).splitlines():
+            if needle in line:
+                return not line.strip().startswith('#')
+        return False
+
+    def zsh_toggle(self, needle, on, title):
+        lines = read_file(ZSHRC).splitlines(keepends=True)
+        for i, line in enumerate(lines):
+            if needle in line:
+                lines[i] = line.lstrip('#') if on else (line if line.lstrip().startswith('#') else '#' + line)
+                break
         else:
-            print("Color inválido")
-
-    def get_fadding_state(self):
-        """
-        Read the current fadding state from the theme configuration file
-        """
-        current_theme = self.get_current_theme()
-        config_file = os.path.expanduser(f'~/.config/bspwm/rices/{current_theme}/theme-config.bash')
-        try:
-            with open(config_file, 'r') as f:
-                for line in f:
-                    if line.startswith('P_FADE='):
-                        match = re.search(r'P_FADE="(true|false)"', line)
-                        if match:
-                            return match.group(1) == 'true'
-        except FileNotFoundError:
-            print(f"Archivo de configuración no encontrado: {config_file}")
-        except Exception as e:
-            print(f"Error al leer el estado de fadding: {e}")
-        return False  # Default to False if not found
-
-    # Método para manejar el cambio del switch de fadding
-    def on_fadding_switch_toggled(self, switch, state):
-        """
-        Handle fadding switch state changes
-        """
-        # Convert boolean state to string 'true' or 'false'
-        new_state = 'true' if state else 'false'
-
-        current_theme = self.get_current_theme()
-        config_file = os.path.expanduser(f'~/.config/bspwm/rices/{current_theme}/theme-config.bash')
-        picom_config_file = os.path.expanduser('~/.config/bspwm/config/picom/picom-rules.conf')
-
-        try:
-            # Update theme-config.bash
-            with open(config_file, 'r') as f:
-                content = f.readlines()
-
-            for i, line in enumerate(content):
-                if line.startswith('P_FADE='):
-                    match = re.match(r'(P_FADE=)"(true|false)"(\s*#.*)$', line)
-                    if match:
-                        content[i] = f'{match.group(1)}"{new_state}"{match.group(3)}\n'
-                    break
-
-            with open(config_file, 'w') as f:
-                f.writelines(content)
-
-            # Update picom.conf
-            with open(picom_config_file, 'r') as f:
-                lines = f.readlines()
-
-            # Find and update all lines with #-fade-switch
-            for i, line in enumerate(lines):
-                if '#-fade-switch' in line:
-                    # Preserve initial indentation
-                    match = re.match(r'(\s*)fade\s*=\s*(true|false);(\s*)#-fade-switch', line)
-                    if match:
-                        lines[i] = f'{match.group(1)}fade = {new_state};{match.group(3)}#-fade-switch\n'
-
-            with open(picom_config_file, 'w') as f:
-                f.writelines(lines)
-
-        except Exception as e:
-            print(f"Error al actualizar configuración de fadding: {e}")
-
-        return False  # Must return False to allow switch state change
-
-    def get_blur_state(self):
-        """
-        Lee el estado actual del efecto de desenfoque desde el archivo de configuración del tema
-        """
-        current_theme = self.get_current_theme()
-        config_file = os.path.expanduser(f'~/.config/bspwm/rices/{current_theme}/theme-config.bash')
-        try:
-            with open(config_file, 'r') as f:
-                for line in f:
-                    if line.startswith('P_BLUR='):
-                        match = re.search(r'P_BLUR="(true|false)"', line)
-                        if match:
-                            return match.group(1) == 'true'
-        except FileNotFoundError:
-            print(f"Archivo de configuración no encontrado: {config_file}")
-        except Exception as e:
-            print(f"Error al leer el estado de desenfoque: {e}")
-        return False  # Por defecto a False si no se encuentra
-
-    def on_blur_switch_toggled(self, switch, state):
-        """
-        Manejar cambios en el switch de desenfoque
-        """
-        # Convertir estado booleano a cadena 'true' o 'false'
-        new_state = 'true' if state else 'false'
-
-        current_theme = self.get_current_theme()
-        config_file = os.path.expanduser(f'~/.config/bspwm/rices/{current_theme}/theme-config.bash')
-        picom_config_file = os.path.expanduser('~/.config/bspwm/config/picom/picom-rules.conf')
-
-        try:
-            # Actualizar theme-config.bash
-            with open(config_file, 'r') as f:
-                content = f.readlines()
-
-            for i, line in enumerate(content):
-                if line.startswith('P_BLUR='):
-                    match = re.match(r'(P_BLUR=)"(true|false)"(\s*#.*)$', line)
-                    if match:
-                        content[i] = f'{match.group(1)}"{new_state}"{match.group(3)}\n'
-                    break
-
-            with open(config_file, 'w') as f:
-                f.writelines(content)
-
-            # Actualizar picom.conf
-            with open(picom_config_file, 'r') as f:
-                lines = f.readlines()
-
-            for i, line in enumerate(lines):
-                if '#-blur-switch' in line:
-                    # Preservar indentación inicial
-                    match = re.match(r'(\s*)blur-background\s*=\s*(true|false);(\s*)#-blur-switch', line)
-                    if match:
-                        lines[i] = f'{match.group(1)}blur-background = {new_state};{match.group(3)}#-blur-switch\n'
-
-            with open(picom_config_file, 'w') as f:
-                f.writelines(lines)
-
-        except Exception as e:
-            print(f"Error al actualizar configuración de desenfoque: {e}")
-
-        return False  # Debe devolver False para permitir el cambio de estado del switch
-
-    def get_animations_state(self):
-        """
-        Read the current animations state from the theme configuration file
-        """
-        current_theme = self.get_current_theme()
-        config_file = os.path.expanduser(f'~/.config/bspwm/rices/{current_theme}/theme-config.bash')
-        try:
-            with open(config_file, 'r') as f:
-                for line in f:
-                    if line.startswith('P_ANIMATIONS='):
-                        match = re.search(r'P_ANIMATIONS="(@|#)"', line)
-                        if match:
-                            return match.group(1) == '@'
-        except FileNotFoundError:
-            print(f"Archivo de configuración no encontrado: {config_file}")
-        except Exception as e:
-            print(f"Error al leer el estado de animaciones: {e}")
-        return False  # Default to False if not found
-
-    def on_animations_switch_toggled(self, switch, state):
-        """
-        Handle animations switch state changes
-        """
-        # Convert boolean state to string '@' or '#'
-        new_state = '@' if state else '#'
-
-        current_theme = self.get_current_theme()
-        config_file = os.path.expanduser(f'~/.config/bspwm/rices/{current_theme}/theme-config.bash')
-        picom_config_file = os.path.expanduser('~/.config/bspwm/config/picom/picom-rules.conf')
-
-        try:
-            # Update theme-config.bash
-            with open(config_file, 'r') as f:
-                content = f.readlines()
-
-            for i, line in enumerate(content):
-                if line.startswith('P_ANIMATIONS='):
-                    match = re.match(r'(P_ANIMATIONS=)"(@|#)"(\s*\s*#.*)$', line)
-                    if match:
-                        content[i] = f'{match.group(1)}"{new_state}"{match.group(3)}\n'
-                    break
-
-            with open(config_file, 'w') as f:
-                f.writelines(content)
-
-            # Update picom.conf
-            with open(picom_config_file, 'r') as f:
-                lines = f.readlines()
-
-            for i, line in enumerate(lines):
-                if 'include "picom-animations.conf"' in line:
-                    # Preserve initial indentation and swap activation/deactivation
-                    match = re.match(r'(\s*)([@#])include\s*"picom-animations\.conf"', line)
-                    if match:
-                        lines[i] = f'{match.group(1)}{new_state}include "picom-animations.conf"\n'
-
-            with open(picom_config_file, 'w') as f:
-                f.writelines(lines)
-
-        except Exception as e:
-            print(f"Error al actualizar configuración de animaciones: {e}")
-
-        return False  # Must return False to allow switch state change
-
-    def get_terminal_opacity(self):
-        """
-        Lee el valor de opacidad del terminal desde el archivo de configuración del tema.
-        """
-        current_theme = self.get_current_theme()
-        config_file = os.path.expanduser(f'~/.config/bspwm/rices/{current_theme}/theme-config.bash')
-        try:
-            with open(config_file, 'r') as f:
-                for line in f:
-                    if line.startswith('P_TERM_OPACITY='):
-                        match = re.search(r'P_TERM_OPACITY="([0-9.]+)"', line)
-                        if match:
-                            return float(match.group(1))
-        except FileNotFoundError:
-            print(f"Archivo de configuración no encontrado: {config_file}")
-        except Exception as e:
-            print(f"Error al leer la opacidad del terminal: {e}")
-        return 1.0  # Valor por defecto
-
-    def on_terminal_opacity_insert(self, entry, new_text, new_text_length, position):
-        """
-        Validación para permitir solo números, puntos decimales, y restringir a 0.1-1.0.
-        """
-        current_text = entry.get_text() + new_text
-        if not re.match(r'^([0-9]{0,1}(\.[0-9]{0,2})?|1(\.0{0,2})?)$', current_text):
-            entry.stop_emission_by_name("insert-text")
-
-    def on_apply_terminal_opacity(self, button):
-        """
-        Aplica el nuevo valor de opacidad del terminal.
-        """
-        new_opacity = self.term_opacity_entry.get_text()
-
-        # Validar que el valor esté entre 0.1 y 1.0
-        try:
-            opacity = float(new_opacity)
-            if 0.1 <= opacity <= 1.0:
-                current_theme = self.get_current_theme()
-                config_file = os.path.expanduser(f'~/.config/bspwm/rices/{current_theme}/theme-config.bash')
-                picom_config_file = os.path.expanduser('~/.config/bspwm/config/picom/picom-rules.conf')
-
-                try:
-                    # Actualizar archivo de configuración del tema
-                    with open(config_file, 'r') as f:
-                        content = f.readlines()
-
-                    for i, line in enumerate(content):
-                        if line.startswith('P_TERM_OPACITY='):
-                            match = re.match(r'(P_TERM_OPACITY=)"([0-9.]+)"(\s*#.*)$', line)
-                            if match:
-                                content[i] = f'{match.group(1)}"{opacity}"{match.group(3)}\n'
-                            break
-
-                    with open(config_file, 'w') as f:
-                        f.writelines(content)
-
-                    # Actualizar picom.conf
-                    with open(picom_config_file, 'r') as f:
-                        lines = f.readlines()
-
-                    for i, line in enumerate(lines):
-                        if '#-term-opacity-switch' in line:
-                            match = re.match(r'(\s*)opacity\s*=\s*[0-9.]+;(\s*)#-term-opacity-switch', line)
-                            if match:
-                                lines[i] = f'{match.group(1)}opacity = {opacity};{match.group(2)}#-term-opacity-switch\n'
-
-                    with open(picom_config_file, 'w') as f:
-                        f.writelines(lines)
-
-                except Exception as e:
-                    print(f"Error al actualizar configuración: {e}")
-            else:
-                print("Valor fuera de rango (0.1 - 1.0)")
-        except ValueError:
-            print("Valor inválido")
-
-    def get_font_size(self):
-        """
-        Lee el tamaño de fuente desde el archivo de configuración del tema.
-        """
-        current_theme = self.get_current_theme()
-        config_file = os.path.expanduser(f'~/.config/bspwm/rices/{current_theme}/theme-config.bash')
-        try:
-            with open(config_file, 'r') as f:
-                for line in f:
-                    if line.startswith('term_font_size='):
-                        match = re.search(r'term_font_size="(\d+)"', line)
-                        if match:
-                            return int(match.group(1))
-        except FileNotFoundError:
-            print(f"Archivo de configuración no encontrado: {config_file}")
-        except Exception as e:
-            print(f"Error al leer el tamaño de fuente: {e}")
-        return 10  # Valor por defecto
-
-    def on_font_size_insert(self, entry, new_text, new_text_length, position):
-        """
-        Validación para permitir solo números de hasta 2 dígitos.
-        """
-        if not new_text.isdigit() or len(entry.get_text() + new_text) > 2:
-            entry.stop_emission_by_name("insert-text")
-
-    def on_apply_font_size(self, button):
-        """
-        Aplica el nuevo tamaño de fuente en tiempo real para Alacritty y Kitty.
-        """
-        new_font_size = self.font_size_entry.get_text()
-
-        try:
-            font_size = int(new_font_size)
-            if 1 <= font_size <= 99:
-                current_theme = self.get_current_theme()
-                config_file = os.path.expanduser(f'~/.config/bspwm/rices/{current_theme}/theme-config.bash')
-                alacritty_config_file = os.path.expanduser('~/.config/alacritty/fonts.toml')
-                kitty_config_file = os.path.expanduser('~/.config/kitty/kitty.conf')
-
-                try:
-                    # Actualizar archivo de configuración del tema
-                    with open(config_file, 'r') as f:
-                        content = f.readlines()
-
-                    for i, line in enumerate(content):
-                        if line.startswith('term_font_size='):
-                            match = re.match(r'(term_font_size=)"(\d+)"(\s*#.*)?', line)
-                            if match:
-                                content[i] = f'{match.group(1)}"{font_size}"{match.group(3) or ""}\n'
-                            break
-
-                    with open(config_file, 'w') as f:
-                        f.writelines(content)
-
-                    # Actualizar archivo de configuración de Alacritty
-                    with open(alacritty_config_file, 'r') as f:
-                        lines = f.readlines()
-
-                    for i, line in enumerate(lines):
-                        if line.strip().startswith('size ='):
-                            match = re.match(r'(\s*size\s*=\s*)(\d+)', line)
-                            if match:
-                                lines[i] = f'{match.group(1)}{font_size}\n'
-                            break
-
-                    with open(alacritty_config_file, 'w') as f:
-                        f.writelines(lines)
-
-                    # Actualizar archivo de configuración de Kitty
-                    with open(kitty_config_file, 'r') as f:
-                        lines = f.readlines()
-
-                    for i, line in enumerate(lines):
-                        if line.strip().startswith('font_size'):
-                            match = re.match(r'(font_size\s+)(\d+)', line)
-                            if match:
-                                lines[i] = f'{match.group(1)}{font_size}\n'
-                            break
-
-                    with open(kitty_config_file, 'w') as f:
-                        f.writelines(lines)
-
-                except Exception as e:
-                    print(f"Error al actualizar el tamaño de fuente: {e}")
-            else:
-                print("Valor fuera de rango (1-99)")
-        except ValueError:
-            print("Valor inválido")
-
-    def get_font_name(self):
-        """
-        Lee el nombre de la fuente desde el archivo de configuración del tema.
-        """
-        current_theme = self.get_current_theme()
-        config_file = os.path.expanduser(f'~/.config/bspwm/rices/{current_theme}/theme-config.bash')
-        try:
-            with open(config_file, 'r') as f:
-                for line in f:
-                    if line.startswith('term_font_name='):
-                        match = re.search(r'term_font_name="([^"]+)"', line)
-                        if match:
-                            return match.group(1)
-        except FileNotFoundError:
-            print(f"Archivo de configuración no encontrado: {config_file}")
-        except Exception as e:
-            print(f"Error al leer el nombre de la fuente: {e}")
-        return "monospace"  # Valor por defecto
-
-    def on_font_chooser_clicked(self, button):
-        """
-        Abre un selector de fuentes para elegir una fuente instalada.
-        """
-        dialog = Gtk.FontChooserDialog(title="Select Font", parent=self)
-
-        response = dialog.run()
-        if response == Gtk.ResponseType.OK:
-            # Obtiene la fuente seleccionada y actualiza la entrada
-            font_name = dialog.get_font_desc().get_family()
-            self.font_name_entry.set_text(font_name)
-
-        dialog.destroy()
-
-    def on_apply_font_name(self, button):
-        """
-        Aplica el nuevo nombre de la fuente en tiempo real para Alacritty y Kitty.
-        """
-        new_font_name = self.font_name_entry.get_text()
-
-        if new_font_name:  # Validar que no esté vacío
-            current_theme = self.get_current_theme()
-            config_file = os.path.expanduser(f'~/.config/bspwm/rices/{current_theme}/theme-config.bash')
-            alacritty_config_file = os.path.expanduser('~/.config/alacritty/fonts.toml')
-            kitty_config_file = os.path.expanduser('~/.config/kitty/kitty.conf')
-
-            try:
-                # Actualizar archivo de configuración del tema
-                with open(config_file, 'r') as f:
-                    content = f.readlines()
-
-                for i, line in enumerate(content):
-                    if line.startswith('term_font_name='):
-                        match = re.match(r'(term_font_name=)"([^"]+)"(\s*#.*)?', line)
-                        if match:
-                            content[i] = f'{match.group(1)}"{new_font_name}"{match.group(3) or ""}\n'
-                            break
-
-                with open(config_file, 'w') as f:
-                    f.writelines(content)
-
-                # Actualizar archivo de configuración de Alacritty
-                with open(alacritty_config_file, 'r') as f:
-                    lines = f.readlines()
-
-                for i, line in enumerate(lines):
-                    if line.strip().startswith('family ='):
-                        match = re.match(r'(\s*family\s*=\s*)"([^"]+)"', line)
-                        if match:
-                            lines[i] = f'{match.group(1)}"{new_font_name}"\n'
-                            break
-
-                with open(alacritty_config_file, 'w') as f:
-                    f.writelines(lines)
-
-                # Actualizar archivo de configuración de Kitty
-                with open(kitty_config_file, 'r') as f:
-                    lines = f.readlines()
-
-                for i, line in enumerate(lines):
-                    if line.strip().startswith('font_family'):
-                        match = re.match(r'(font_family\s+)(.+)', line)
-                        if match:
-                            lines[i] = f'{match.group(1)}{new_font_name}\n'
-                            break
-
-                with open(kitty_config_file, 'w') as f:
-                    f.writelines(lines)
-
-            except Exception as e:
-                print(f"Error al actualizar el nombre de la fuente: {e}")
+            self.toast(f'{needle} not found in ~/.zshrc', error=True)
+            return
+        write_file(ZSHRC, ''.join(lines))
+        self.toast(f'{title} {"on" if on else "off"} — open a new terminal')
+
+    # ─────────────────────────────────────────────────────── wallpaper
+    def page_wallpaper(self):
+        p = self.page()
+        c = self.card('󰸉', 'On screen')
+        hb = Gtk.Box(spacing=18)
+        self.wall_prev = ImageBox(self, 400, 225, caption=pretty_wall(current_wallpaper()))
+        self.wall_prev.set_image(current_wallpaper())
+        hb.pack_start(self.wall_prev, False, False, 0)
+        v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        v.set_valign(Gtk.Align.CENTER)
+        v.pack_start(self.button('󰸉  Open 3D selector', 'neon', lambda *_: spawn(['WallSelect'])), False, False, 0)
+        v.pack_start(self.button('󰒝  Random wallpaper', 'ghost', lambda *_: self.random_wall()), False, False, 0)
+        note = Gtk.Label(label='The lockscreen always uses the wallpaper\nthat is on screen.', xalign=0)
+        note.get_style_context().add_class('mono-note')
+        v.pack_start(note, False, False, 0)
+        hb.pack_start(v, True, True, 0)
+        c.pack_start(hb, False, False, 4)
+        p.pack_start(c, False, False, 0)
+
+        c = self.card('󰔟', 'Engine', 'how the wallpaper is chosen at login')
+        self.engine_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        engine = self.cfg.raw('ENGINE', 'Default')
+        c.pack_start(self.row('Wallpaper engine', '',
+                              self.combo([('Default', 'Default · fixed image'), ('Random', 'Random · rice walls'),
+                                          ('CustomDir', 'Random · custom folder'), ('Slideshow', 'Slideshow · 15 min'),
+                                          ('Animated', 'Animated · video/gif')],
+                                         engine, self.show_engine_opts)), False, False, 0)
+        c.pack_start(self.engine_box, False, False, 0)
+        self.show_engine_opts(engine)
+        p.pack_start(c, False, False, 0)
+
+        c = self.card('󰋩', 'Gallery', f'{len(list_walls())} walls · click to apply')
+        flow = Gtk.FlowBox()
+        flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        flow.set_max_children_per_line(5)
+        flow.set_min_children_per_line(3)
+        flow.set_column_spacing(8)
+        flow.set_row_spacing(8)
+        cur = current_wallpaper()
+        self.gallery = {}
+        for path in list_walls():
+            b = Gtk.Button()
+            b.get_style_context().add_class('wall')
+            if path == cur:
+                b.get_style_context().add_class('current')
+            img = Gtk.Image()
+            img.set_size_request(160, 90)
+            b.add(img)
+            b.set_tooltip_text(pretty_wall(path))
+            b.connect('clicked', lambda _b, pth=path: self.set_wallpaper(pth))
+            flow.add(b)
+            self.gallery[path] = b
+            run_bg(lambda pth=path: ensure_thumb(pth),
+                   lambda t, im=img: t and im.set_from_pixbuf(
+                       GdkPixbuf.Pixbuf.new_from_file_at_scale(t, 160, 90, False)))
+        c.pack_start(flow, False, False, 4)
+        p.pack_start(c, False, False, 0)
+        return p
+
+    def show_engine_opts(self, engine):
+        for ch in self.engine_box.get_children():
+            self.engine_box.remove(ch)
+        box = self.engine_box
+        if engine in ('Random', 'Slideshow'):
+            box.pack_start(self.row('Source', f'Images from ~/.config/bspwm/rices/{RICE}/walls',
+                                    self.button('Apply', 'neon', lambda *_: self.apply_engine(engine))),
+                           False, False, 0)
         else:
-            print("El nombre de la fuente no puede estar vacío.")
+            var, what = {'CustomDir': ('CUSTOM_DIR', 'Folder'), 'Default': ('DEFAULT_WALL', 'Image'),
+                         'Animated': ('ANIMATED_WALL', 'Video / gif')}[engine]
+            entry = Gtk.Entry()
+            entry.set_width_chars(38)
+            entry.set_text(self.cfg.raw(var))
+            browse = self.button('Browse', 'ghost', lambda *_: self.browse(entry, engine))
+            box.pack_start(self.row(what, '', entry, browse,
+                                    self.button('Apply', 'neon', lambda *_: self.apply_engine(engine, entry.get_text()))),
+                           False, False, 0)
+        box.show_all()
 
-    def get_wall_engine(self):
-        """
-        Lee el valor de la variable ENGINE desde theme-config.bash.
-        """
-        current_theme = self.get_current_theme()
-        config_file = os.path.expanduser(f'~/.config/bspwm/rices/{current_theme}/theme-config.bash')
+    def browse(self, entry, engine):
+        action = Gtk.FileChooserAction.SELECT_FOLDER if engine == 'CustomDir' else Gtk.FileChooserAction.OPEN
+        dlg = Gtk.FileChooserDialog(title='Select', parent=self, action=action)
+        dlg.add_buttons('Cancel', Gtk.ResponseType.CANCEL, 'Select', Gtk.ResponseType.OK)
+        if engine != 'CustomDir':
+            flt = Gtk.FileFilter()
+            pats = ('*.mp4', '*.mkv', '*.gif', '*.webm') if engine == 'Animated' else \
+                ('*.jpg', '*.jpeg', '*.png', '*.webp')
+            for pat in pats:
+                flt.add_pattern(pat)
+                flt.add_pattern(pat.upper())
+            dlg.add_filter(flt)
+        if dlg.run() == Gtk.ResponseType.OK:
+            entry.set_text(dlg.get_filename())
+        dlg.destroy()
+
+    def apply_engine(self, engine, value=''):
+        self.cfg.set('ENGINE', engine)
+        var = {'CustomDir': 'CUSTOM_DIR', 'Default': 'DEFAULT_WALL', 'Animated': 'ANIMATED_WALL'}.get(engine)
+        if var and value:
+            self.cfg.set(var, value)
+        stop = ('pkill -x xwinwrap; [ -f /tmp/wall_refresh.pid ] && kill "$(cat /tmp/wall_refresh.pid)" '
+                '2>/dev/null; rm -f /tmp/wall_refresh.pid; ')
+        find = "find \"$1\" -type f \\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \\) | shuf -n 1"
+        walls = WALL_DIR
+        cmds = {
+            'Default': 'feh --bg-fill "$1" && WallSync',
+            'Random': f'feh --bg-fill "$({find})" && WallSync',
+            'CustomDir': f'feh --bg-fill "$({find})" && WallSync',
+            'Animated': 'AnimatedWall --start "$1"; WallSync --animated',
+            'Slideshow': f'(while :; do feh --bg-fill "$({find})"; WallSync; sleep 900; done) & '
+                         'echo $! > /tmp/wall_refresh.pid',
+        }
+        arg = value if engine in ('Default', 'CustomDir', 'Animated') else walls
+        subprocess.Popen(['sh', '-c', stop + cmds[engine], '_', arg], start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.toast(f'Wallpaper engine → {engine}')
+        GLib.timeout_add(1500, self.refresh_wall_views)
+
+    def set_wallpaper(self, path):
+        self.cfg.set('ENGINE', 'Default')
+        self.cfg.set('DEFAULT_WALL', path)
+        spawn('pkill -x xwinwrap; [ -f /tmp/wall_refresh.pid ] && kill "$(cat /tmp/wall_refresh.pid)" 2>/dev/null; '
+              f'rm -f /tmp/wall_refresh.pid; feh --bg-fill "{path}" && WallSync', shell=True)
+        self.toast(f'Wallpaper → {pretty_wall(path)}')
+        GLib.timeout_add(900, self.refresh_wall_views)
+
+    def random_wall(self):
+        walls = [w for w in list_walls() if w != current_wallpaper()]
+        if walls:
+            self.set_wallpaper(random.choice(walls))
+
+    def refresh_wall_views(self):
+        cur = current_wallpaper()
+        for img_box in (self.wall_prev, self.dash_wall):
+            img_box.set_image(cur)
+        self.wall_prev.caption = pretty_wall(cur)
+        for path, b in self.gallery.items():
+            ctx = b.get_style_context()
+            (ctx.add_class if path == cur else ctx.remove_class)('current')
+        return False
+
+    # ─────────────────────────────────────────────────── notifications
+    def page_notifications(self):
+        p = self.page()
+        cfg = self.cfg
+        c = self.card('󰩷', 'Placement')
+        origins = ['top-left', 'top-center', 'top-right', 'left-center', 'center', 'right-center',
+                   'bottom-left', 'bottom-center', 'bottom-right']
+        c.pack_start(self.row('Position', 'Corner of the screen',
+                              self.combo([(o, o) for o in origins], cfg.raw('dunst_origin', 'top-right'),
+                                         lambda v: self.set_dunst('dunst_origin', v, 'Position'))), False, False, 0)
+        m = re.match(r'\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)', cfg.raw('dunst_offset', '(20, 60)'))
+        ox, oy = (m.group(1), m.group(2)) if m else ('20', '60')
+        self._dunst_off = [int(ox), int(oy)]
+        sx = self.spin(0, 600, ox, lambda v: self.set_dunst_offset(0, v))
+        sy = self.spin(0, 600, oy, lambda v: self.set_dunst_offset(1, v))
+        c.pack_start(self.row('Offset', 'Horizontal · vertical distance from the edge', sx, sy), False, False, 0)
+        p.pack_start(c, False, False, 0)
+
+        c = self.card('󰏘', 'Style')
+        sc, lab = self.scale(0, 30, 1, cfg.raw('dunst_corner_radius', '6'), 0,
+                             lambda v: self.set_dunst('dunst_corner_radius', v, 'Corner radius'))
+        c.pack_start(self.row('Corner radius', '', sc, lab), False, False, 0)
+        sc, lab = self.scale(0, 100, 5, cfg.raw('dunst_transparency', '0'), 0,
+                             lambda v: self.set_dunst('dunst_transparency', v, 'Transparency'),
+                             fmt=lambda v: f'{int(v)}%')
+        c.pack_start(self.row('Transparency', 'Needs a compositor', sc, lab), False, False, 0)
+        sc, lab = self.scale(0, 6, 1, cfg.raw('dunst_border', '0'), 0,
+                             lambda v: self.set_dunst('dunst_border', v, 'Border'), fmt=lambda v: f'{int(v)} px')
+        c.pack_start(self.row('Border width', '', sc, lab), False, False, 0)
+        frame = self.cfg.resolve(['dunst_frame_color']).get('dunst_frame_color', '#000000')
+        c.pack_start(self.row('Border color', '', self.color(frame, lambda h: self.set_dunst('dunst_frame_color', h, 'Border color'))),
+                     False, False, 0)
+        fb = self.fontbutton(cfg.raw('dunst_font', 'JetBrainsMono NF Medium 9'),
+                             lambda _fam, _sz, full: self.set_dunst('dunst_font', full, 'Font'))
+        c.pack_start(self.row('Font', '', fb), False, False, 0)
+        p.pack_start(c, False, False, 0)
+
+        c = self.card('󰜎', 'Motion', 'picom animations')
+        presets_in = [(x, x) for x in ('fly-in', 'slide-in', 'appear')]
+        presets_out = [(x, x) for x in ('fly-out', 'slide-out', 'disappear')]
+        dirs = [(x, x) for x in ('up', 'down', 'left', 'right')]
+        c.pack_start(self.row('Open animation', '',
+                              self.combo(presets_in, cfg.raw('dunst_open_preset', 'fly-in'),
+                                         lambda v: self.set_dunst('dunst_open_preset', v, 'Open animation', picom=True)),
+                              self.combo(dirs, cfg.raw('dunst_open_direction', 'up'),
+                                         lambda v: self.set_dunst('dunst_open_direction', v, 'Open direction', picom=True))),
+                     False, False, 0)
+        c.pack_start(self.row('Close animation', '',
+                              self.combo(presets_out, cfg.raw('dunst_close_preset', 'fly-out'),
+                                         lambda v: self.set_dunst('dunst_close_preset', v, 'Close animation', picom=True)),
+                              self.combo(dirs, cfg.raw('dunst_close_direction', 'up'),
+                                         lambda v: self.set_dunst('dunst_close_direction', v, 'Close direction', picom=True))),
+                     False, False, 0)
+        c.pack_start(self.row('Try it', 'Send a sample notification',
+                              self.button('󰂚  Test notification', 'neon', lambda *_: self.test_notify())),
+                     False, False, 0)
+        p.pack_start(c, False, False, 0)
+        return p
+
+    def set_dunst(self, var, value, title, picom=False):
+        self.cfg.set(var, value)
+        mods = ('04-dunst.sh', '00-picom.sh') if picom else ('04-dunst.sh',)
+        run_bg(lambda: run_modules(*mods, reload_picom=picom),
+               lambda _r: (self.toast(f'{title} → {value}'), self.test_notify(quiet=True)))
+
+    def set_dunst_offset(self, idx, v):
+        self._dunst_off[idx] = v
+        self.set_dunst('dunst_offset', f'({self._dunst_off[0]}, {self._dunst_off[1]})', 'Offset')
+
+    def test_notify(self, quiet=False):
+        spawn(['notify-send', '-a', 'RiceEditor', '-i', 'preferences-desktop-theme',
+               'RiceEditor', 'This is how your notifications look now ✨'])
+        if not quiet:
+            self.toast('Test notification sent')
+
+    # ────────────────────────────────────────────────────── lockscreen
+    def page_lockscreen(self):
+        p = self.page()
+        cfg = self.cfg
+        c = self.card('󰍹', 'Preview', 'real render of your wallpaper')
+        self.lock_prev = LockPreview(self)
+        self.refresh_lock_opts()
+        c.pack_start(self.lock_prev, False, False, 4)
+        hb = Gtk.Box(spacing=8)
+        hb.pack_start(self.button('󰌾  Lock now', 'neon', lambda *_: spawn(['ScreenLocker'])), False, False, 0)
+        hb.pack_start(self.button('󰑓  Re-render', 'ghost', lambda *_: self.rerender_lock()), False, False, 0)
+        hb.pack_start(self.button('󰔎  Random wall', 'ghost', lambda *_: spawn(['ScreenLocker', '--rice'])),
+                      False, False, 0)
+        c.pack_start(hb, False, False, 6)
+        p.pack_start(c, False, False, 0)
+
+        c = self.card('󰋩', 'Background')
+        sc, lab = self.scale(0, 30, 1, cfg.raw('LOCK_BLUR', '0'), 0, lambda v: self.set_lock('LOCK_BLUR', v, True))
+        c.pack_start(self.row('Blur', '0 = sharp wallpaper', sc, lab), False, False, 0)
+        sc, lab = self.scale(0, 80, 5, cfg.raw('LOCK_DIM', '20'), 0, lambda v: self.set_lock('LOCK_DIM', v, True),
+                             fmt=lambda v: f'{int(v)}%')
+        c.pack_start(self.row('Dim', 'Darken the wallpaper for readability', sc, lab), False, False, 0)
+        c.pack_start(self.row('Glass panel', 'Frosted HUD panel behind the clock',
+                              self.switch(cfg.raw('LOCK_GLASS', 'true') == 'true',
+                                          lambda on: self.set_lock('LOCK_GLASS', 'true' if on else 'false', True))),
+                     False, False, 0)
+        p.pack_start(c, False, False, 0)
+
+        c = self.card('󰥔', 'Clock & ring')
+        c.pack_start(self.row('Position', '',
+                              self.combo([('left', 'left'), ('center', 'center'), ('right', 'right')],
+                                         cfg.raw('LOCK_POS', 'left'), lambda v: self.set_lock('LOCK_POS', v, True))),
+                     False, False, 0)
+        c.pack_start(self.row('Clock format', '',
+                              self.combo([('%H:%M', '24h  ·  18:30'), ('%H:%M:%S', '24h  ·  18:30:05'),
+                                          ('%I:%M %p', '12h  ·  06:30 PM')],
+                                         cfg.raw('LOCK_CLOCK', '%H:%M'), lambda v: self.set_lock('LOCK_CLOCK', v))),
+                     False, False, 0)
+        entry = Gtk.Entry()
+        entry.set_width_chars(30)
+        entry.set_text(cfg.raw('LOCK_GREETER', 'Type the password to Unlock'))
+        entry.connect('changed', lambda e: self.debounce('greeter', 500,
+                                                         lambda: self.set_lock('LOCK_GREETER', e.get_text())))
+        c.pack_start(self.row('Greeter text', '', entry), False, False, 0)
+        res = cfg.resolve(['LOCK_ACCENT', 'sl_ring', 'sl_verify', 'sl_wrong', 'sl_date'])
+        for var, title in (('LOCK_ACCENT', 'Accent (keypress & glass border)'), ('sl_ring', 'Ring'),
+                           ('sl_verify', 'Verifying'), ('sl_wrong', 'Wrong password'), ('sl_date', 'Clock & date')):
+            c.pack_start(self.row(title, '', self.color(res.get(var, ''),
+                                                        lambda h, v=var: self.set_lock(v, h, v == 'LOCK_ACCENT'))),
+                         False, False, 0)
+        p.pack_start(c, False, False, 0)
+        return p
+
+    def refresh_lock_opts(self):
+        r = self.cfg.resolve(['LOCK_POS', 'LOCK_CLOCK', 'LOCK_GREETER', 'LOCK_ACCENT', 'sl_ring',
+                              'sl_date', 'sl_bg', 'sl_fg'])
+        self.lock_prev.opts = dict(pos=r.get('LOCK_POS'), clock=r.get('LOCK_CLOCK'),
+                                   greeter=r.get('LOCK_GREETER'), accent=r.get('LOCK_ACCENT'),
+                                   ring=r.get('sl_ring'), date=r.get('sl_date'), bg=r.get('sl_bg'),
+                                   fg=r.get('sl_fg'))
+
+    def set_lock(self, var, value, rerender=False):
+        self.cfg.set(var, value)
+        self.refresh_lock_opts()
+        self.toast(f'Lockscreen · {var} → {value}')
+        if rerender:
+            self.debounce('lock-render', 400, self.rerender_lock)
+        else:
+            run_bg(lambda: run_modules('07-screenlocker.sh'))
+
+    def rerender_lock(self):
+        self.lock_prev.busy = True
+
+        def work():
+            run_modules('07-screenlocker.sh')
+            subprocess.run(['ScreenLocker', '--prepare'], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=120)
+
+        def done(_r):
+            self.lock_prev.busy = False
+            self.lock_prev.reload()
+        run_bg(work, done)
+
+    # ────────────────────────────────────────────────────── appearance
+    @staticmethod
+    def list_themes(kind):
+        bases = [os.path.join(HOME, '.themes'), os.path.join(HOME, '.local/share/themes'), '/usr/share/themes'] \
+            if kind == 'gtk' else [os.path.join(HOME, '.icons'), os.path.join(HOME, '.local/share/icons'),
+                                   '/usr/share/icons']
+        found = set()
+        for b in bases:
+            for d in glob.glob(os.path.join(b, '*')):
+                n = os.path.basename(d)
+                if kind == 'gtk':
+                    ok = os.path.isdir(os.path.join(d, 'gtk-3.0'))
+                elif kind == 'cursor':
+                    ok = os.path.isdir(os.path.join(d, 'cursors'))
+                else:  # icon themes: index.theme plus real icon folders
+                    ok = os.path.exists(os.path.join(d, 'index.theme')) and any(
+                        e.is_dir() and e.name != 'cursors' for e in os.scandir(d))
+                if ok:
+                    found.add(n)
+        found.discard('default')
+        return sorted(found, key=str.lower)
+
+    def page_appearance(self):
+        p = self.page()
+        res = self.cfg.resolve(['gtk_theme', 'gtk_icons', 'gtk_cursor', 'rofi_font'])
+        c = self.card('󰉼', 'GTK', 'xsettingsd · applied live')
+        for var, kind, title in (('gtk_theme', 'gtk', 'GTK theme'), ('gtk_icons', 'icons', 'Icon theme'),
+                                 ('gtk_cursor', 'cursor', 'Cursor theme')):
+            items = self.list_themes(kind)
+            cur = res.get(var, '')
+            if cur and cur not in items:
+                items.insert(0, cur)
+            c.pack_start(self.row(title, '', self.combo([(i, i) for i in items], cur,
+                                                        lambda v, vv=var, t=title: self.set_gtk(vv, v, t))),
+                         False, False, 0)
+        p.pack_start(c, False, False, 0)
+
+        c = self.card('󰍉', 'Rofi', 'launcher · menus')
+        fb = self.fontbutton(res.get('rofi_font') or 'JetBrainsMono NF Bold 9',
+                             lambda _f, _s, full: self.set_rofi_font(full))
+        c.pack_start(self.row('Menu font', 'Used by every rofi menu of the rice', fb), False, False, 0)
+        p.pack_start(c, False, False, 0)
+        return p
+
+    def set_gtk(self, var, value, title):
+        self.cfg.set(var, value)
+        self.apply_modules(f'{title} → {value}', '03-gtk.sh')
+
+    def set_rofi_font(self, full):
+        self.cfg.set('rofi_font', full)
+        self.apply_modules(f'Rofi font → {full}', '04-rofi.sh')
+
+    # ─────────────────────────────────────────────────────── snapshots
+    SNAP_FILES = [('theme-config.bash', THEME_CFG), ('picom.conf', PICOM_CONF),
+                  ('picom-rules.conf', PICOM_RULES), ('bspwmrc', BSPWMRC), ('kitty.conf', KITTY_CONF)]
+
+    def page_snapshots(self):
+        p = self.page()
+        c = self.card('󰁯', 'Save state', 'theme-config · picom · bspwmrc · kitty')
+        self.snap_entry = Gtk.Entry()
+        self.snap_entry.set_placeholder_text('snapshot name (optional)')
+        self.snap_entry.set_width_chars(30)
+        self.snap_entry.connect('activate', lambda e: self.snapshot_create(e.get_text() or 'manual'))
+        c.pack_start(self.row('New snapshot', 'Freeze the current rice so you can come back to it (Ctrl+S)',
+                              self.snap_entry,
+                              self.button('󰆓  Save', 'neon',
+                                          lambda *_: self.snapshot_create(self.snap_entry.get_text() or 'manual'))),
+                     False, False, 0)
+        p.pack_start(c, False, False, 0)
+        self.snap_card = self.card('󰋚', 'Timeline', 'restore re-applies the whole rice')
+        self.snap_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.snap_card.pack_start(self.snap_list, False, False, 0)
+        p.pack_start(self.snap_card, False, False, 0)
+        self.refresh_snapshots()
+        return p
+
+    def snapshots(self):
+        base = os.path.join(SNAP_DIR, RICE)
         try:
-            with open(config_file, 'r') as f:
-                for line in f:
-                    if line.startswith('ENGINE='):
-                        match = re.search(r'ENGINE="([^"]+)"', line)
-                        if match:
-                            return match.group(1)
-        except FileNotFoundError:
-            print(f"Archivo de configuración no encontrado: {config_file}")
-        except Exception as e:
-            print(f"Error al leer ENGINE: {e}")
-        return "Default"  # Valor por defecto
+            return sorted((d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))), reverse=True)
+        except OSError:
+            return []
+
+    def snapshot_create(self, label, quiet=False):
+        label = re.sub(r'[^\w-]+', '-', label.strip())[:40] or 'manual'
+        name = f'{datetime.now():%Y%m%d-%H%M%S}__{label}'
+        dest = os.path.join(SNAP_DIR, RICE, name)
+        os.makedirs(dest, exist_ok=True)
+        for fname, src in self.SNAP_FILES:
+            if os.path.exists(src):
+                shutil.copy2(src, os.path.join(dest, fname))
+        if not quiet:
+            self.toast(f'Snapshot "{label}" saved')
+            if hasattr(self, 'snap_entry'):
+                self.snap_entry.set_text('')
+        if hasattr(self, 'snap_list'):
+            self.refresh_snapshots()
+
+    def auto_snapshot(self):
+        today = f'{datetime.now():%Y%m%d}'
+        if not any(s.startswith(today) and s.endswith('__auto') for s in self.snapshots()):
+            self.snapshot_create('auto', quiet=True)
+        # keep at most 10 automatic ones
+        autos = [s for s in self.snapshots() if s.endswith('__auto')]
+        for old in autos[10:]:
+            shutil.rmtree(os.path.join(SNAP_DIR, RICE, old), ignore_errors=True)
+        self.refresh_snapshots()
+
+    def refresh_snapshots(self):
+        for ch in self.snap_list.get_children():
+            self.snap_list.remove(ch)
+        snaps = self.snapshots()
+        if not snaps:
+            lb = Gtk.Label(label='No snapshots yet.', xalign=0)
+            lb.get_style_context().add_class('dim')
+            self.snap_list.pack_start(lb, False, False, 6)
+        for s in snaps:
+            stamp, _, label = s.partition('__')
+            try:
+                when = datetime.strptime(stamp, '%Y%m%d-%H%M%S').strftime('%d %b %Y · %H:%M:%S')
+            except ValueError:
+                when = stamp
+            icon = '󰁯' if label == 'auto' else '󰆓'
+            self.snap_list.pack_start(self.row(f'{icon}  {label.upper()}', when,
+                                               self.button('Restore', 'neon', lambda *_, n=s: self.snapshot_restore(n)),
+                                               self.button('Delete', 'danger', lambda *_, n=s: self.snapshot_delete(n))),
+                                      False, False, 0)
+        self.snap_list.show_all()
+
+    def snapshot_restore(self, name):
+        src = os.path.join(SNAP_DIR, RICE, name)
+        dlg = Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.QUESTION,
+                                buttons=Gtk.ButtonsType.OK_CANCEL,
+                                text=f'Restore snapshot {name.partition("__")[2]}?')
+        dlg.format_secondary_text('The current state is saved first as "before-restore", so you can go back.')
+        ok = dlg.run() == Gtk.ResponseType.OK
+        dlg.destroy()
+        if not ok:
+            return
+        self.snapshot_create('before-restore', quiet=True)
+        for fname, dst in self.SNAP_FILES:
+            f = os.path.join(src, fname)
+            if os.path.exists(f):
+                shutil.copy2(f, dst)
+        self.load_colors()
+        # bspwmrc re-runs Theme.sh, so this re-applies everything
+        spawn(['bspc', 'wm', '-r'])
+        self.toast('Snapshot restored — reopen RiceEditor to refresh every value')
+
+    def snapshot_delete(self, name):
+        shutil.rmtree(os.path.join(SNAP_DIR, RICE, name), ignore_errors=True)
+        self.refresh_snapshots()
+        self.toast('Snapshot deleted')
+
+    # ──────────────────────────────────────────────────────────── help
+    def page_help(self):
+        p = self.page()
+        c = self.card('󰌌', 'Shortcuts')
+        for keys, what in (('Ctrl + 1 … 0', 'Jump to a section'), ('Ctrl + S', 'Save a snapshot'),
+                           ('Ctrl + R', 'Soft reload (bars, picom, dunst, sxhkd)'),
+                           ('Ctrl + L', 'Lock the screen'), ('Ctrl + Q', 'Close RiceEditor')):
+            k = Gtk.Label(label=keys)
+            k.get_style_context().add_class('value')
+            c.pack_start(self.row(what, '', k), False, False, 0)
+        p.pack_start(c, False, False, 0)
+        c = self.card('󰋗', 'How it works')
+        text = (
+            f'• Everything you touch is written to {THEME_CFG.replace(HOME, "~")} (or picom.conf /\n'
+            '  bspwmrc for global options) and applied at once: bspc for windows, a picom reload\n'
+            '  for the compositor, and the rice modules for dunst, gtk, rofi and terminals.\n'
+            '• You always edit the rice that was active when RiceEditor opened. After switching\n'
+            '  rice, close and reopen it.\n'
+            '• A snapshot is taken automatically the first time you open RiceEditor each day,\n'
+            '  so a bad tweak is always one click away from being undone (Snapshots).\n'
+            '• Palettes come from theme_colors.bash; the editor itself follows the active one.')
+        lb = Gtk.Label(label=text, xalign=0)
+        lb.get_style_context().add_class('dim')
+        c.pack_start(lb, False, False, 4)
+        p.pack_start(c, False, False, 0)
+        return p
 
-    def update_wall_engine_options(self, engine):
-        """
-        Muestra las opciones dinámicas según la selección actual en el combo.
-        """
-        for child in self.wall_engine_options_box.get_children():
-            self.wall_engine_options_box.remove(child)
-
-        if engine == "Random":  # Default
-            current_theme = self.get_current_theme()
-            default_label = Gtk.Label(
-                label=(
-                    "It will put a random wallpaper from the\n"
-                    "Walls directory of the current theme, drop your images in\n"
-                    f"~/.config/bspwm/rices/{current_theme}/Walls"
-                )
-            )
-            default_label.set_halign(Gtk.Align.START)
-            default_label.set_justify(Gtk.Justification.LEFT)  # Alinear multilinea a la izquierda
-
-            apply_button = Gtk.Button(label="Apply")
-            apply_button.connect("clicked", self.on_apply_wall_engine, "Random")
-
-            self.wall_engine_options_box.pack_start(default_label, False, False, 10)
-            self.wall_engine_options_box.pack_start(apply_button, False, False, 10)
-
-        elif engine == "CustomDir":  # Custom Directory
-            # Label for Custom Dir
-            custom_dir_label = Gtk.Label(
-                label="Select the directory from where you want to load the random\nimages"
-            )
-            custom_dir_label.set_halign(Gtk.Align.START)
-            custom_dir_label.set_justify(Gtk.Justification.LEFT)
-
-            # Entry and Buttons
-            custom_dir_entry = Gtk.Entry()
-            custom_dir_entry.set_text(self.get_custom_dir())
-
-            browse_button = Gtk.Button(label="Browse")
-            browse_button.connect("clicked", self.on_browse_directory, custom_dir_entry)
-
-            apply_button = Gtk.Button(label="Apply")
-            apply_button.connect("clicked", self.on_apply_wall_engine, "CustomDir", custom_dir_entry)
-
-            # Layout
-            hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-            hbox.pack_start(custom_dir_entry, True, True, 0)
-            hbox.pack_end(browse_button, False, False, 0)
-            hbox.pack_end(apply_button, False, False, 0)
-
-            self.wall_engine_options_box.pack_start(custom_dir_label, False, False, 10)
-            self.wall_engine_options_box.pack_start(hbox, False, False, 10)
-
-        elif engine == "Default":  # Custom Image
-            # Label for Custom Image
-            custom_image_label = Gtk.Label(
-                label="Select the image you want to use as wallpaper."
-            )
-            custom_image_label.set_halign(Gtk.Align.START)
-            custom_image_label.set_justify(Gtk.Justification.LEFT)
-
-            # Entry and Buttons
-            custom_image_entry = Gtk.Entry()
-            custom_image_entry.set_text(self.get_custom_wall())
-
-            browse_button = Gtk.Button(label="Browse")
-            browse_button.connect("clicked", self.on_browse_file, custom_image_entry)
-
-            apply_button = Gtk.Button(label="Apply")
-            apply_button.connect("clicked", self.on_apply_wall_engine, "Default", custom_image_entry)
-
-            # Layout
-            hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-            hbox.pack_start(custom_image_entry, True, True, 0)
-            hbox.pack_end(browse_button, False, False, 0)
-            hbox.pack_end(apply_button, False, False, 0)
-
-            self.wall_engine_options_box.pack_start(custom_image_label, False, False, 10)
-            self.wall_engine_options_box.pack_start(hbox, False, False, 10)
-
-        elif engine == "Animated":  # Custom Image
-            # Label for Custom Animated
-            custom_animated_label = Gtk.Label(
-                label="Select the file you want to use as wallpaper.\nValid files (mp4, mkv, gif)"
-            )
-            custom_animated_label.set_halign(Gtk.Align.START)
-            custom_animated_label.set_justify(Gtk.Justification.LEFT)
-
-            # Entry and Buttons
-            custom_animated_entry = Gtk.Entry()
-            custom_animated_entry.set_text(self.get_custom_animated())
-
-            browse_button = Gtk.Button(label="Browse")
-            browse_button.connect("clicked", self.on_browse_animated, custom_animated_entry)
-
-            apply_button = Gtk.Button(label="Apply")
-            apply_button.connect("clicked", self.on_apply_wall_engine, "Animated", custom_animated_entry)
-
-            # Layout
-            hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-            hbox.pack_start(custom_animated_entry, True, True, 0)
-            hbox.pack_end(browse_button, False, False, 0)
-            hbox.pack_end(apply_button, False, False, 0)
-
-            self.wall_engine_options_box.pack_start(custom_animated_label, False, False, 10)
-            self.wall_engine_options_box.pack_start(hbox, False, False, 10)
-
-        elif engine == "Slideshow":  # Slideshow 15 minutes
-            current_theme = self.get_current_theme()
-            slideshow_label = Gtk.Label(
-                label=(
-                    "Change your wallpaper randomly every 15 minutes.\n"
-                    "From walls directory of the current theme, drop your images in\n"
-                    f"~/.config/bspwm/rices/{current_theme}/Walls"
-                )
-            )
-            slideshow_label.set_halign(Gtk.Align.START)
-            slideshow_label.set_justify(Gtk.Justification.LEFT)  # Alinear multilinea a la izquierda
-
-            apply_button = Gtk.Button(label="Apply")
-            apply_button.connect("clicked", self.on_apply_wall_engine, "Slideshow")
-
-            self.wall_engine_options_box.pack_start(slideshow_label, False, False, 10)
-            self.wall_engine_options_box.pack_start(apply_button, False, False, 10)
-
-        self.wall_engine_options_box.show_all()
-
-    def on_wall_engine_changed(self, combo):
-        engine = combo.get_active_id()
-        self.update_wall_engine_options(engine)
-
-    def get_custom_dir(self):
-        return self.read_theme_variable("CUSTOM_DIR")
-
-    def get_custom_wall(self):
-        return self.read_theme_variable("DEFAULT_WALL")
-
-    def get_custom_animated(self):
-        return self.read_theme_variable("ANIMATED_WALL")
-
-    def read_theme_variable(self, var_name):
-        current_theme = self.get_current_theme()
-        config_file = os.path.expanduser(f'~/.config/bspwm/rices/{current_theme}/theme-config.bash')
-        try:
-            with open(config_file, 'r') as f:
-                for line in f:
-                    if line.startswith(f'{var_name}='):
-                        match = re.search(rf'{var_name}="([^"]+)"', line)
-                        if match:
-                            return match.group(1)
-        except FileNotFoundError:
-            print(f"Archivo de configuración no encontrado: {config_file}")
-        except Exception as e:
-            print(f"Error al leer {var_name}: {e}")
-        return ""
-
-    def on_apply_wall_engine(self, button, engine, entry=None):
-        current_theme = self.get_current_theme()
-        config_file = os.path.expanduser(f'~/.config/bspwm/rices/{current_theme}/theme-config.bash')
-
-        try:
-            # Actualizar archivo de configuración
-            with open(config_file, 'r') as f:
-                content = f.readlines()
-
-            for i, line in enumerate(content):
-                if line.startswith('ENGINE='):
-                    content[i] = f'ENGINE="{engine}"\n'
-
-                if engine == "CustomDir" and line.startswith('CUSTOM_DIR='):
-                    content[i] = f'CUSTOM_DIR="{entry.get_text()}"\n'
-
-                if engine == "Default" and line.startswith('DEFAULT_WALL='):
-                    content[i] = f'DEFAULT_WALL="{entry.get_text()}"\n'
-
-                if engine == "Animated" and line.startswith('ANIMATED_WALL='):
-                    content[i] = f'ANIMATED_WALL="{entry.get_text()}"\n'
-
-            with open(config_file, 'w') as f:
-                f.writelines(content)
-
-            # Aplicar cambios en tiempo real
-            command = ""
-            if engine == "Random":
-                command = f'''
-                pkill xwinwrap;
-                [ -f /tmp/wall_refresh.pid ] && kill $(cat /tmp/wall_refresh.pid) 2>/dev/null;
-                rm -f /tmp/wall_refresh.pid;
-                random_img=$(find "$HOME/.config/bspwm/rices/{current_theme}/walls" -type f \\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \\) | shuf -n 1);
-                feh --bg-fill $random_img;
-                WallSync &
-                '''
-            elif engine == "CustomDir":
-                command = f'''
-                pkill xwinwrap;
-                [ -f /tmp/wall_refresh.pid ] && kill $(cat /tmp/wall_refresh.pid) 2>/dev/null;
-                rm -f /tmp/wall_refresh.pid;
-                random_img=$(find "{entry.get_text()}" -type f \\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \\) | shuf -n 1);
-                feh --bg-fill "$random_img";
-                WallSync &
-                '''
-            elif engine == "Default":
-                command = f'''
-                pkill xwinwrap;
-                [ -f /tmp/wall_refresh.pid ] && kill $(cat /tmp/wall_refresh.pid) 2>/dev/null;
-                rm -f /tmp/wall_refresh.pid;
-                feh --bg-fill "{entry.get_text()}";
-                WallSync &
-                '''
-            elif engine == "Animated":
-                command = f'''
-                pkill xwinwrap;
-                [ -f /tmp/wall_refresh.pid ] && kill $(cat /tmp/wall_refresh.pid) 2>/dev/null;
-                rm -f /tmp/wall_refresh.pid;
-                AnimatedWall --start "{entry.get_text()}";
-                WallSync --animated &
-                '''
-            elif engine == "Slideshow":
-                command = f'''
-                pkill xwinwrap;
-                [ -f /tmp/wall_refresh.pid ] && kill $(cat /tmp/wall_refresh.pid) 2>/dev/null;
-                rm -f /tmp/wall_refresh.pid;
-                bash -c '
-                    while true; do
-                        random_img=$(find "$HOME/.config/bspwm/rices/{current_theme}/walls" -type f \\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \\) | shuf -n 1);
-                        feh --bg-fill $random_img;
-                        WallSync &
-                        sleep 900
-                        WallSync &
-                    done & echo $! > /tmp/wall_refresh.pid
-                '
-                '''
-
-            subprocess.run(command, shell=True)
-
-        except Exception as e:
-            print(f"Error al aplicar configuración de Wall Engine: {e}")
-
-    def on_browse_directory(self, button, entry):
-        """
-        Abre un diálogo para seleccionar un directorio y actualiza la entrada.
-        """
-        dialog = Gtk.FileChooserDialog(
-            title="Select Directory",
-            parent=self,
-            action=Gtk.FileChooserAction.SELECT_FOLDER,
-        )
-        dialog.add_buttons(
-            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
-            Gtk.STOCK_OPEN, Gtk.ResponseType.OK
-        )
-
-        response = dialog.run()
-        if response == Gtk.ResponseType.OK:
-            folder = dialog.get_filename()
-            entry.set_text(folder)
-
-        dialog.destroy()
-
-    def on_browse_file(self, button, entry):
-        """
-        Abre un diálogo para seleccionar un archivo y actualiza la entrada.
-        """
-        dialog = Gtk.FileChooserDialog(
-            title="Select Image File",
-            parent=self,
-            action=Gtk.FileChooserAction.OPEN,
-        )
-        dialog.add_buttons(
-            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
-            Gtk.STOCK_OPEN, Gtk.ResponseType.OK
-        )
-
-        # Filtro para imágenes
-        filter_images = Gtk.FileFilter()
-        filter_images.set_name("Image Files")
-        filter_images.add_mime_type("image/png")
-        filter_images.add_mime_type("image/jpeg")
-        filter_images.add_mime_type("image/jpg")
-        filter_images.add_mime_type("image/webp")
-        filter_images.add_pattern("*.png")
-        filter_images.add_pattern("*.jpg")
-        filter_images.add_pattern("*.jpeg")
-        filter_images.add_pattern("*.webp")
-        dialog.add_filter(filter_images)
-
-        response = dialog.run()
-        if response == Gtk.ResponseType.OK:
-            file = dialog.get_filename()
-            entry.set_text(file)
-
-        dialog.destroy()
-
-    def on_browse_animated(self, button, entry):
-        """
-        Abre un diálogo para seleccionar un archivo y actualiza la entrada.
-        """
-        dialog = Gtk.FileChooserDialog(
-            title="Select Image File",
-            parent=self,
-            action=Gtk.FileChooserAction.OPEN,
-        )
-        dialog.add_buttons(
-            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
-            Gtk.STOCK_OPEN, Gtk.ResponseType.OK
-        )
-
-        # Filtro para imágenes
-        filter_images = Gtk.FileFilter()
-        filter_images.set_name("Animated Files")
-        filter_images.add_mime_type("image/gif")
-        filter_images.add_mime_type("video/mp4")
-        filter_images.add_mime_type("video/mkv")
-        filter_images.add_pattern("*.gif")
-        filter_images.add_pattern("*.mp4")
-        filter_images.add_pattern("*.mkv")
-        dialog.add_filter(filter_images)
-
-        response = dialog.run()
-        if response == Gtk.ResponseType.OK:
-            file = dialog.get_filename()
-            entry.set_text(file)
-
-        dialog.destroy()
-
-    def get_picom_backend(self):
-        """
-        Lee el backend actual desde picom.conf.
-        """
-        picom_config_file = os.path.expanduser('~/.config/bspwm/config/picom/picom.conf')
-
-        try:
-            with open(picom_config_file, 'r') as f:
-                for line in f:
-                    if line.strip().startswith('backend ='):
-                        match = re.search(r'backend\s*=\s*"(\w+)"', line)
-                        if match:
-                            return match.group(1)
-        except FileNotFoundError:
-            print(f"Archivo de configuración no encontrado: {picom_config_file}")
-        except Exception as e:
-            print(f"Error al leer el backend de picom: {e}")
-        return "xrender"  # Valor por defecto si no se encuentra
-
-    def on_apply_picom_backend(self, combo):
-        """
-        Aplica el backend seleccionado en picom.conf.
-        """
-        selected_backend = combo.get_active_id()
-        picom_config_file = os.path.expanduser('~/.config/bspwm/config/picom/picom.conf')
-
-        try:
-            with open(picom_config_file, 'r') as f:
-                lines = f.readlines()
-
-            for i, line in enumerate(lines):
-                if line.strip().startswith('backend ='):
-                    lines[i] = f'backend = "{selected_backend}";\n'
-                    break
-
-            with open(picom_config_file, 'w') as f:
-                f.writelines(lines)
-        except Exception as e:
-            print(f"Error al actualizar backend de picom: {e}")
-
-    def get_vsync_state(self):
-        """
-        Lee el estado actual de vSync desde picom.conf.
-        """
-        picom_config_file = os.path.expanduser('~/.config/bspwm/config/picom/picom.conf')
-
-        try:
-            with open(picom_config_file, 'r') as f:
-                for line in f:
-                    if line.strip().startswith('vsync ='):
-                        match = re.search(r'vsync\s*=\s*(true|false);', line)
-                        if match:
-                            return match.group(1) == "true"
-        except FileNotFoundError:
-            print(f"Archivo de configuración no encontrado: {picom_config_file}")
-        except Exception as e:
-            print(f"Error al leer el estado de vSync: {e}")
-        return False  # Valor por defecto si no se encuentra
-
-    def on_vsync_switch_toggled(self, switch, state):
-        """
-        Maneja los cambios en el switch de vSync.
-        """
-        new_state = "true" if state else "false"
-        picom_config_file = os.path.expanduser('~/.config/bspwm/config/picom/picom.conf')
-
-        try:
-            with open(picom_config_file, 'r') as f:
-                lines = f.readlines()
-
-            for i, line in enumerate(lines):
-                if line.strip().startswith('vsync ='):
-                    lines[i] = f'vsync = {new_state};\n'
-                    break
-
-            with open(picom_config_file, 'w') as f:
-                f.writelines(lines)
-        except Exception as e:
-            print(f"Error al actualizar el estado de vSync: {e}")
-
-        return False  # Debe retornar False para que el estado del switch se actualice
-
-    def get_window_gap(self):
-        """
-        Lee el valor actual de window_gap desde bspwmrc.
-        """
-        bspwm_config_file = os.path.expanduser('~/.config/bspwm/bspwmrc')
-
-        try:
-            with open(bspwm_config_file, 'r') as f:
-                for line in f:
-                    if line.strip().startswith('bspc config window_gap'):
-                        match = re.search(r'bspc config window_gap (\d+)', line)
-                        if match:
-                            return int(match.group(1))
-        except FileNotFoundError:
-            print(f"Archivo de configuración no encontrado: {bspwm_config_file}")
-        except Exception as e:
-            print(f"Error al leer window_gap: {e}")
-        return 0  # Valor por defecto si no se encuentra
-
-    def on_apply_window_gap(self, button):
-        """
-        Aplica el nuevo valor de window_gap.
-        """
-        new_gap = self.window_gap_entry.get_text()
-
-        # Validar que el valor esté entre 0 y 20
-        try:
-            gap_value = int(new_gap)
-            if 0 <= gap_value <= 20:
-                bspwm_config_file = os.path.expanduser('~/.config/bspwm/bspwmrc')
-
-                try:
-                    # Leer el archivo bspwmrc
-                    with open(bspwm_config_file, 'r') as f:
-                        lines = f.readlines()
-
-                    # Modificar la línea de window_gap
-                    for i, line in enumerate(lines):
-                        if line.strip().startswith('bspc config window_gap'):
-                            lines[i] = f'bspc config window_gap {gap_value}\n'
-                            break
-
-                    # Escribir de vuelta al archivo bspwmrc
-                    with open(bspwm_config_file, 'w') as f:
-                        f.writelines(lines)
-
-                    # Aplicar cambios en tiempo real
-                    subprocess.run(['bspc', 'config', 'window_gap', str(gap_value)], check=True)
-
-                except Exception as e:
-                    print(f"Error al actualizar window_gap: {e}")
-            else:
-                print("Valor fuera de rango (0-20)")
-        except ValueError:
-            print("Valor inválido")
-
-    # Método de validación de entrada
-    def on_window_gap_entry_insert(self, entry, new_text, new_text_length, position):
-        """
-        Validación para permitir solo hasta dos caracteres numéricos.
-        """
-        current_text = entry.get_text()
-
-        try:
-            # Simula el texto completo después de la inserción
-            full_text = current_text[:position] + new_text + current_text[position:]
-            # Permitir solo números con un máximo de dos caracteres
-            if not full_text.isdigit() or len(full_text) > 2:
-                entry.stop_emission_by_name("insert-text")
-        except ValueError:
-            entry.stop_emission_by_name("insert-text")
-
-    def get_pixel_art_state(self):
-        """
-        Lee el estado actual de Pixel-Art on Terminal desde .zshrc.
-        """
-        zshrc_file = os.path.expanduser('~/.zshrc')
-
-        try:
-            with open(zshrc_file, 'r') as f:
-                for line in f:
-                    if "$HOME/.local/bin/colorscript -r" in line:
-                        return not line.strip().startswith("#")
-        except FileNotFoundError:
-            print(f"Archivo de configuración no encontrado: {zshrc_file}")
-        except Exception as e:
-            print(f"Error al leer el estado de Pixel-Art: {e}")
-        return False  # Por defecto, se asume que está desactivado
-
-    def on_pixel_art_switch_toggled(self, switch, state):
-        """
-        Maneja los cambios en el switch de Pixel-Art on Terminal.
-        """
-        zshrc_file = os.path.expanduser('~/.zshrc')
-        command_line = "$HOME/.local/bin/colorscript -r"
-
-        try:
-            with open(zshrc_file, 'r') as f:
-                lines = f.readlines()
-
-            for i, line in enumerate(lines):
-                if command_line in line:
-                    if state:
-                        # Activar: descomentar la línea
-                        lines[i] = line.lstrip("#")
-                    else:
-                        # Desactivar: comentar la línea
-                        if not line.strip().startswith("#"):
-                            lines[i] = f"#{line}"
-                    break
-
-            with open(zshrc_file, 'w') as f:
-                f.writelines(lines)
-        except Exception as e:
-            print(f"Error al actualizar Pixel-Art on Terminal: {e}")
-
-        return False  # Debe retornar False para que el estado del switch se actualice
-
-    def get_fzf_tab_state(self):
-        """
-        Lee el estado actual de fzf-tab on Terminal desde .zshrc.
-        """
-        zshrc_file = os.path.expanduser('~/.zshrc')
-
-        try:
-            with open(zshrc_file, 'r') as f:
-                for line in f:
-                    if "disable-fzf-tab" in line:
-                        return not line.strip().startswith("#")
-        except FileNotFoundError:
-            print(f"Archivo de configuración no encontrado: {zshrc_file}")
-        except Exception as e:
-            print(f"Error al leer el estado de fzf-tab: {e}")
-        return False  # Por defecto, se asume que está desactivado
-
-    def on_fzf_tab_switch_toggled(self, switch, state):
-        """
-        Maneja los cambios en el switch de fzf_tab on Terminal.
-        """
-        zshrc_file = os.path.expanduser('~/.zshrc')
-        command_line = "disable-fzf-tab"
-
-        try:
-            with open(zshrc_file, 'r') as f:
-                lines = f.readlines()
-
-            for i, line in enumerate(lines):
-                if command_line in line:
-                    if state:
-                        # Activar: descomentar la línea
-                        lines[i] = line.lstrip("#")
-                    else:
-                        # Desactivar: comentar la línea
-                        if not line.strip().startswith("#"):
-                            lines[i] = f"#{line}"
-                    break
-
-            with open(zshrc_file, 'w') as f:
-                f.writelines(lines)
-        except Exception as e:
-            print(f"Error al actualizar fzf-tab on Terminal: {e}")
-
-        return False  # Debe retornar False para que el estado del switch se actualice
 
 def main():
-    app = RiceEditorApp()
+    GLib.set_prgname('RiceEditor')
+    app = RiceEditor()
     app.show_all()
     Gtk.main()
 
-if __name__ == "__main__":
+
+if __name__ == '__main__':
     main()
