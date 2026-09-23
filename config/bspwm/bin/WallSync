@@ -46,6 +46,11 @@ handle_animated() {
     rm -f "$TEMP_FRAME"
 }
 
+# Pre-render the lockscreen for the new wallpaper (so it locks instantly)
+prepare_lock() {
+    command -v ScreenLocker >/dev/null 2>&1 && (ScreenLocker --prepare >/dev/null 2>&1 &)
+}
+
 if [ "$1" = "--animated" ]; then
     handle_animated
     exit 0
@@ -57,5 +62,6 @@ WALL=$(awk -F"'" '/feh --no-fehbg --bg/ {print $2}' "$HOME/.fehbg" 2>/dev/null)
 
 ln -sf "$WALL" "$CACHE_DIR/current_wall"
 check_and_update "$WALL"
+prepare_lock
 
 exit 0

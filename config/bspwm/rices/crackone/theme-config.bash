@@ -81,6 +81,13 @@ sl_ring="${black}"
 sl_wrong="${red}"
 sl_date="${fg}"
 sl_verify="${green}"
+LOCK_ACCENT="${blue}"	# Ring highlight + glass panel border
+LOCK_BLUR="0"			# Wallpaper blur on lockscreen (0-30)
+LOCK_DIM="20"			# Wallpaper darkening in % (0-80)
+LOCK_POS="left"			# Clock/ring position: left | center | right
+LOCK_GLASS="true"		# Frosted glass panel behind the clock true|false
+LOCK_CLOCK="%H:%M"		# Clock format (strftime)
+LOCK_GREETER="Type the password to Unlock"
 
 # Gtk theme
 gtk_theme="$gtk_themeb"

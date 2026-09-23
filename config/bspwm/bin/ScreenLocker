@@ -1,204 +1,231 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # =============================================================
 # Author: techogr
 #
-
 # Script Name: ScreenLocker
-# Description: Advanced screen locker with blur effect and theme-based wallpapers
+# Description: Screen locker that shows the wallpaper you have set
 # Features:
-#   - Dynamic blur effect on screenshot
-#   - Themed lockscreen wallpapers
-#   - Customizable colors and fonts
-#   - Multiple image format support (JPG/PNG/WEBP)
-#   - Adaptive to screen resolution (Bye bye hardcoded values!)
+#   - Uses the CURRENT wallpaper (WallSync / ~/.fehbg / DEFAULT_WALL)
+#   - Frosted-glass HUD panel baked behind the clock & ring
+#   - Pre-rendered + cached per wallpaper/resolution: locks instantly
+#   - Keeps betterlockscreen's cache in sync with the same wallpaper
+#   - Options read from the rice (LOCK_* vars in theme-config.bash)
+#   - Adaptive to screen resolution
 #
 # Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
 # Licensed under GPL-3.0 license
 # =============================================================
 
-TEMP_IMAGE="/tmp/i3lock.jpg"
 TEMP_LAYOUT="/tmp/lockerpreviouskeymap"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/lockscreen"
+mkdir -p "$CACHE_DIR"
 
-# Colors
-bg=#1a1b26
-fg=#c0caf5
-ring=#15161e
-wrong=#f7768e
-date=#c0caf5
-verify=#9ece6a
+read -r RICE < "$HOME"/.config/bspwm/.rice
+THEME_CFG="$HOME/.config/bspwm/rices/${RICE}/theme-config.bash"
+
+# Theme colors (fallback: Tokyo Night). The rice overrides them below.
+# shellcheck disable=SC1090
+[ -f "$THEME_CFG" ] && . "$THEME_CFG" >/dev/null 2>&1
+L_BG=${sl_bg:-#1a1b26}
+L_FG=${sl_fg:-#c0caf5}
+L_RING=${sl_ring:-#15161e}
+L_WRONG=${sl_wrong:-#f7768e}
+L_DATE=${sl_date:-#c0caf5}
+L_VERIFY=${sl_verify:-#9ece6a}
+L_ACCENT=${LOCK_ACCENT:-${blue:-#7aa2f7}}
+
+# Lock options (editable from RiceEditor -> Lockscreen)
+LOCK_BLUR=${LOCK_BLUR:-0}             # 0-30  wallpaper blur
+LOCK_DIM=${LOCK_DIM:-20}              # 0-80  wallpaper darkening (%)
+LOCK_POS=${LOCK_POS:-left}            # left | center | right
+LOCK_GLASS=${LOCK_GLASS:-true}        # frosted glass panel true|false
+LOCK_CLOCK=${LOCK_CLOCK:-%H:%M}       # strftime clock format
+LOCK_GREETER=${LOCK_GREETER:-Type the password to Unlock}
 
 save_current_keymap() {
-    setxkbmap -query | grep "layout: " | awk '{print $2}' > "$TEMP_LAYOUT"
-    setxkbmap -query | grep "options:" | awk '{print $2}' > "${TEMP_LAYOUT}_options"
+    setxkbmap -query | awk '/layout:/ {print $2}' > "$TEMP_LAYOUT"
+    setxkbmap -query | awk '/options:/ {print $2}' > "${TEMP_LAYOUT}_options"
 }
 
 restore_previous_keymap() {
-    if [ -f "$TEMP_LAYOUT" ]; then
-        previous_layout=$(cat "$TEMP_LAYOUT")
-        if [ -f "${TEMP_LAYOUT}_options" ]; then
-            previous_options=$(cat "${TEMP_LAYOUT}_options")
-            setxkbmap -layout "$previous_layout" -option "$previous_options"
-        else
-            setxkbmap -layout "$previous_layout"
-        fi
-        rm -f "$TEMP_LAYOUT" "${TEMP_LAYOUT}_options"
-    fi
-}
-
-# Get screen resolution dynamically
-get_screen_resolution() {
-    # Try xrandr first (most common)
-    if command -v xrandr >/dev/null 2>&1; then
-        resolution=$(xrandr | grep '\*' | awk '{print $1}' | head -n1)
-    # Fallback to xdpyinfo
-    elif command -v xdpyinfo >/dev/null 2>&1; then
-        resolution=$(xdpyinfo | awk '/dimensions:/ {print $2}')
-    # Last resort: use fixed resolution
+    [ -f "$TEMP_LAYOUT" ] || return
+    previous_layout=$(cat "$TEMP_LAYOUT")
+    previous_options=$(cat "${TEMP_LAYOUT}_options" 2>/dev/null)
+    if [ -n "$previous_options" ]; then
+        setxkbmap -layout "$previous_layout" -option "$previous_options"
     else
-        resolution="1920x1080"
+        setxkbmap -layout "$previous_layout"
     fi
-
-    SCREEN_WIDTH=$(echo $resolution | cut -d'x' -f1)
-    SCREEN_HEIGHT=$(echo $resolution | cut -d'x' -f2)
+    rm -f "$TEMP_LAYOUT" "${TEMP_LAYOUT}_options"
 }
 
-# Calculate positions based on screen resolution
+# Size of the whole X screen (covers every monitor)
+get_screen_resolution() {
+    resolution=$(xrandr 2>/dev/null | awk '/current/ {gsub(",",""); print $8"x"$10; exit}')
+    [ -z "$resolution" ] && resolution=$(xdpyinfo 2>/dev/null | awk '/dimensions:/ {print $2}')
+    [ -z "$resolution" ] && resolution="1920x1080"
+    SCREEN_WIDTH=${resolution%x*}
+    SCREEN_HEIGHT=${resolution#*x}
+}
+
 calculate_positions() {
-    # Center horizontally
-    CENTER_X=$((SCREEN_WIDTH * 25 / 100))  # Left position... 25% of screen width
-
-    # Some other options:
-    # CENTER_X=$((SCREEN_WIDTH / 2)) # Exact center (uncomment if preferred)
-    # CENTER_X=$((SCREEN_WIDTH * 75 / 100)) # Right position...
-
-    # Calculate vertical positions as percentages of screen height
-    # Adjust these percentages to your preference
-    TIME_Y=$((SCREEN_HEIGHT * 36 / 100))      # 36% from top
-    DATE_Y=$((SCREEN_HEIGHT * 42 / 100))      # 42% from top
-    IND_Y=$((SCREEN_HEIGHT * 56 / 100))       # 56% from top (indicator)
-    VERIF_Y=$((SCREEN_HEIGHT * 76 / 100))     # 76% from top
-    GREETER_Y=$((SCREEN_HEIGHT * 72 / 100))   # 72% from top
-    WRONG_Y=$((SCREEN_HEIGHT * 76 / 100))     # 76% from top
-
-    # Calculate font sizes based on screen resolution
-    # Base sizes for 1920x1080, scale for other resolutions
-    BASE_WIDTH=1920
-    BASE_HEIGHT=1080
-
-    # Scale factor formula...
-    SCALE_FACTOR=$(echo "scale=2; sqrt(($SCREEN_WIDTH * $SCREEN_HEIGHT) / ($BASE_WIDTH * $BASE_HEIGHT))" | bc)
-
-    # If bc is not available, use a simpler approach
-    if [ -z "$SCALE_FACTOR" ]; then
-        if [ $SCREEN_WIDTH -le 1366 ]; then
-            SCALE_FACTOR=0.8
-        elif [ $SCREEN_WIDTH -le 1920 ]; then
-            SCALE_FACTOR=1.0
-        elif [ $SCREEN_WIDTH -le 2560 ]; then
-            SCALE_FACTOR=1.3
-        else
-            SCALE_FACTOR=1.5
-        fi
-    fi
-
-    # Calculate font sizes
-    TIME_SIZE=$(echo "140 * $SCALE_FACTOR" | bc | cut -d. -f1)
-    DATE_SIZE=$(echo "45 * $SCALE_FACTOR" | bc | cut -d. -f1)
-    TEXT_SIZE=$(echo "23 * $SCALE_FACTOR" | bc | cut -d. -f1)
-    RADIUS=$(echo "30 * $SCALE_FACTOR" | bc | cut -d. -f1)
-    RING_WIDTH=$(echo "60 * $SCALE_FACTOR" | bc | cut -d. -f1)
-
-    # Fallback if bc is not available
-    if [ -z "$TIME_SIZE" ]; then
-        TIME_SIZE=140
-        DATE_SIZE=45
-        TEXT_SIZE=23
-        RADIUS=30
-        RING_WIDTH=60
-    fi
-}
-
-default_lockscreen () {
-
-    save_current_keymap
-    setxkbmap -layout us
-
-    get_screen_resolution
-    calculate_positions
-
-    maim -d 0.3 -u ${TEMP_IMAGE}
-    magick $TEMP_IMAGE -blur 5x4 $TEMP_IMAGE
-    i3lock -n --force-clock -i $TEMP_IMAGE -e --indicator \
-        --radius=$RADIUS --ring-width=$RING_WIDTH --inside-color=$bg \
-        --ring-color=$ring --insidever-color=$verify --ringver-color=$verify \
-        --insidewrong-color=$wrong --ringwrong-color=$wrong --line-uses-inside \
-        --keyhl-color=$verify --separator-color=$verify --bshl-color=$verify \
-        --time-str="%H:%M" --time-size=$TIME_SIZE --date-str="%a, %d %b" \
-        --date-size=$DATE_SIZE --verif-text="Verifying Password..." --wrong-text="Wrong Password!" \
-        --noinput-text="" --greeter-text="Type the password to Unlock" --ind-pos="$CENTER_X:$IND_Y" \
-        --time-font="JetBrainsMono NF:style=Bold" --date-font="JetBrainsMono NF" --verif-font="JetBrainsMono NF" \
-        --greeter-font="JetBrainsMono NF" --wrong-font="JetBrainsMono NF" --verif-size=$TEXT_SIZE \
-        --greeter-size=$TEXT_SIZE --wrong-size=$TEXT_SIZE --time-pos="$CENTER_X:$TIME_Y" \
-        --date-pos="$CENTER_X:$DATE_Y" --greeter-pos="$CENTER_X:$GREETER_Y" --wrong-pos="$CENTER_X:$WRONG_Y" \
-        --verif-pos="$CENTER_X:$VERIF_Y" --date-color=$date --time-color=$date \
-        --greeter-color=$fg --wrong-color=$wrong --verif-color=$verify \
-        --pointer=default --refresh-rate=0 \
-        --pass-media-keys --pass-volume-keys
-        restore_previous_keymap
-}
-
-rice_lockscreen () {
-
-    save_current_keymap
-    setxkbmap -layout us
-
-    get_screen_resolution
-    calculate_positions
-
-    # Current Rice
-    read -r RICE < "$HOME"/.config/bspwm/.rice
-    # Wallpapers dir
-    image_dir="$HOME/.config/bspwm/rices/${RICE}/walls"
-
-    # Select random image
-    lock_image=$(find "$image_dir" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.webp" \) | shuf -n 1)
-
-    # If the image is *.webp convert to /tmp/lock_image.jpg
-    case "$lock_image" in
-        *.webp|*.jpg|*.jpeg|*.png)
-            magick "$lock_image" "$TEMP_IMAGE" || exit 1
-        ;;
+    case $LOCK_POS in
+        center) CENTER_X=$((SCREEN_WIDTH / 2)) ;;
+        right)  CENTER_X=$((SCREEN_WIDTH * 75 / 100)) ;;
+        *)      CENTER_X=$((SCREEN_WIDTH * 25 / 100)) ;;
     esac
 
-    i3lock -n --force-clock -i $TEMP_IMAGE --scale -e --indicator \
-        --radius=$RADIUS --ring-width=$RING_WIDTH --inside-color=$bg \
-        --ring-color=$ring --insidever-color=$verify --ringver-color=$verify \
-        --insidewrong-color=$wrong --ringwrong-color=$wrong --line-uses-inside \
-        --keyhl-color=$verify --separator-color=$verify --bshl-color=$verify \
-        --time-str="%H:%M" --time-size=$TIME_SIZE --date-str="%a, %d %b" \
-        --date-size=$DATE_SIZE --verif-text="Verifying Password..." --wrong-text="Wrong Password!" \
-        --noinput-text="" --greeter-text="Type the password to Unlock" --ind-pos="$CENTER_X:$IND_Y" \
-        --time-font="JetBrainsMono NF:style=Bold" --date-font="JetBrainsMono NF" --verif-font="JetBrainsMono NF" \
-        --greeter-font="JetBrainsMono NF" --wrong-font="JetBrainsMono NF" --verif-size=$TEXT_SIZE \
-        --greeter-size=$TEXT_SIZE --wrong-size=$TEXT_SIZE --time-pos="$CENTER_X:$TIME_Y" \
-        --date-pos="$CENTER_X:$DATE_Y" --greeter-pos="$CENTER_X:$GREETER_Y" --wrong-pos="$CENTER_X:$WRONG_Y" \
-        --verif-pos="$CENTER_X:$VERIF_Y" --date-color=$date --time-color=$date \
-        --greeter-color=$fg --wrong-color=$wrong --verif-color=$verify \
-        --pointer=default --refresh-rate=0 \
-        --pass-media-keys --pass-volume-keys
+    TIME_Y=$((SCREEN_HEIGHT * 36 / 100))
+    DATE_Y=$((SCREEN_HEIGHT * 42 / 100))
+    IND_Y=$((SCREEN_HEIGHT * 56 / 100))
+    GREETER_Y=$((SCREEN_HEIGHT * 72 / 100))
+    VERIF_Y=$((SCREEN_HEIGHT * 76 / 100))
+    WRONG_Y=$((SCREEN_HEIGHT * 76 / 100))
 
-	 restore_previous_keymap
+    # Scale relative to 1920x1080
+    SCALE=$(awk -v w="$SCREEN_WIDTH" -v h="$SCREEN_HEIGHT" 'BEGIN {printf "%.3f", sqrt((w*h)/(1920*1080))}')
+    s() { awk -v b="$1" -v f="$SCALE" 'BEGIN {printf "%d", b*f}'; }
+    TIME_SIZE=$(s 140)
+    DATE_SIZE=$(s 45)
+    TEXT_SIZE=$(s 23)
+    RADIUS=$(s 30)
+    RING_WIDTH=$(s 60)
+
+    # Glass panel geometry around the clock/ring column
+    PANEL_W=$((SCREEN_WIDTH * 30 / 100))
+    PANEL_H=$((SCREEN_HEIGHT * 62 / 100))
+    PANEL_X=$((CENTER_X - PANEL_W / 2))
+    PANEL_Y=$((SCREEN_HEIGHT * 20 / 100))
+    PANEL_R=$(s 26)
 }
 
+# The wallpaper that is on screen right now
+current_wallpaper() {
+    local wall
+    wall=$(readlink -f "${XDG_CACHE_HOME:-$HOME/.cache}/current_wall" 2>/dev/null)
+    [ -f "$wall" ] || wall=$(awk -F"'" '/feh/ {print $2}' "$HOME/.fehbg" 2>/dev/null)
+    [ -f "$wall" ] || wall="$DEFAULT_WALL"
+    [ -f "$wall" ] && printf '%s\n' "$wall"
+}
+
+random_wallpaper() {
+    find "$HOME/.config/bspwm/rices/${RICE}/walls" -type f \
+        \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.webp" \) | shuf -n 1
+}
+
+hex_rgba() { # "#rrggbb" alpha(0-1) -> rgba(r,g,b,a)
+    local h=${1#\#}
+    printf 'rgba(%d,%d,%d,%s)' "0x${h:0:2}" "0x${h:2:2}" "0x${h:4:2}" "$2"
+}
+
+# Render (or reuse) the lock image for a wallpaper. Prints its path.
+render_lock_image() {
+    local wall=$1 key out tmp
+    key=$(printf '%s|%s|%s|%s|%s|%s|%s|%s|%s' "$wall" "$(stat -c %Y "$wall")" \
+        "$resolution" "$LOCK_BLUR" "$LOCK_DIM" "$LOCK_POS" "$LOCK_GLASS" "$L_BG" "$L_ACCENT" | md5sum)
+    out="$CACHE_DIR/lock-${key%% *}.png"
+
+    if [ ! -f "$out" ]; then
+        tmp="$CACHE_DIR/.render-$$.png"
+        set -- "$wall[0]" -resize "${resolution}^" -gravity center -extent "$resolution" +repage
+        [ "$LOCK_BLUR" -gt 0 ] 2>/dev/null && set -- "$@" -blur "0x$LOCK_BLUR"
+        [ "$LOCK_DIM" -gt 0 ] 2>/dev/null && set -- "$@" -fill black -colorize "$LOCK_DIM%"
+
+        if [ "$LOCK_GLASS" = "true" ]; then
+            local geo="${PANEL_W}x${PANEL_H}+${PANEL_X}+${PANEL_Y}"
+            local rect="roundrectangle 0,0,$((PANEL_W - 1)),$((PANEL_H - 1)),$PANEL_R,$PANEL_R"
+            set -- "$@" \
+                \( +clone -crop "$geo" +repage -blur 0x22 \
+                    \( -size "${PANEL_W}x${PANEL_H}" xc:none -fill white -draw "$rect" \) \
+                    -compose DstIn -composite \) \
+                -gravity northwest -geometry "+${PANEL_X}+${PANEL_Y}" -compose over -composite \
+                -fill "$(hex_rgba "$L_BG" 0.55)" -stroke "$(hex_rgba "$L_ACCENT" 0.55)" -strokewidth 2 \
+                -draw "roundrectangle $PANEL_X,$PANEL_Y,$((PANEL_X + PANEL_W - 1)),$((PANEL_Y + PANEL_H - 1)),$PANEL_R,$PANEL_R" \
+                -stroke none -fill "$(hex_rgba "$L_ACCENT" 0.9)" \
+                -draw "rectangle $((PANEL_X + PANEL_W / 3)),$((PANEL_Y - 1)),$((PANEL_X + PANEL_W * 2 / 3)),$((PANEL_Y + 2))"
+        fi
+
+        magick "$@" -define png:compression-level=1 "$tmp" && mv -f "$tmp" "$out" || {
+            rm -f "$tmp"
+            return 1
+        }
+        # Keep only the most recent renders
+        ls -1t "$CACHE_DIR"/lock-*.png 2>/dev/null | tail -n +6 | xargs -r rm -f
+    fi
+    printf '%s\n' "$out"
+}
+
+# Give betterlockscreen the same wallpaper so it never locks without image
+sync_betterlockscreen() {
+    command -v betterlockscreen >/dev/null 2>&1 || return 0
+    local wall=$1 stamp="$CACHE_DIR/.betterlockscreen"
+    [ "$(cat "$stamp" 2>/dev/null)" = "$wall|$resolution" ] && return 0
+    nice -n 19 betterlockscreen -u "$wall" --fx dim >/dev/null 2>&1 &&
+        printf '%s\n' "$wall|$resolution" > "$stamp"
+}
+
+run_i3lock() {
+    i3lock -n --force-clock -i "$1" -e --indicator \
+        --radius="$RADIUS" --ring-width="$RING_WIDTH" --inside-color="${L_BG}cc" \
+        --ring-color="${L_RING}ee" --insidever-color="$L_VERIFY" --ringver-color="$L_VERIFY" \
+        --insidewrong-color="$L_WRONG" --ringwrong-color="$L_WRONG" --line-uses-inside \
+        --keyhl-color="$L_ACCENT" --separator-color="${L_ACCENT}88" --bshl-color="$L_WRONG" \
+        --time-str="$LOCK_CLOCK" --time-size="$TIME_SIZE" --date-str="%a, %d %b" \
+        --date-size="$DATE_SIZE" --verif-text="Verifying Password..." --wrong-text="Wrong Password!" \
+        --noinput-text="" --greeter-text="$LOCK_GREETER" --ind-pos="$CENTER_X:$IND_Y" \
+        --time-font="JetBrainsMono NF:style=Bold" --date-font="JetBrainsMono NF" --verif-font="JetBrainsMono NF" \
+        --greeter-font="JetBrainsMono NF" --wrong-font="JetBrainsMono NF" --verif-size="$TEXT_SIZE" \
+        --greeter-size="$TEXT_SIZE" --wrong-size="$TEXT_SIZE" --time-pos="$CENTER_X:$TIME_Y" \
+        --date-pos="$CENTER_X:$DATE_Y" --greeter-pos="$CENTER_X:$GREETER_Y" --wrong-pos="$CENTER_X:$WRONG_Y" \
+        --verif-pos="$CENTER_X:$VERIF_Y" --date-color="$L_DATE" --time-color="$L_DATE" \
+        --greeter-color="$L_FG" --wrong-color="$L_WRONG" --verif-color="$L_VERIFY" \
+        --pointer=default --refresh-rate=0 \
+        --pass-media-keys --pass-volume-keys
+}
+
+lock_with() {
+    local image=$1
+    save_current_keymap
+    setxkbmap -layout us
+    run_i3lock "$image"
+    restore_previous_keymap
+}
+
+get_screen_resolution
+calculate_positions
+
 case $1 in
+    -s|--screenshot)
+        shot="$CACHE_DIR/.screenshot.png"
+        maim -d 0.3 -u "$shot" && magick "$shot" -blur 0x8 "$shot"
+        lock_with "$shot"
+        rm -f "$shot"
+        ;;
     -r|--rice)
-        rice_lockscreen ;;
+        wall=$(random_wallpaper)
+        img=$(render_lock_image "$wall") && lock_with "$img"
+        ;;
+    -p|--prepare)
+        # Pre-render in background (called by WallSync on wallpaper change)
+        wall=$(current_wallpaper) || exit 1
+        render_lock_image "$wall" >/dev/null
+        sync_betterlockscreen "$wall"
+        ;;
     -h|--help)
-        echo -e "ScreenLocker [options]
-Note: If an option is not specified, the screen locks with a screenshot with a blur effect.
+        printf '%s\n' "ScreenLocker [option]
+With no option the screen is locked with the wallpaper you have set.
 
 Options:
-	[-r] [--rice]	Set the screen locker with a random wallpaper of the current theme.\n" ;;
+  -r, --rice        Lock with a random wallpaper of the current rice
+  -s, --screenshot  Lock with a blurred screenshot
+  -p, --prepare     Pre-render the lock image (+ betterlockscreen cache)"
+        ;;
     *)
-        default_lockscreen ;;
+        if wall=$(current_wallpaper) && img=$(render_lock_image "$wall"); then
+            lock_with "$img"
+            sync_betterlockscreen "$wall" &
+        else
+            exec "$0" --screenshot
+        fi
+        ;;
 esac

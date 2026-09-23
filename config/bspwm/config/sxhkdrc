@@ -273,7 +273,7 @@ super + n ; {1-9}
 # Bloqueo de Pantalla #
 #######################
 super + shift + s
-	~/bin/lock
+	ScreenLocker
 
 #####################
 # Tamaño de ventana #
