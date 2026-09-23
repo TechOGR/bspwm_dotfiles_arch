@@ -1,110 +1,390 @@
-#!/bin/sh
+#!/usr/bin/env python3
 # =============================================================
 # Author:  TechOGR
 # Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
-# Date:    29.01.2025
 #
-# ScreenShoTer - A versatile screenshot script
-# Features:
-#   - Supports single and multi-monitor setups
-#   - By default captures only the monitor where cursor is located
-#   - Special option to capture all monitors at once
-#   - Multiple capture modes:
-#     	* Full screenshot of current monitor
-#     	* Custom area selection or active window capture
-#     	* Timed captures (3 seconds)
-#   - System notifications when taking screenshots
-#   - Automatic clipboard copy
-#   - Only works on BSPWM enviroments
+# ScreenShoTer - HUD screenshot tool for the rice
+#   ✔ Capture panel: region · window · this monitor · all monitors
+#   ✔ Delay 0 / 3 / 5 / 10 s with a countdown
+#   ✔ Saved to ~/Pictures/ScreenShots (xdg) and copied to the clipboard
+#   ✔ Notification with the shot: Open / Folder / Delete actions
+#   ✔ Last shot preview in the panel · follows the rice palette
+#   ✔ Keyboard first: 1-4 mode · D delay · Enter capture · Esc close
 #
-# Dependencies: maim, rofi, xclip, dunst
+# Usage: ScreenShoTer                      open the capture panel
+#        ScreenShoTer --region|--window|--screen|--all [--delay N]
+#        (the polybar button: left = panel, middle = monitor,
+#         right = region)
 #
+# Dependencies: maim, xclip, xdotool, dunst (dunstify), python-gobject
 # Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
 # Licensed under GPL-3.0 license
 # =============================================================
 
-# Screenshot general options
-timestamp=$(date +%Y-%m-%d-%H%M%S)
-dir="$(xdg-user-dir PICTURES)/ScreenShots"
-filename="$dir/Shot-${timestamp}.png"
+import os
+import sys
+import json
+import glob
+import time
+import subprocess
+from datetime import datetime
 
-# Create dir if not exists
-[ -d "$dir" ] || mkdir -p "$dir"
+HOME = os.path.expanduser('~')
+MODES = [
+    ('region', '󰩭', 'Region', 'drag a rectangle'),
+    ('window', '󰖯', 'Window', 'the focused window'),
+    ('screen', '󰍹', 'Screen', 'monitor under the pointer'),
+    ('all', '󰍺', 'All', 'every monitor'),
+]
+DELAYS = [0, 3, 5, 10]
+STATE = os.path.join(HOME, '.cache', os.environ.get('USER', 'user'), 'screenshoter.json')
 
-# Rofi options
-s_full=""
-s_select=""
-s_in3="󰔝"
-s_all="󰍹"
 
-# Function to get current monitor geometry based on mouse position
-get_current_monitor() {
-    bspc query -T -m pointed | jq -r '.rectangle | "\(.width)x\(.height)+\(.x)+\(.y)"'
-}
+def shots_dir():
+    try:
+        pics = subprocess.run(['xdg-user-dir', 'PICTURES'], capture_output=True, text=True).stdout.strip()
+    except OSError:
+        pics = ''
+    d = os.path.join(pics or HOME, 'ScreenShots')
+    os.makedirs(d, exist_ok=True)
+    return d
 
-rofi_cmd() {
-    rofi -dmenu \
-        -p Screenshot \
-        -mesg "Directory :: $dir" \
-        -markup-rows \
-        -theme "$HOME"/.config/bspwm/config/rofi-themes/Screenshot.rasi
-}
 
-run_rofi() {
-    printf "%s\n%s\n%s\n%s\n" "$s_full" "$s_select" "$s_in3" "$s_all" | rofi_cmd
-}
+def last_shot():
+    files = glob.glob(os.path.join(shots_dir(), '*.png'))
+    return max(files, key=os.path.getmtime) if files else ''
 
-show_notification() {
-    if [ -e "$filename" ]; then
-        dunstify -r 699 -i "$filename" "Screenshot" "Screenshot saved and copied to clipboard"
-    else
-        dunstify -r 699 -i user-trash "Screenshot" "Screenshot Canceled"
-    fi
-}
 
-copy_screenshot() {
-    xclip -selection clipboard -t image/png -i "$filename"
-}
+def load_state():
+    try:
+        with open(STATE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
 
-take_screenshot() {
-    local mode="$1" all_monitors="$2" geometry=""
 
-    set -- -u -d 1
+def save_state(st):
+    os.makedirs(os.path.dirname(STATE), exist_ok=True)
+    with open(STATE, 'w') as f:
+        json.dump(st, f)
 
-    case "$mode" in
-        full)
-            if [ "$all_monitors" != "true" ]; then
-                geometry=$(get_current_monitor)
-                [ -n "$geometry" ] && set -- "$@" -g "$geometry"
-            fi
-            ;;
-        select)
-            set -- "$@" -s -o -c 0.467,0.239,0.863,0.15 -l
-            ;;
-    esac
 
-    if maim "$@" "$filename"; then
-        paplay /usr/share/sounds/freedesktop/stereo/screen-capture.oga >/dev/null 2>&1
-        copy_screenshot
-    fi
+def run(cmd, **kw):
+    return subprocess.run(cmd, capture_output=True, text=True, **kw)
 
-    show_notification
-}
 
-countdown() {
-    local sec="$1"
+def notify(*args):
+    subprocess.run(['dunstify', *args], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    while [ "$sec" -ge 1 ]; do
-        dunstify -r 345 -t 1100 -i "$HOME/.config/bspwm/config/assets/screenshot.png" "Taking shot in : $sec"
-        sleep 1
-        sec=$((sec - 1))
-    done
-}
 
-select_option="$(run_rofi)"
-case "$select_option" in
-    "$s_full")   take_screenshot full false ;;
-    "$s_select") take_screenshot select false ;;
-    "$s_in3")    countdown 3 && take_screenshot full false ;;
-    "$s_all")    take_screenshot full true ;;
-esac
+# ──────────────────────────────────────────────────────────── capture
+def capture(mode, delay=0):
+    for s in range(delay, 0, -1):
+        notify('-r', '345', '-t', '900', '-i', 'camera-photo', 'Screenshot', f'󰄀  Capture in {s}')
+        time.sleep(1)
+    out = os.path.join(shots_dir(), f'Shot-{datetime.now():%Y-%m-%d-%H%M%S}.png')
+    args = ['maim', '-u']
+    if mode == 'region':
+        accent = accent_rgb()
+        args += ['-s', '-o', '-l', '-b', '2', '-c', f'{accent[0]:.3f},{accent[1]:.3f},{accent[2]:.3f},0.18']
+    elif mode == 'window':
+        wid = run(['xdotool', 'getactivewindow']).stdout.strip()
+        if wid:
+            args += ['-i', wid]
+    elif mode == 'screen':
+        try:
+            r = json.loads(run(['bspc', 'query', '-T', '-m', 'pointed']).stdout)['rectangle']
+            args += ['-g', f'{r["width"]}x{r["height"]}+{r["x"]}+{r["y"]}']
+        except (ValueError, KeyError):
+            pass
+    # let the notification / panel fade out before the shot
+    args += ['-d', '0.35' if mode != 'region' else '0']
+    if subprocess.run(args + [out], stderr=subprocess.DEVNULL).returncode != 0 or not os.path.exists(out):
+        notify('-r', '699', '-i', 'dialog-information', 'Screenshot', 'Canceled')
+        return 1
+    subprocess.Popen(['paplay', '/usr/share/sounds/freedesktop/stereo/screen-capture.oga'],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    with open(out, 'rb') as f:
+        subprocess.run(['xclip', '-selection', 'clipboard', '-t', 'image/png', '-i'], stdin=f)
+    act = run(['dunstify', '-r', '699', '-t', '8000', '-i', out,
+               '-A', 'open,Open', '-A', 'folder,Folder', '-A', 'delete,Delete',
+               'Screenshot', f'Saved and copied to the clipboard\n{out.replace(HOME, "~")}']).stdout.strip()
+    if act == 'open':
+        subprocess.Popen(['xdg-open', out], start_new_session=True)
+    elif act == 'folder':
+        subprocess.Popen(['xdg-open', os.path.dirname(out)], start_new_session=True)
+    elif act == 'delete':
+        os.remove(out)
+        notify('-r', '699', '-t', '2000', '-i', 'user-trash', 'Screenshot', 'Deleted')
+    return 0
+
+
+def accent_rgb():
+    try:
+        sys.path.insert(0, os.path.join(HOME, '.config/bspwm/lib'))
+        import barconf
+        h = barconf.load_palette()['blue']
+    except Exception:
+        h = '#7aa2f7'
+    return tuple(int(h[i:i + 2], 16) / 255 for i in (1, 3, 5))
+
+
+def spawn_capture(mode, delay):
+    subprocess.Popen([os.path.abspath(__file__), f'--{mode}', '--delay', str(delay)], start_new_session=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+# ─────────────────────────────────────────────────────────────── panel
+def panel():
+    sys.path.insert(0, os.path.join(HOME, '.config/bspwm/lib'))
+    import riceui as ui
+    from riceui import Gtk, Gdk, GLib, GdkPixbuf, cairo
+
+    class Panel(Gtk.Window):
+        def __init__(self):
+            super().__init__(type=Gtk.WindowType.POPUP)
+            self.set_title('ScreenShoTer')
+            ui.rgba_window(self)
+            self.pal = ui.load_palette()
+            self.c = ui.rgb_palette(self.pal)
+            st = load_state()
+            self.mode = st.get('mode', 'region')
+            self.delay = st.get('delay', 0)
+            self.install_css()
+
+            outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            outer.get_style_context().add_class('hud')
+            self.add(outer)
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+            box.get_style_context().add_class('shot')
+            outer.pack_start(box, True, True, 0)
+
+            head = Gtk.Box(spacing=10)
+            t = Gtk.Label(xalign=0)
+            t.set_markup(f'<span foreground="{self.pal["cyan"]}">󰹑</span>  CAPTURE '
+                         f'<span foreground="{self.pal["magenta"]}">//</span> SCREEN')
+            t.get_style_context().add_class('title')
+            head.pack_start(t, True, True, 0)
+            hint = Gtk.Label(label='ESC')
+            hint.get_style_context().add_class('key')
+            hint.set_valign(Gtk.Align.CENTER)
+            head.pack_end(hint, False, False, 0)
+            box.pack_start(head, False, False, 0)
+
+            body = Gtk.Box(spacing=16)
+            box.pack_start(body, True, True, 0)
+            left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+            body.pack_start(left, True, True, 0)
+
+            grid = Gtk.Box(spacing=10)
+            self.tiles = {}
+            for i, (key, icon, name, desc) in enumerate(MODES):
+                b = Gtk.Button()
+                b.get_style_context().add_class('tile')
+                v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+                k = Gtk.Label(label=str(i + 1), xalign=1)
+                k.get_style_context().add_class('num')
+                v.pack_start(k, False, False, 0)
+                ic = Gtk.Label(label=icon)
+                ic.get_style_context().add_class('glyph')
+                v.pack_start(ic, False, False, 0)
+                nl = Gtk.Label(label=name.upper())
+                nl.get_style_context().add_class('name')
+                v.pack_start(nl, False, False, 0)
+                dl = Gtk.Label(label=desc)
+                dl.get_style_context().add_class('desc')
+                v.pack_start(dl, False, False, 0)
+                b.add(v)
+                b.connect('clicked', lambda _b, m=key: self.pick(m, go=True))
+                b.connect('enter-notify-event', lambda _b, _e, m=key: self.pick(m))
+                grid.pack_start(b, True, True, 0)
+                self.tiles[key] = b
+            left.pack_start(grid, False, False, 0)
+
+            row = Gtk.Box(spacing=8)
+            lab = Gtk.Label(label='DELAY')
+            lab.get_style_context().add_class('section')
+            row.pack_start(lab, False, False, 4)
+            self.chips = {}
+            for d in DELAYS:
+                c = Gtk.Button(label=f'{d}s' if d else 'NOW')
+                c.get_style_context().add_class('chip')
+                c.connect('clicked', lambda _b, d=d: self.set_delay(d))
+                row.pack_start(c, False, False, 0)
+                self.chips[d] = c
+            go = Gtk.Button(label='󰄀   CAPTURE')
+            go.get_style_context().add_class('go')
+            go.connect('clicked', lambda *_: self.fire())
+            row.pack_end(go, False, False, 0)
+            left.pack_start(row, False, False, 0)
+
+            # last shot
+            right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+            right.get_style_context().add_class('last')
+            body.pack_start(right, False, False, 0)
+            lt = Gtk.Label(label='LAST SHOT', xalign=0)
+            lt.get_style_context().add_class('section')
+            right.pack_start(lt, False, False, 0)
+            self.last = last_shot()
+            img = Gtk.Image()
+            if self.last:
+                try:
+                    pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(self.last, 220, 124, True)
+                    img.set_from_pixbuf(pb)
+                except GLib.Error:
+                    img.set_from_icon_name('image-missing', Gtk.IconSize.DIALOG)
+                ev = Gtk.EventBox()
+                ev.add(img)
+                ev.connect('button-press-event', lambda *_: (subprocess.Popen(['xdg-open', self.last],
+                                                                              start_new_session=True),
+                                                             self.destroy()))
+                ev.set_tooltip_text('Open it')
+                right.pack_start(ev, False, False, 0)
+                name = Gtk.Label(label=os.path.basename(self.last), xalign=0)
+                name.get_style_context().add_class('desc')
+                right.pack_start(name, False, False, 0)
+            else:
+                none = Gtk.Label(label='no shots yet')
+                none.get_style_context().add_class('desc')
+                right.pack_start(none, True, True, 0)
+            folder = Gtk.Button(label='󰉋  ' + shots_dir().replace(HOME, '~'))
+            folder.get_style_context().add_class('chip')
+            folder.connect('clicked', lambda *_: (subprocess.Popen(['xdg-open', shots_dir()],
+                                                                   start_new_session=True), self.destroy()))
+            right.pack_end(folder, False, False, 0)
+
+            foot = Gtk.Label(label='1-4 MODE   ·   D DELAY   ·   ⏎ CAPTURE   ·   ESC CLOSE')
+            foot.get_style_context().add_class('foot')
+            box.pack_start(foot, False, False, 0)
+
+            self.pick(self.mode)
+            self.set_delay(self.delay)
+            self.add_events(Gdk.EventMask.KEY_PRESS_MASK | Gdk.EventMask.BUTTON_PRESS_MASK)
+            self.connect('key-press-event', self.on_key)
+            self.connect('button-press-event', self.on_click)
+            self.connect('draw', self.on_draw)
+            self.connect('map-event', lambda *_: ui.grab_input(self))
+            self.connect('destroy', Gtk.main_quit)
+            self.connect('size-allocate', lambda *_: self.place())
+
+        def place(self):
+            geo = ui.monitor_geometry()
+            w, h = self.get_size()
+            self.move(geo.x + (geo.width - w) // 2, geo.y + int(geo.height * 0.3) - h // 2)
+
+        def install_css(self):
+            css = Gtk.CssProvider()
+            css.load_from_data((ui.hud_css(self.pal) + '''
+.shot { padding: 22px 24px 16px 24px; background-color: alpha(@bg, 0.94);
+        border: 1px solid alpha(@accent, 0.55); border-radius: 18px; }
+.title { font-size: 12pt; font-weight: 800; letter-spacing: 4px; }
+.key, .num { font-size: 7pt; font-weight: 800; color: alpha(@fg, 0.45); }
+.key { border: 1px solid alpha(@fg, 0.2); border-radius: 6px; padding: 1px 6px; }
+.section { font-size: 7pt; font-weight: 800; letter-spacing: 3px; color: @accent2; }
+button.tile { background-image: none; background-color: alpha(@black, 0.6); box-shadow: none;
+              border: 1px solid alpha(@fg, 0.07); border-radius: 14px; padding: 8px 14px 12px 14px;
+              min-width: 104px; }
+button.tile:hover, button.tile.active { border-color: @cyan; background-color: alpha(@cyan, 0.07);
+              box-shadow: 0 0 18px alpha(@cyan, 0.30); }
+.glyph { font-size: 26pt; color: @accent; }
+button.tile.active .glyph { color: @cyan; }
+.name { font-weight: 800; letter-spacing: 2px; font-size: 9pt; }
+.desc { font-size: 8pt; color: alpha(@fg, 0.5); }
+button.chip { background-image: none; background-color: alpha(@black, 0.6); box-shadow: none;
+              border: 1px solid alpha(@fg, 0.1); border-radius: 8px; padding: 3px 10px;
+              font-size: 8pt; font-weight: 700; color: @fg; min-height: 0; }
+button.chip:hover { border-color: @accent; }
+button.chip.active { border-color: @accent2; color: @accent2; box-shadow: 0 0 12px alpha(@accent2, 0.3); }
+button.go { background-image: none; background-color: alpha(@cyan, 0.12); box-shadow: 0 0 16px alpha(@cyan, 0.25);
+            border: 1px solid @cyan; border-radius: 10px; padding: 4px 16px; color: @cyan;
+            font-weight: 800; letter-spacing: 2px; }
+button.go:hover { background-color: alpha(@cyan, 0.22); }
+.last { border-left: 1px solid alpha(@fg, 0.08); padding-left: 16px; min-width: 222px; }
+.foot { font-size: 7pt; letter-spacing: 2px; color: alpha(@fg, 0.35); }
+''').encode())
+            Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css,
+                                                     Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+        def on_draw(self, _w, cr):
+            cr.set_operator(cairo.OPERATOR_SOURCE)
+            cr.set_source_rgba(0, 0, 0, 0)
+            cr.paint()
+            cr.set_operator(cairo.OPERATOR_OVER)
+            return False
+
+        def pick(self, mode, go=False):
+            self.mode = mode
+            for k, b in self.tiles.items():
+                (b.get_style_context().add_class if k == mode else b.get_style_context().remove_class)('active')
+            if go:
+                self.fire()
+            return False
+
+        def set_delay(self, d):
+            self.delay = d
+            for k, b in self.chips.items():
+                (b.get_style_context().add_class if k == d else b.get_style_context().remove_class)('active')
+
+        def fire(self):
+            save_state({'mode': self.mode, 'delay': self.delay})
+            self.hide()
+            spawn_capture(self.mode, self.delay)
+            GLib.timeout_add(50, lambda: self.destroy() or False)
+
+        def on_key(self, _w, ev):
+            k = ev.keyval
+            if k == Gdk.KEY_Escape:
+                self.destroy()
+            elif k in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_space):
+                self.fire()
+            elif Gdk.KEY_1 <= k <= Gdk.KEY_4:
+                self.pick(MODES[k - Gdk.KEY_1][0])
+            elif k in (Gdk.KEY_d, Gdk.KEY_D):
+                self.set_delay(DELAYS[(DELAYS.index(self.delay) + 1) % len(DELAYS)])
+            elif k in (Gdk.KEY_Left, Gdk.KEY_Right):
+                keys = [m[0] for m in MODES]
+                step = -1 if k == Gdk.KEY_Left else 1
+                self.pick(keys[(keys.index(self.mode) + step) % len(keys)])
+            else:
+                return False
+            return True
+
+        def on_click(self, _w, ev):
+            # a click outside the panel closes it (the grab sends it here)
+            w, h = self.get_size()
+            if not (0 <= ev.x <= w and 0 <= ev.y <= h) or ev.window != self.get_window():
+                x, y = ev.x_root, ev.y_root
+                wx, wy = self.get_position()
+                if not (wx <= x <= wx + w and wy <= y <= wy + h):
+                    self.destroy()
+            return False
+
+    GLib.set_prgname('ScreenShoTer')
+    _lock = ui.single_instance('screenshoter', toggle=True)  # noqa: F841
+    win = Panel()
+    ui.quit_on_sigterm(win.destroy)
+    win.show_all()
+    Gtk.main()
+
+
+def main():
+    argv = sys.argv[1:]
+    delay = 0
+    if '--delay' in argv:
+        i = argv.index('--delay')
+        try:
+            delay = max(0, int(argv[i + 1]))
+        except (IndexError, ValueError):
+            pass
+    for m, *_ in MODES:
+        if f'--{m}' in argv:
+            return capture(m, delay)
+    if '-h' in argv or '--help' in argv:
+        print(__doc__ or 'ScreenShoTer [--region|--window|--screen|--all] [--delay N]')
+        return 0
+    panel()
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

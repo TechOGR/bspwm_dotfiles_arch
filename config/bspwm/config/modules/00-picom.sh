@@ -1,5 +1,8 @@
 #!/bin/sh
 
+# The HUD window style glows with the accent color instead of a shadow
+[ "${WIN_STYLE}" = "hud" ] && SHADOW_C=${blue}
+
 sed -i "$HOME/.config/bspwm/config/picom/picom.conf" \
     -e "s/shadow-color = .*/shadow-color = \"${SHADOW_C}\"/" \
     -e "s/^corner-radius = .*/corner-radius = ${P_CORNER_R}/"

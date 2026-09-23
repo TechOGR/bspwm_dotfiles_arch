@@ -67,6 +67,15 @@ toggle_bars() {
     fi
 }
 
+# With auto-hide on (RiceEditor -> Polybar) the BarCtl daemon owns the
+# bar: -u pins it visible over the windows, -h lets it hide again.
+if ! is_eww_theme && "$HOME"/.config/bspwm/bin/BarCtl autohide 2>/dev/null; then
+    case "$1" in
+        -h|--hide)   exec "$HOME"/.config/bspwm/bin/BarCtl unpin ;;
+        -u|--unhide) exec "$HOME"/.config/bspwm/bin/BarCtl pin ;;
+    esac
+fi
+
 case "$1" in
     -h|--hide)   toggle_bars hide ;;
     -u|--unhide) toggle_bars unhide ;;

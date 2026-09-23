@@ -28,3 +28,7 @@ indigo = ${magentab}
 blue-gray = ${blackb}
 trace = ${blackb}
 EOF2
+
+# Bar look + module lists (config/polybar.json, RiceEditor -> Polybar):
+# the pill/transparency colors depend on the palette too.
+"$HOME"/.config/bspwm/bin/BarCtl render

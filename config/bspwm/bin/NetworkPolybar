@@ -1,145 +1,150 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # =============================================================
-# NetworkPolybar - wifi/ethernet-aware network status for polybar
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
 #
-# Shows a signal-strength ramp icon for Wi-Fi (outline -> 4 bars) or
-# a dedicated icon when wired, plus a live "EKG" sparkline built from
-# recent throughput samples (rx+tx bytes/sec) rendered with Unicode
-# block glyphs -- it autoscales to the recent peak, so it reads as a
-# real heart-monitor trace: flat when idle, spiking with traffic.
-# When offline it draws a dim, flat line (flatlined), instead of
-# just text, to keep the same visual language.
+# NetworkPolybar - HUD network module for polybar (tail mode)
+#   ✔ Wi-Fi signal ramp / ethernet / offline glyph
+#   ✔ Live traffic trace: a sparkline tinted by intensity
+#   ✔ Download and upload speed in KB/s and MB/s (bytes, never bits),
+#     fixed width so the bar never jiggles
+#   ✔ Right click cycles the view: full -> compact -> name
+#   ✔ Colors from the rice palette (the bar restarts on palette change)
 #
-# Dependencies: iproute2 (ip), NetworkManager (nmcli) for Wi-Fi
-# signal/SSID. Falls back gracefully if nmcli is missing.
+# Usage: NetworkPolybar            (polybar: tail = true)
+#        NetworkPolybar --cycle    (switch view, bound to click-right)
+#
+# Dependencies: iproute2, NetworkManager (nmcli, optional)
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
 # =============================================================
 
 CACHE_DIR="$HOME/.cache/$USER"
-STATE_FILE="$CACHE_DIR/network_prev"
-HISTORY_FILE="$CACHE_DIR/network_ecg"
-HISTORY_LEN=9
+MODE_FILE="$CACHE_DIR/network_view"
 mkdir -p "$CACHE_DIR"
 
-COL_OK="#9ece6a"
-COL_MID="#e0af68"
-COL_LOW="#f7768e"
-COL_LINE="#9ece6a"
-COL_FLAT="#3b3d52"
-COL_SPEED="#6D8895"
-
-BLOCKS="▁▂▃▄▅▆▇█"
-
-flatline() {
-    awk -v n="$HISTORY_LEN" 'BEGIN{for(i=0;i<n;i++) printf "▁"}'
-}
-
-# Active interface = the one the default route would use. This
-# works fully offline too since it only consults the local routing
-# table (no packet is actually sent).
-iface=$(ip -o route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
-
-# Fallback: first non-loopback interface reporting carrier/up.
-if [ -z "$iface" ]; then
-    for cand in /sys/class/net/*; do
-        name=$(basename "$cand")
-        [ "$name" = "lo" ] && continue
-        [ "$(cat "$cand/operstate" 2>/dev/null)" = "up" ] && { iface="$name"; break; }
-    done
-fi
-
-if [ -z "$iface" ]; then
-    printf "%%{F%s}\xf3\xb0\x96\xaa%%{F-} %%{F%s}%s%%{F-} %%{F%s}off%%{F-}\n" \
-        "$COL_LOW" "$COL_FLAT" "$(flatline)" "$COL_FLAT"
-    rm -f "$STATE_FILE" "$HISTORY_FILE"
+if [ "$1" = "--cycle" ]; then
+    case $(cat "$MODE_FILE" 2>/dev/null) in
+        compact) echo name > "$MODE_FILE" ;;
+        name)    echo full > "$MODE_FILE" ;;
+        *)       echo compact > "$MODE_FILE" ;;
+    esac
     exit 0
 fi
 
-is_wifi=0
-[ -d "/sys/class/net/$iface/wireless" ] && is_wifi=1
+# ── palette ────────────────────────────────────────────────────────
+read -r RICE < "$HOME/.config/bspwm/.rice" 2>/dev/null
+# shellcheck disable=SC1090
+. "$HOME/.config/bspwm/rices/${RICE:-crackone}/theme-config.bash" >/dev/null 2>&1
+C_OK=${green:-#9ece6a}
+C_MID=${yellow:-#e0af68}
+C_LOW=${red:-#f7768e}
+C_DOWN=${cyan:-#7dcfff}
+C_UP=${magenta:-#bb9af7}
+C_LINE=${blue:-#7aa2f7}
+C_DIM=${blackb:-#414868}
+C_TXT=${fg:-#c0caf5}
 
-# --- Icon: signal-ramp for Wi-Fi, dedicated glyph for Ethernet --------
-if [ "$is_wifi" -eq 1 ]; then
-    signal=""
-    if command -v nmcli >/dev/null 2>&1; then
-        signal=$(nmcli -t -f active,signal dev wifi 2>/dev/null | awk -F: '$1=="yes"{print $2; exit}')
+HIST_LEN=8
+BLOCKS=(▁ ▂ ▃ ▄ ▅ ▆ ▇ █)
+hist=()
+prev_iface='' prev_rx=0 prev_tx=0 prev_t=0
+ssid='' signal=0 slow_tick=0
+
+active_iface() {
+    local i
+    i=$(ip -o route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
+    if [ -z "$i" ]; then
+        for c in /sys/class/net/*; do
+            [ "${c##*/}" = lo ] && continue
+            [ "$(cat "$c/operstate" 2>/dev/null)" = up ] && { i=${c##*/}; break; }
+        done
     fi
-    signal=${signal:-0}
-
-    if [ "$signal" -ge 76 ]; then
-        icon="\xf3\xb0\xa4\xa8"; icon_color="$COL_OK"
-    elif [ "$signal" -ge 51 ]; then
-        icon="\xf3\xb0\xa4\xa5"; icon_color="$COL_OK"
-    elif [ "$signal" -ge 26 ]; then
-        icon="\xf3\xb0\xa4\xa2"; icon_color="$COL_MID"
-    elif [ "$signal" -ge 1 ]; then
-        icon="\xf3\xb0\xa4\x9f"; icon_color="$COL_LOW"
-    else
-        icon="\xf3\xb0\xa4\xaf"; icon_color="$COL_LOW"
-    fi
-else
-    icon="\xf3\xb0\x88\x80"
-    icon_color="$COL_OK"
-fi
-
-# --- Throughput sample (rx+tx bytes/sec) -------------------------------
-rx_now=$(cat "/sys/class/net/$iface/statistics/rx_bytes" 2>/dev/null)
-tx_now=$(cat "/sys/class/net/$iface/statistics/tx_bytes" 2>/dev/null)
-now=$(date +%s.%N)
-
-rate=0
-if [ -f "$STATE_FILE" ]; then
-    read -r prev_ts prev_iface prev_rx prev_tx < "$STATE_FILE"
-    if [ "$prev_iface" = "$iface" ] && [ -n "$rx_now" ] && [ -n "$tx_now" ]; then
-        rate=$(awk -v now="$now" -v prev="$prev_ts" -v rx="$rx_now" -v prx="$prev_rx" \
-                   -v tx="$tx_now" -v ptx="$prev_tx" 'BEGIN {
-            dt = now - prev
-            if (dt <= 0) dt = 1
-            d = ((rx - prx) + (tx - ptx)) / dt
-            if (d < 0) d = 0
-            printf "%.0f", d
-        }')
-    fi
-fi
-printf '%s %s %s %s\n' "$now" "$iface" "$rx_now" "$tx_now" > "$STATE_FILE"
-
-# --- Rolling history -> EKG-style sparkline -----------------------------
-hist=$(cat "$HISTORY_FILE" 2>/dev/null)
-hist=$(printf '%s %s' "$hist" "$rate" | awk -v n="$HISTORY_LEN" '{
-    for (i = 1; i <= NF; i++) a[i] = $i
-    start = NF - n + 1
-    if (start < 1) start = 1
-    out = ""
-    for (i = start; i <= NF; i++) out = out (out == "" ? "" : " ") a[i]
-    print out
-}')
-printf '%s\n' "$hist" > "$HISTORY_FILE"
-
-line=$(printf '%s\n' "$hist" | awk -v blocks="$BLOCKS" '
-BEGIN {
-    n = split(blocks, b, "")
+    printf '%s' "$i"
 }
-{
-    max = 1
-    for (i = 1; i <= NF; i++) if ($i > max) max = $i
-    for (i = 1; i <= NF; i++) {
-        idx = int(($i / max) * (n - 1)) + 1
-        if (idx > n) idx = n
-        if (idx < 1) idx = 1
-        printf "%s", b[idx]
-    }
-}')
 
-count=$(printf '%s\n' "$hist" | wc -w)
-pad=$((HISTORY_LEN - count))
-[ "$pad" -gt 0 ] && padding=$(awk -v n="$pad" 'BEGIN{for(i=0;i<n;i++) printf "▁"}') || padding=""
+# bytes/s -> fixed width "  0.0 KB/s" / " 12.4 MB/s"
+human() {
+    awk -v b="$1" 'BEGIN {
+        k = b / 1024
+        if (k >= 1000) printf "%5.1f MB/s", k / 1024
+        else if (k >= 100) printf "%5.0f KB/s", k
+        else printf "%5.1f KB/s", k
+    }'
+}
 
-# --- Combined rx+tx speed, right next to the trace ----------------------
-speed=$(awk -v d="$rate" 'BEGIN {
-    fmt = "%.0f B/s"
-    if (d >= 1048576) { d /= 1048576; fmt = "%.1f MB/s" }
-    else if (d >= 1024) { d /= 1024; fmt = "%.0f KB/s" }
-    printf fmt, d
-}')
+sparkline() { # uses global hist (rx+tx samples)
+    local max=1 v idx out='' col
+    for v in "${hist[@]}"; do (( v > max )) && max=$v; done
+    # an idle link should look idle, not autoscale noise to full height
+    (( max < 4096 )) && max=4096
+    for (( i = 0; i < HIST_LEN - ${#hist[@]}; i++ )); do out+="%{F$C_DIM}▁"; done
+    for v in "${hist[@]}"; do
+        idx=$(( v * 7 / max ))
+        if   (( idx >= 6 )); then col=$C_UP
+        elif (( idx >= 3 )); then col=$C_DOWN
+        elif (( idx >= 1 )); then col=$C_LINE
+        else col=$C_DIM; fi
+        out+="%{F$col}${BLOCKS[idx]}"
+    done
+    printf '%s%%{F-}' "$out"
+}
 
-printf "%%{F%s}%b%%{F-} %%{F%s}%s%s%%{F-} %%{F%s}%s%%{F-}\n" \
-    "$icon_color" "$icon" "$COL_LINE" "$padding" "$line" "$COL_SPEED" "$speed"
+while :; do
+    mode=$(cat "$MODE_FILE" 2>/dev/null)
+    iface=$(active_iface)
+
+    if [ -z "$iface" ]; then
+        hist=()
+        printf '%%{F%s}󰤮%%{F-} %%{F%s}▁▁▁▁▁▁▁▁%%{F-} %%{F%s}OFFLINE%%{F-}\n' "$C_LOW" "$C_DIM" "$C_LOW"
+        prev_iface=''
+        sleep 2
+        continue
+    fi
+
+    # ── icon (Wi-Fi details are refreshed every 5 s, nmcli is slow)
+    if [ -d "/sys/class/net/$iface/wireless" ]; then
+        if (( slow_tick % 5 == 0 )) && command -v nmcli >/dev/null 2>&1; then
+            IFS=: read -r signal ssid < <(nmcli -t -f active,signal,ssid dev wifi 2>/dev/null |
+                awk -F: '$1=="yes"{print $2":"$3; exit}')
+            signal=${signal:-0}
+        fi
+        if   (( signal >= 76 )); then icon=󰤨 icol=$C_OK
+        elif (( signal >= 51 )); then icon=󰤥 icol=$C_OK
+        elif (( signal >= 26 )); then icon=󰤢 icol=$C_MID
+        elif (( signal >= 1 ));  then icon=󰤟 icol=$C_LOW
+        else icon=󰤯 icol=$C_LOW; fi
+        name=${ssid:-$iface}
+    else
+        icon=󰈀 icol=$C_OK name=$iface
+    fi
+    slow_tick=$((slow_tick + 1))
+
+    # ── throughput
+    read -r rx < "/sys/class/net/$iface/statistics/rx_bytes"
+    read -r tx < "/sys/class/net/$iface/statistics/tx_bytes"
+    now=$(date +%s%N)
+    down=0 up=0
+    if [ "$iface" = "$prev_iface" ] && (( prev_t > 0 )); then
+        dt=$(( (now - prev_t) / 1000000 ))   # ms
+        (( dt <= 0 )) && dt=1000
+        down=$(( (rx - prev_rx) * 1000 / dt )); (( down < 0 )) && down=0
+        up=$(( (tx - prev_tx) * 1000 / dt ));   (( up < 0 )) && up=0
+    fi
+    prev_iface=$iface prev_rx=$rx prev_tx=$tx prev_t=$now
+    hist+=($((down + up)))
+    (( ${#hist[@]} > HIST_LEN )) && hist=("${hist[@]: -HIST_LEN}")
+
+    D=$(human "$down") U=$(human "$up")
+    case $mode in
+        compact)
+            printf '%%{F%s}%s%%{F-} %%{F%s}󰁅%%{F%s}%s%%{F-}\n' "$icol" "$icon" "$C_DOWN" "$C_TXT" "$D" ;;
+        name)
+            printf '%%{F%s}%s%%{F-} %%{F%s}%s%%{F-} %%{F%s}%s%%{F-}\n' \
+                "$icol" "$icon" "$C_TXT" "${name:0:16}" "$C_DIM" "$iface" ;;
+        *)
+            printf '%%{F%s}%s%%{F-} %s %%{F%s}󰁅%%{F%s}%s %%{F%s}󰁝%%{F%s}%s%%{F-}\n' \
+                "$icol" "$icon" "$(sparkline)" "$C_DOWN" "$C_TXT" "$D" "$C_UP" "$C_TXT" "$U" ;;
+    esac
+    sleep 1
+done

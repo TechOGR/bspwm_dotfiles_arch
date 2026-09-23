@@ -1,0 +1,36 @@
+{
+  "style": "capsule",
+  "position": "top",
+  "height": 30,
+  "offset_y": 8,
+  "margin_x": 5,
+  "radius": 16,
+  "opacity": 100,
+  "bg_color": "bg",
+  "accent": "blue",
+  "border": false,
+  "separators": true,
+  "autohide": false,
+  "modules": {
+    "left": [
+      "launcher",
+      "gap",
+      "cpu_wave",
+      "memory_bar",
+      "filesystem"
+    ],
+    "center": [
+      "bspwm"
+    ],
+    "right": [
+      "network",
+      "pulseaudio",
+      "date",
+      "gap",
+      "caffeine",
+      "screenshot",
+      "modules_help",
+      "power"
+    ]
+  }
+}

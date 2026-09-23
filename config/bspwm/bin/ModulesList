@@ -5,21 +5,20 @@
 # Shows every polybar module known to this rice (active or not)
 # in a rofi menu, with an icon, a short description and its
 # current status. Selecting a non-fixed module toggles it on/off
-# in modules-right and live-reloads polybar. Bound to
+# (BarCtl edits config/polybar.json and restarts polybar; the full
+# editor is RiceEditor -> Polybar). Bound to
 # `super + alt + m` in sxhkdrc, and to the "" help button in the
 # bar itself.
 # =============================================================
 
 CONFIG_DIR="$HOME/.config/bspwm"
 read -r RICE < "$CONFIG_DIR/.rice"
-CONFIG_FILE="$CONFIG_DIR/rices/$RICE/config.ini"
 THEME="$CONFIG_DIR/config/rofi-themes/ModulesList.rasi"
 WS_PREVIEW_FLAG="$CONFIG_DIR/config/.ws_preview_enabled"
 
-[ -f "$CONFIG_FILE" ] || { dunstify -u critical "ModulesList" "No se encontró config.ini del rice '$RICE'"; exit 1; }
 
 # id|icon|name|description|fixed(0/1)|kind(bar/service)
-# "bar" entries live in config.ini's modules-left/center/right. "service"
+# "bar" entries live in config/polybar.json (modules left/center/right). "service"
 # entries are background daemons started/stopped directly (nothing to
 # add/remove from the bar's module lists).
 _catalog='
@@ -56,10 +55,9 @@ power||Energía|Menú de apagado / reinicio|1|bar
 modules_help||Ayuda de módulos|Abre este mismo listado|1|bar
 '
 
+# Modules live in config/polybar.json (BarCtl renders bar.ini from it)
 get_lines() {
-    left=$(awk -F'=' '/^modules-left[[:space:]]*=/{print $2; exit}' "$CONFIG_FILE")
-    center=$(awk -F'=' '/^modules-center[[:space:]]*=/{print $2; exit}' "$CONFIG_FILE")
-    right=$(awk -F'=' '/^modules-right[[:space:]]*=/{print $2; exit}' "$CONFIG_FILE")
+    active=$("$CONFIG_DIR/bin/BarCtl" list 2>/dev/null)
 }
 
 is_active() {
@@ -68,77 +66,17 @@ is_active() {
     if [ "$kind" = "service" ]; then
         [ -f "$WS_PREVIEW_FLAG" ]
     else
-        printf '%s %s %s\n' "$left" "$center" "$right" | tr ' ' '\n' | grep -qx "$id"
-    fi
-}
-
-remove_word() {
-    awk -v tgt="$2" '
-    {
-        n = split($0, w, " ")
-        out_n = 0
-        skip_sep = 0
-        for (i = 1; i <= n; i++) {
-            if (w[i] == "") continue
-            if (w[i] == tgt) {
-                if (out_n > 0 && out[out_n] == "sep") out_n--
-                skip_sep = 1
-                continue
-            }
-            if (skip_sep && w[i] == "sep") { skip_sep = 0; continue }
-            skip_sep = 0
-            out_n++
-            out[out_n] = w[i]
-        }
-        res = ""
-        for (i = 1; i <= out_n; i++) res = res (i > 1 ? " " : "") out[i]
-        print res
-    }' <<EOF
-$1
-EOF
-}
-
-set_line() {
-    key="$1"
-    value="$2"
-    tmp=$(mktemp)
-    awk -v key="$key" -v value="$value" '
-        BEGIN { pattern = "^" key "[[:space:]]*=" }
-        $0 ~ pattern { print key " = " value; next }
-        { print }
-    ' "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
-}
-
-reload_bar() {
-    if pgrep -x polybar >/dev/null; then
-        polybar-msg cmd restart >/dev/null 2>&1
+        printf '%s\n' "$active" | grep -qx "$id"
     fi
 }
 
 toggle_module() {
     mod="$1"
-    get_lines
-    [ -f "$CONFIG_FILE.bak" ] || cp "$CONFIG_FILE" "$CONFIG_FILE.bak"
-
-    if is_active "$mod" "bar"; then
-        newleft=$(remove_word "$left" "$mod")
-        newcenter=$(remove_word "$center" "$mod")
-        newright=$(remove_word "$right" "$mod")
-        [ "$newleft" != "$left" ] && set_line "modules-left" "$newleft"
-        [ "$newcenter" != "$center" ] && set_line "modules-center" "$newcenter"
-        [ "$newright" != "$right" ] && set_line "modules-right" "$newright"
-        action="desactivado"
-    else
-        if [ -n "$right" ]; then
-            newright="$right sep $mod"
-        else
-            newright="$mod"
-        fi
-        set_line "modules-right" "$newright"
+    if [ "$("$CONFIG_DIR/bin/BarCtl" toggle "$mod")" = "on" ]; then
         action="activado"
+    else
+        action="desactivado"
     fi
-
-    reload_bar
     dunstify -i dialog-information "Módulos de Polybar" "'$mod' $action"
 }
 

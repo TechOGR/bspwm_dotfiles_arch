@@ -49,6 +49,10 @@ try:
     import riceui  # noqa: E402  (shared with Dock / AppLauncher / KeyHelp)
 except Exception:  # the editor must still open without it
     riceui = None
+try:
+    import barconf  # noqa: E402  (polybar.json <-> bar.ini, shared with BarCtl)
+except Exception:
+    barconf = None
 
 HOME = os.path.expanduser('~')
 BSPWM = os.path.join(HOME, '.config/bspwm')
@@ -488,6 +492,17 @@ button.dock-pick {{
 }}
 button.dock-pick:hover {{ border-color: @green; box-shadow: 0 0 14px alpha(@green, 0.3); }}
 button.dock-pick label {{ font-size: 8pt; }}
+
+button.style-tile {{
+    background-image: none; background-color: alpha(@black, 0.45); border: 1px solid alpha(@fg, 0.06);
+    border-radius: 12px; padding: 10px 12px; box-shadow: none;
+}}
+button.style-tile:hover {{ border-color: @accent; box-shadow: 0 0 14px alpha(@accent, 0.25); }}
+button.style-tile.active {{ border: 1px solid @cyan; box-shadow: 0 0 18px alpha(@cyan, 0.35);
+    background-color: alpha(@cyan, 0.06); }}
+.style-icon {{ font-size: 18pt; color: @accent; }}
+button.style-tile.active .style-icon {{ color: @cyan; }}
+.bar-sect {{ color: @accent2; font-weight: 800; font-size: 8pt; letter-spacing: 3px; margin: 8px 0 2px 2px; }}
 
 button.wall {{
     background: none; border: 2px solid transparent; border-radius: 10px; padding: 2px; box-shadow: none;
@@ -1048,6 +1063,7 @@ class RiceEditor(Gtk.Window):
         ('terminal', '󰆍', 'Terminal', 'KITTY · ALACRITTY · GHOSTTY · SHELL'),
         ('wallpaper', '󰸉', 'Wallpaper', 'ENGINE · GALLERY · 3D SELECTOR'),
         ('dock', '󱂬', 'Dock', 'PINNED APPS · SIZE · BEHAVIOUR'),
+        ('polybar', '󱔓', 'Polybar', 'THEMES · STYLE · MODULES · AUTO-HIDE'),
         ('notifications', '󰂚', 'Notifications', 'DUNST · PLACEMENT · STYLE · MOTION'),
         ('lockscreen', '󰌾', 'Lockscreen', 'I3LOCK-COLOR · BETTERLOCKSCREEN'),
         ('appearance', '󰉼', 'Appearance', 'GTK · ICONS · CURSOR · ROFI'),
@@ -1107,7 +1123,7 @@ class RiceEditor(Gtk.Window):
             'dashboard': self.page_dashboard, 'palette': self.page_palette,
             'windows': self.page_windows, 'compositor': self.page_compositor,
             'terminal': self.page_terminal, 'wallpaper': self.page_wallpaper,
-            'dock': self.page_dock,
+            'dock': self.page_dock, 'polybar': self.page_polybar,
             'notifications': self.page_notifications, 'lockscreen': self.page_lockscreen,
             'appearance': self.page_appearance, 'snapshots': self.page_snapshots,
             'help': self.page_help,
@@ -1214,6 +1230,8 @@ class RiceEditor(Gtk.Window):
             self.lock_prev.reload()
         if key == 'dock' and not self.loading:
             self.dock_sync()
+        if key == 'polybar' and not self.loading:
+            self.bar_sync()
 
     def on_key(self, _w, ev):
         ctrl = ev.state & Gdk.ModifierType.CONTROL_MASK
@@ -1435,7 +1453,7 @@ class RiceEditor(Gtk.Window):
         self.toast(msg)
 
     def apply_modules(self, msg, *mods, reload_picom=False):
-        run_bg(lambda: run_modules(*mods, reload_picom=reload_picom), lambda _r: self.toast(msg))
+        run_bg(lambda: run_modules(*mods, reload_picom=reload_picom), lambda _r: msg and self.toast(msg))
 
     # ══════════════════════════════════════════════════════════ PAGES
     # ─────────────────────────────────────────────────────── dashboard
@@ -1631,9 +1649,77 @@ class RiceEditor(Gtk.Window):
         self.full_reload(f'Palette {palette_title(func)} applied')
 
     # ───────────────────────────────────────────────────────── windows
+    WIN_STYLES = [
+        ('minimal', '󰖲', 'Minimal', 'No borders · rounded corners · soft shadow'),
+        ('neon', '󱐋', 'Neon', '2 px frame that glows on focus · palette colors'),
+        ('hud', '󰆧', 'HUD', '1 px sharp frame · square corners · accent glow'),
+    ]
+    WIN_PRESETS = {
+        'minimal': dict(BORDER_WIDTH=0, P_CORNER_R=10, gap=5),
+        'neon': dict(BORDER_WIDTH=2, P_CORNER_R=12, gap=10),
+        'hud': dict(BORDER_WIDTH=1, P_CORNER_R=0, gap=8),
+    }
+
+    def tiles(self, items, active, on_click, per_line=4):
+        """Row of selectable style tiles: items = (key, icon, title, desc)."""
+        flow = Gtk.FlowBox()
+        flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        flow.set_homogeneous(True)
+        flow.set_min_children_per_line(min(per_line, len(items)))
+        flow.set_max_children_per_line(per_line)
+        flow.set_column_spacing(10)
+        flow.set_row_spacing(10)
+        btns = {}
+        for key, icon, title, desc in items:
+            b = Gtk.Button()
+            b.get_style_context().add_class('style-tile')
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            ic = Gtk.Label(label=icon, xalign=0)
+            ic.get_style_context().add_class('style-icon')
+            box.pack_start(ic, False, False, 0)
+            t = Gtk.Label(label=title, xalign=0)
+            t.get_style_context().add_class('row-title')
+            box.pack_start(t, False, False, 0)
+            d = Gtk.Label(label=desc, xalign=0)
+            d.set_line_wrap(True)
+            d.set_max_width_chars(24)
+            d.get_style_context().add_class('row-desc')
+            box.pack_start(d, False, False, 0)
+            b.add(box)
+            b.connect('clicked', lambda *_, k=key: on_click(k))
+            flow.add(b)
+            btns[key] = b
+        self.mark_tiles(btns, active)
+        return flow, btns
+
+    @staticmethod
+    def mark_tiles(btns, active):
+        for k, b in btns.items():
+            (b.get_style_context().add_class if k == active else b.get_style_context().remove_class)('active')
+
+    def set_win_style(self, key, quiet=False):
+        pre = self.WIN_PRESETS[key]
+        self.cfg.set('WIN_STYLE', key)
+        self.cfg.set('BORDER_WIDTH', pre['BORDER_WIDTH'])
+        self.cfg.set('P_CORNER_R', pre['P_CORNER_R'])
+        bspwmrc_set('window_gap', pre['gap'])
+        bspc('config', 'window_gap', pre['gap'])
+        if hasattr(self, 'win_style_btns'):
+            self.mark_tiles(self.win_style_btns, key)
+        # 01-bspwm.sh picks the border colors from the palette for WIN_STYLE,
+        # 00-picom.sh the corners / glow
+        self.apply_modules('' if quiet else f'Window style → {key}', '01-bspwm.sh', '00-picom.sh',
+                           reload_picom=True)
+
     def page_windows(self):
         p = self.page()
         cfg = self.cfg
+
+        c = self.card('󱂬', 'Window style', 'borders follow the palette · manual colors below = custom')
+        flow, self.win_style_btns = self.tiles(self.WIN_STYLES, cfg.raw('WIN_STYLE', 'custom'),
+                                               self.set_win_style, per_line=3)
+        c.pack_start(flow, False, False, 4)
+        p.pack_start(c, False, False, 0)
 
         c = self.card('󰢡', 'Borders')
         sc, lab = self.scale(0, 10, 1, cfg.raw('BORDER_WIDTH', '0'), 0, self.set_border_width,
@@ -1687,11 +1773,15 @@ class RiceEditor(Gtk.Window):
         return p
 
     def set_border_width(self, v):
+        self.cfg.set('WIN_STYLE', 'custom')
+        self.mark_tiles(self.win_style_btns, 'custom')
         self.cfg.set('BORDER_WIDTH', v)
         bspc('config', 'border_width', v)
         self.toast(f'Border width → {v}px')
 
     def set_border_color(self, var, key, h):
+        self.cfg.set('WIN_STYLE', 'custom')
+        self.mark_tiles(self.win_style_btns, 'custom')
         self.cfg.set(var, h)
         bspc('config', key, h)
         self.toast(f'{var} → {h}')
@@ -2255,6 +2345,257 @@ class RiceEditor(Gtk.Window):
         self.dock_fill_list()
         self.dock_fill_picker()
 
+    # ─────────────────────────────────────────────────────────── polybar
+    BAR_THEMES = [
+        ('classic', '󰕮', 'Classic', 'Capsule bar · borderless windows',
+         dict(style='capsule', opacity=100, border=False), 'minimal'),
+        ('neonhud', '󱐋', 'Neon HUD', 'Angled cyber plates · glowing window frames',
+         dict(style='cyber', opacity=90, separators=True), 'neon'),
+        ('islands', '󰆧', 'Islands', 'Floating neon pills · glowing frames',
+         dict(style='islands', opacity=92, separators=True), 'neon'),
+        ('mainframe', '󰍹', 'Mainframe', 'Edge to edge strip · sharp HUD windows',
+         dict(style='strip', opacity=96), 'hud'),
+    ]
+    SECTS = ('left', 'center', 'right')
+
+    def bar_apply(self, msg=None):
+        def go():
+            run_bg(lambda: subprocess.run([os.path.join(BIN, 'BarCtl'), 'apply'], timeout=30,
+                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
+                   lambda _r: msg and self.toast(msg))
+        self.debounce('bar-apply', 450, go)
+
+    def bar_set(self, key, value, title):
+        conf = barconf.load()
+        conf[key] = value
+        barconf.save(conf)
+        if key == 'style':
+            self.mark_tiles(self.bar_style_btns, value)
+        self.bar_apply(f'{title} → {value}')
+
+    def bar_theme(self, key):
+        _k, _i, title, _d, bar, win = next(t for t in self.BAR_THEMES if t[0] == key)
+        conf = barconf.load()
+        conf.update(bar)
+        barconf.save(conf)
+        self.mark_tiles(self.bar_theme_btns, key)
+        self.set_win_style(win, quiet=True)
+        self.bar_sync()
+        self.bar_apply(f'Theme {title} applied')
+
+    def page_polybar(self):
+        p = self.page()
+        if barconf is None:
+            c = self.card('󱔓', 'Polybar')
+            c.pack_start(Gtk.Label(label='~/.config/bspwm/lib/barconf.py is missing', xalign=0), False, False, 0)
+            p.pack_start(c, False, False, 0)
+            return p
+        conf = barconf.load()
+        self.bar_w = {}
+
+        c = self.card('󰏘', 'Themes', 'bar + windows in one click · colors follow the palette')
+        flow, self.bar_theme_btns = self.tiles([t[:4] for t in self.BAR_THEMES], '', self.bar_theme)
+        c.pack_start(flow, False, False, 4)
+        p.pack_start(c, False, False, 0)
+
+        c = self.card('󱔓', 'Bar style')
+        flow, self.bar_style_btns = self.tiles(
+            [(k, {'capsule': '󰗇', 'islands': '󰆧', 'cyber': '󱐋', 'strip': '󰍹'}[k], t, d)
+             for k, t, d in barconf.STYLES], conf['style'],
+            lambda k: self.bar_set('style', k, 'Bar style'))
+        c.pack_start(flow, False, False, 4)
+        p.pack_start(c, False, False, 0)
+
+        c = self.card('󰏘', 'Look', 'applied live')
+        self.bar_w['position'] = self.combo([('top', 'Top'), ('bottom', 'Bottom')], conf['position'],
+                                            lambda v: self.bar_set('position', v, 'Position'))
+        c.pack_start(self.row('Position', 'Edge of the screen (windows make room for it)',
+                              self.bar_w['position']), False, False, 0)
+        for key, title, desc, lo, hi, fmt in (
+                ('height', 'Height', 'Bar thickness', 22, 44, lambda v: f'{int(v)} px'),
+                ('offset_y', 'Distance from the edge', 'Floating gap (not used by Strip)', 0, 24,
+                 lambda v: f'{int(v)} px'),
+                ('margin_x', 'Side margins', 'Space at the left and right ends', 0, 60, lambda v: f'{int(v)} px'),
+                ('radius', 'Corner radius', 'Capsule style roundness', 0, 22, lambda v: f'{int(v)} px'),
+                ('opacity', 'Opacity', 'Background transparency (needs picom)', 30, 100, lambda v: f'{int(v)} %')):
+            sc, lab = self.scale(lo, hi, 1, conf[key], 0,
+                                 lambda v, k=key, t=title: self.bar_set(k, int(v), t), fmt=fmt, delay=350)
+            sc.set_size_request(220, -1)
+            self.bar_w[key] = sc
+            c.pack_start(self.row(title, desc, sc, lab), False, False, 0)
+        colors = [(k, k) for k in ('bg', 'black', 'accent_color', 'blackb')]
+        self.bar_w['bg_color'] = self.combo(colors, conf['bg_color'],
+                                            lambda v: self.bar_set('bg_color', v, 'Background'))
+        c.pack_start(self.row('Background color', 'Palette color of the bar / pills', self.bar_w['bg_color']),
+                     False, False, 0)
+        accents = [(k, k) for k in ('blue', 'cyan', 'magenta', 'green', 'yellow', 'red')]
+        self.bar_w['accent'] = self.combo(accents, conf['accent'], lambda v: self.bar_set('accent', v, 'Accent'))
+        c.pack_start(self.row('Accent color', 'Border and neon line (palette color)', self.bar_w['accent']),
+                     False, False, 0)
+        for key, title, desc in (('border', 'Border', 'Thin accent frame around the Capsule bar'),
+                                 ('separators', 'Separators', 'Thin lines between modules')):
+            self.bar_w[key] = self.switch(conf[key], lambda v, k=key, t=title: self.bar_set(k, v, t))
+            c.pack_start(self.row(title, desc, self.bar_w[key]), False, False, 0)
+        p.pack_start(c, False, False, 0)
+
+        c = self.card('󰘸', 'Behaviour')
+        self.bar_w['autohide'] = self.switch(conf['autohide'], lambda v: self.bar_set('autohide', v, 'Auto-hide'))
+        c.pack_start(self.row('Auto-hide', 'Hidden until the pointer touches its screen edge; then it slides in '
+                              'over the windows, which use the whole screen', self.bar_w['autohide']),
+                     False, False, 0)
+        c.pack_start(self.row('Keyboard', 'super + alt + u shows the bar (and keeps it pinned when auto-hide is on) · '
+                              'super + alt + h hides it'), False, False, 0)
+        c.pack_start(self.row('Bar process', 'Regenerate bar.ini and restart polybar',
+                              self.button('󰑓  Restart bar', 'neon', lambda *_: self.bar_apply('Bar restarted'))),
+                     False, False, 0)
+        p.pack_start(c, False, False, 0)
+
+        c = self.card('󰕰', 'Modules', 'order = order on the bar · "Gap" splits a group')
+        self.bar_mods = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        c.pack_start(self.bar_mods, False, False, 4)
+        p.pack_start(c, False, False, 0)
+
+        c = self.card('󰐕', 'Add a module', 'click to add it')
+        self.bar_add_to = self.combo([(s, s.title()) for s in self.SECTS], 'right', lambda _v: None)
+        c.pack_start(self.row('Add to', 'Group that receives the new module', self.bar_add_to), False, False, 0)
+        self.bar_flow = Gtk.FlowBox()
+        self.bar_flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.bar_flow.set_homogeneous(True)
+        self.bar_flow.set_min_children_per_line(4)
+        self.bar_flow.set_max_children_per_line(6)
+        self.bar_flow.set_row_spacing(8)
+        self.bar_flow.set_column_spacing(8)
+        c.pack_start(self.bar_flow, False, False, 4)
+        p.pack_start(c, False, False, 0)
+        self.bar_fill()
+        return p
+
+    def bar_sync(self):
+        """Show what polybar.json holds now (ModulesList edits it too)."""
+        if barconf is None or not getattr(self, 'bar_w', None):
+            return
+        conf = barconf.load()
+        was, self.loading = self.loading, True
+        try:
+            for key, w in self.bar_w.items():
+                if isinstance(w, Gtk.Switch):
+                    w.set_active(bool(conf[key]))
+                elif isinstance(w, Gtk.ComboBoxText):
+                    w.set_active_id(str(conf[key]))
+                else:
+                    w.set_value(float(conf[key]))
+        finally:
+            self.loading = was
+        self.mark_tiles(self.bar_style_btns, conf['style'])
+        self.bar_fill()
+
+    def bar_fill(self):
+        conf = barconf.load()
+        cat = {m[0]: m for m in barconf.CATALOG}
+        for ch in self.bar_mods.get_children():
+            ch.destroy()
+        for sect in self.SECTS:
+            head = Gtk.Label(label=f'// {sect.upper()}', xalign=0)
+            head.get_style_context().add_class('bar-sect')
+            self.bar_mods.pack_start(head, False, False, 0)
+            mods = conf['modules'][sect]
+            if not mods:
+                lb = Gtk.Label(label='empty', xalign=0)
+                lb.get_style_context().add_class('dim')
+                self.bar_mods.pack_start(lb, False, False, 2)
+            for i, mod in enumerate(mods):
+                _id, icon, name, desc = cat.get(mod, (mod, '󰘦', mod, 'defined in modules.ini'))
+                r = Gtk.Box(spacing=12)
+                r.get_style_context().add_class('dock-app')
+                idx = Gtk.Label(label=f'{i + 1:02d}')
+                idx.get_style_context().add_class('dock-idx')
+                r.pack_start(idx, False, False, 0)
+                ic = Gtk.Label(label=icon)
+                ic.get_style_context().add_class('style-icon')
+                ic.set_size_request(34, -1)
+                r.pack_start(ic, False, False, 0)
+                texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+                texts.set_valign(Gtk.Align.CENTER)
+                t = Gtk.Label(label=name, xalign=0)
+                t.get_style_context().add_class('row-title')
+                texts.pack_start(t, False, False, 0)
+                d = Gtk.Label(label=desc, xalign=0)
+                d.get_style_context().add_class('row-desc')
+                texts.pack_start(d, False, False, 0)
+                r.pack_start(texts, True, True, 0)
+                nxt = self.SECTS[(self.SECTS.index(sect) + 1) % 3]
+                for bicon, tip, cls, cb, ok in (
+                        ('󰅁', 'Move left', 'icon-btn', lambda *_, s=sect, k=i: self.bar_move(s, k, -1), i > 0),
+                        ('󰅂', 'Move right', 'icon-btn', lambda *_, s=sect, k=i: self.bar_move(s, k, 1),
+                         i < len(mods) - 1),
+                        ('󰁔', f'Send to {nxt}', 'icon-btn', lambda *_, s=sect, k=i: self.bar_send(s, k), True),
+                        ('󰅖', 'Remove', 'remove', lambda *_, s=sect, k=i: self.bar_remove(s, k),
+                         mod not in barconf.FIXED)):
+                    b = Gtk.Button(label=bicon)
+                    b.get_style_context().add_class('icon-btn')
+                    if cls != 'icon-btn':
+                        b.get_style_context().add_class(cls)
+                    b.set_tooltip_text(tip)
+                    b.set_sensitive(ok)
+                    b.set_valign(Gtk.Align.CENTER)
+                    b.connect('clicked', cb)
+                    r.pack_start(b, False, False, 0)
+                self.bar_mods.pack_start(r, False, False, 0)
+        self.bar_mods.show_all()
+
+        for ch in self.bar_flow.get_children():
+            ch.destroy()
+        active = set(barconf.active_modules(conf))
+        for mod, icon, name, desc in barconf.CATALOG:
+            if mod in active:
+                continue
+            b = Gtk.Button()
+            b.get_style_context().add_class('dock-pick')
+            b.set_tooltip_text(desc)
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            ic = Gtk.Label(label=icon)
+            ic.get_style_context().add_class('style-icon')
+            box.pack_start(ic, False, False, 0)
+            box.pack_start(Gtk.Label(label=name), False, False, 0)
+            b.add(box)
+            b.connect('clicked', lambda *_, m=mod, n=name: self.bar_add(m, n))
+            self.bar_flow.add(b)
+        self.bar_flow.show_all()
+
+    def bar_edit(self, fn, msg):
+        conf = barconf.load()
+        fn(conf['modules'])
+        barconf.save(conf)
+        self.bar_fill()
+        self.bar_apply(msg)
+
+    def bar_move(self, sect, i, d):
+        def f(m):
+            lst = m[sect]
+            j = i + d
+            if 0 <= j < len(lst):
+                lst[i], lst[j] = lst[j], lst[i]
+        self.bar_edit(f, 'Module order updated')
+
+    def bar_send(self, sect, i):
+        nxt = self.SECTS[(self.SECTS.index(sect) + 1) % 3]
+
+        def f(m):
+            m[nxt].append(m[sect].pop(i))
+        self.bar_edit(f, f'Module moved to {nxt}')
+
+    def bar_remove(self, sect, i):
+        self.bar_edit(lambda m: m[sect].pop(i), 'Module removed')
+
+    def bar_add(self, mod, name):
+        sect = self.bar_add_to.get_active_id() or 'right'
+
+        def f(m):
+            lst = m[sect]
+            tail = next((k for k, x in enumerate(lst) if x in ('modules_help', 'power')), len(lst))
+            lst.insert(tail if sect == 'right' else len(lst), mod)
+        self.bar_edit(f, f'{name} added to {sect}')
+
     def page_notifications(self):
         p = self.page()
         cfg = self.cfg
@@ -2467,11 +2808,12 @@ class RiceEditor(Gtk.Window):
     # ─────────────────────────────────────────────────────── snapshots
     SNAP_FILES = [('theme-config.bash', THEME_CFG), ('picom.conf', PICOM_CONF),
                   ('picom-rules.conf', PICOM_RULES), ('bspwmrc', BSPWMRC), ('kitty.conf', KITTY_CONF),
-                  ('dock.json', os.path.join(BSPWM, 'config/dock.json'))]
+                  ('dock.json', os.path.join(BSPWM, 'config/dock.json')),
+                  ('polybar.json', os.path.join(BSPWM, 'config/polybar.json'))]
 
     def page_snapshots(self):
         p = self.page()
-        c = self.card('󰁯', 'Save state', 'theme-config · picom · bspwmrc · kitty · dock')
+        c = self.card('󰁯', 'Save state', 'theme-config · picom · bspwmrc · kitty · dock · bar')
         self.snap_entry = Gtk.Entry()
         self.snap_entry.set_placeholder_text('snapshot name (optional)')
         self.snap_entry.set_width_chars(30)

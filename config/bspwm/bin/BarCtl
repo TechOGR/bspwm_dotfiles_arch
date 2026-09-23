@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# BarCtl - polybar control for the rice
+#   ✔ render   : config/polybar.json + palette -> rices/<rice>/bar.ini
+#   ✔ apply    : render, fix bspwm paddings, restart the bar,
+#                start/stop the auto-hide daemon
+#   ✔ toggle M : add / remove a module (ModulesList, RiceEditor)
+#   ✔ list     : active modules, one per line
+#   ✔ daemon   : auto-hide. The bar slides away and comes back, over
+#                the windows, when the pointer touches its screen edge.
+#                super + alt + u pins it visible, super + alt + h
+#                lets it hide again (see HideBar).
+#
+# Settings are edited from RiceEditor -> Polybar.
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+import os
+import sys
+import time
+import fcntl
+import signal
+import subprocess
+
+sys.path.insert(0, os.path.expanduser('~/.config/bspwm/lib'))
+import barconf as bc  # noqa: E402
+
+CACHE = os.path.join(bc.HOME, '.cache', os.environ.get('USER', 'user'))
+PIN = os.path.join(CACHE, '.bar_pinned')
+LOCK = os.path.join(CACHE, '.barctl-daemon.lock')
+os.makedirs(CACHE, exist_ok=True)
+
+
+def quiet(cmd, **kw):
+    return subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kw)
+
+
+def bar_running():
+    return quiet(['pgrep', '-x', 'polybar']).returncode == 0
+
+
+def restart_bar():
+    if bar_running():
+        quiet(['polybar-msg', 'cmd', 'restart'])
+    else:
+        rice = bc.rice()
+        env = dict(os.environ, RICE=rice)
+        subprocess.Popen(['bash', '-c', f'. "{bc.rice_dir()}/Bar.bash"'], env=env, start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def apply_paddings(conf, autohide=None):
+    top, bottom = bc.paddings(conf)
+    bc.set_theme_var('TOP_PADDING', top)
+    bc.set_theme_var('BOTTOM_PADDING', bottom)
+    if autohide if autohide is not None else conf['autohide']:
+        edge = min(top, bottom)
+        top, bottom = edge, edge
+    quiet(['bspc', 'config', 'top_padding', str(top)])
+    # the dock adds its own reserve on top of BOTTOM_PADDING by itself
+    if quiet(['pgrep', '-f', r'^python3 .*/bin/Dock$']).returncode != 0:
+        quiet(['bspc', 'config', 'bottom_padding', str(bottom)])
+
+
+def daemon_pid():
+    try:
+        with open(LOCK) as f:
+            pid = int(f.read().strip() or 0)
+        os.kill(pid, 0)
+        return pid
+    except (OSError, ValueError):
+        return None
+
+
+def apply():
+    conf = bc.load()
+    bc.render(conf)
+    apply_paddings(conf)
+    restart_bar()
+    pid = daemon_pid()
+    if conf['autohide'] and not pid:
+        subprocess.Popen([os.path.abspath(__file__), 'daemon'], start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    elif not conf['autohide'] and pid:
+        os.kill(pid, signal.SIGTERM)
+
+
+# ───────────────────────────────────────────────────────── auto-hide
+def daemon():
+    fd = open(LOCK, 'a+')
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return
+    fd.seek(0)
+    fd.truncate()
+    fd.write(str(os.getpid()))
+    fd.flush()
+
+    import gi
+    gi.require_version('Gdk', '3.0')
+    from gi.repository import Gdk, GLib
+    Gdk.init([])
+    display = Gdk.Display.get_default()
+    pointer = display.get_default_seat().get_pointer()
+
+    st = {'conf': bc.load(), 'mtime': 0, 'shown': None, 'near': 0.0, 'slow': 0}
+
+    def set_shown(v, force=False):
+        if st['shown'] == v and not force:
+            return
+        st['shown'] = v
+        quiet(['polybar-msg', 'cmd', 'show' if v else 'hide'])
+        if v:
+            # override-redirect: raise it over whatever got mapped since
+            wins = subprocess.run(['xdotool', 'search', '--class', '^Polybar$'],
+                                  capture_output=True, text=True).stdout.split()
+            for w in wins:
+                quiet(['xdotool', 'windowraise', w])
+
+    def finish(*_):
+        st['shown'] = None
+        quiet(['polybar-msg', 'cmd', 'show'])
+        apply_paddings(bc.load(), autohide=False)
+        loop.quit()
+        return False
+
+    def slow_checks():
+        try:
+            m = os.path.getmtime(bc.CONF)
+        except OSError:
+            m = 0
+        if m != st['mtime']:
+            st['mtime'] = m
+            st['conf'] = bc.load()
+            if not st['conf']['autohide']:
+                return finish()
+        # a (re)started bar comes back visible: re-send the state every 2 s,
+        # polybar-msg is a no-op when nothing changed
+        if st['shown'] is not None:
+            set_shown(st['shown'], force=True)
+        top, bottom = bc.paddings(st['conf'])
+        edge = min(top, bottom)
+        side = 'bottom_padding' if st['conf']['position'] == 'bottom' else 'top_padding'
+        cur = subprocess.run(['bspc', 'config', side], capture_output=True, text=True).stdout.strip()
+        if cur and cur != str(edge) and side == 'top_padding':
+            quiet(['bspc', 'config', side, str(edge)])
+        return True
+
+    def tick():
+        conf = st['conf']
+        st['slow'] += 1
+        if st['slow'] % 16 == 1 and slow_checks() is False:
+            return False
+        _, px, py = pointer.get_position()[0:3]
+        mon = display.get_monitor_at_point(px, py).get_geometry()
+        reach = bc.reserve(conf) + 12
+        if conf['position'] == 'bottom':
+            at_edge = py >= mon.y + mon.height - 2
+            zone = py >= mon.y + mon.height - reach
+        else:
+            at_edge = py <= mon.y + 1
+            zone = py <= mon.y + reach
+        now = time.monotonic()
+        want = os.path.exists(PIN) or at_edge or (st['shown'] and zone)
+        if want:
+            st['near'] = now
+            set_shown(True)
+        elif now - st['near'] > 0.7 and st['shown'] is not False:
+            set_shown(False)
+        return True
+
+    loop = GLib.MainLoop()
+    GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGTERM, finish)
+    GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGINT, finish)
+    GLib.timeout_add(120, tick)
+    loop.run()
+
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) > 1 else ''
+    if cmd == 'render':
+        bc.render()
+    elif cmd == 'apply':
+        apply()
+    elif cmd == 'toggle' and len(sys.argv) > 2:
+        conf = bc.load()
+        on = bc.toggle(conf, sys.argv[2])
+        bc.save(conf)
+        apply()
+        print('on' if on else 'off')
+    elif cmd == 'list':
+        print('\n'.join(bc.active_modules(bc.load())))
+    elif cmd == 'daemon':
+        if bc.load()['autohide']:
+            daemon()
+    elif cmd == 'pin':
+        open(PIN, 'w').close()
+    elif cmd == 'unpin':
+        try:
+            os.remove(PIN)
+        except OSError:
+            pass
+    elif cmd == 'autohide':
+        return 0 if bc.load()['autohide'] else 1
+    else:
+        print(__doc__ or 'BarCtl render|apply|toggle <module>|list|daemon|pin|unpin|autohide')
+        return 2
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
