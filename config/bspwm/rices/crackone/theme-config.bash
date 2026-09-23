@@ -21,7 +21,7 @@ cargar_tokyo_night
 
 # Bspwm options
 BORDER_WIDTH="0"		# Bspwm border
-TOP_PADDING="50"
+TOP_PADDING="30"
 BOTTOM_PADDING="1"
 LEFT_PADDING="1"
 RIGHT_PADDING="1"
