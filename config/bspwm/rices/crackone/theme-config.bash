@@ -85,7 +85,7 @@ sl_verify="${green}"
 # Gtk theme
 gtk_theme="$gtk_themeb"
 gtk_icons="TokyoNight-SE"
-gtk_cursor="volantes_cursors"
+gtk_cursor="Bibata-Modern-Classic"
 geany_theme="z0mbi3-TokyoNight"
 
 # Wallpaper engine

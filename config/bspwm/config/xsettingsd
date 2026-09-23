@@ -1,6 +1,6 @@
 Net/ThemeName "TokyoNight-zk"
 Net/IconThemeName "TokyoNight-SE"
-Gtk/CursorThemeName "volantes_cursors"
+Gtk/CursorThemeName "Bibata-Modern-Classic"
 Gtk/DecorationLayout ":"
 Xft/Hinting 1
 Xft/HintStyle "hintfull"

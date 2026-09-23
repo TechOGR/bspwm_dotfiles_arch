@@ -505,6 +505,20 @@ install_packages() {
             FAILED_OPTIONAL+=("fzf-tab")
         fi
     fi
+
+    # Bibata-Modern-Classic is the cursor theme set in gtk-3.0/gtk-4.0,
+    # xsettingsd, ~/.icons/default and bspwmrc. It is only packaged in AUR.
+    if is_pkg_installed bibata-cursor-theme || is_pkg_installed bibata-cursor-theme-bin; then
+        success "Bibata cursor theme ya está instalado."
+    else
+        info "Instalando Bibata cursor theme desde AUR..."
+        if run_with_live_progress "AUR → bibata-cursor-theme-bin" "$AUR_HELPER" -S --needed --noconfirm bibata-cursor-theme-bin; then
+            success "Bibata cursor theme instalado correctamente."
+        else
+            warn "No se pudo instalar bibata-cursor-theme-bin; el cursor usará el tema por defecto."
+            FAILED_OPTIONAL+=("bibata-cursor-theme-bin")
+        fi
+    fi
 }
 
 install_lockscreen() {
