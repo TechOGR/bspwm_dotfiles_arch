@@ -1,0 +1,806 @@
+#!/usr/bin/env python3
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# WallSelect - 3D coverflow wallpaper selector
+# Features:
+#   ✔ Real perspective 3D carousel (cards rotate on the Y axis)
+#   ✔ Spring-physics transitions, mirror reflections, neon HUD frame
+#   ✔ Blurred live backdrop of the focused wallpaper (cross-faded)
+#   ✔ Type-to-filter, mouse wheel, click, keyboard navigation
+#   ✔ Cached 16:9 thumbnails, regenerated only when a wall changes
+#   ✔ Falls back to the rofi selector (WallSelectRofi) if GTK is missing
+#
+# Keys:  ←/→ h/l  navigate   Enter  apply   Esc/q  quit
+#        Home/End  first/last   Ctrl+R  random   type  filter
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+import os
+import sys
+import math
+import time
+import random
+import hashlib
+import subprocess
+from concurrent.futures import ThreadPoolExecutor
+
+try:
+    import gi
+    gi.require_version('Gtk', '3.0')
+    gi.require_version('PangoCairo', '1.0')
+    from gi.repository import Gtk, Gdk, GdkPixbuf, GLib, Pango, PangoCairo
+    import cairo
+except (ImportError, ValueError):
+    os.execvp('WallSelectRofi', ['WallSelectRofi'])
+
+HOME = os.path.expanduser('~')
+BSPWM = os.path.join(HOME, '.config/bspwm')
+EXTS = ('.jpg', '.jpeg', '.png', '.webp')
+THUMB_W, THUMB_H = 640, 360
+FONT = 'JetBrainsMono Nerd Font'
+
+
+def read_rice():
+    try:
+        with open(os.path.join(BSPWM, '.rice')) as f:
+            return f.read().strip()
+    except OSError:
+        return 'crackone'
+
+
+RICE = read_rice()
+WALL_DIR = os.path.join(BSPWM, 'rices', RICE, 'walls')
+THEME_CFG = os.path.join(BSPWM, 'rices', RICE, 'theme-config.bash')
+CACHE_DIR = os.path.join(HOME, '.cache', os.environ.get('USER', 'user'), RICE, 'wallselect3d')
+
+
+def hex_rgb(h, fallback=(0.48, 0.64, 0.97)):
+    h = (h or '').lstrip('#')
+    if len(h) < 6:
+        return fallback
+    try:
+        return tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    except ValueError:
+        return fallback
+
+
+def load_palette():
+    """Ask bash for the colors of the active palette of the rice."""
+    names = ['bg', 'fg', 'blue', 'magenta', 'cyan', 'red', 'green', 'blackb']
+    script = '. "$1" >/dev/null 2>&1; printf "%s\\n" ' + ' '.join(f'"${n}"' for n in names)
+    try:
+        out = subprocess.run(['bash', '-c', script, '_', THEME_CFG], capture_output=True,
+                             text=True, timeout=3).stdout.splitlines()
+    except Exception:
+        out = []
+    defaults = ['#1a1b26', '#c0caf5', '#7aa2f7', '#bb9af7', '#7dcfff', '#f7768e', '#9ece6a', '#414868']
+    out += [''] * (len(names) - len(out))
+    return {n: hex_rgb(v or d) for n, v, d in zip(names, out, defaults)}
+
+
+def current_wall():
+    link = os.path.join(HOME, '.cache', 'current_wall')
+    path = os.path.realpath(link) if os.path.islink(link) else ''
+    return path if os.path.isfile(path) else ''
+
+
+def pretty_name(filename):
+    name = os.path.splitext(filename)[0]
+    for junk in ('-4k-wallpaper-uhdpaper.com', '-wallpaper-uhdpaper.com'):
+        name = name.split(junk)[0]
+    name = name.replace('_', ' ').replace('-', ' ').strip()
+    return name.upper() if name else filename
+
+
+def ease_out_cubic(t):
+    return 1 - (1 - t) ** 3
+
+
+class Wall:
+    __slots__ = ('path', 'name', 'title', 'thumb', 'surface', 'backdrop', 'ready')
+
+    def __init__(self, path):
+        self.path = path
+        self.name = os.path.basename(path)
+        self.title = pretty_name(self.name)
+        self.thumb = os.path.join(CACHE_DIR, hashlib.md5(path.encode()).hexdigest() + '.jpg')
+        self.surface = None
+        self.backdrop = None
+        self.ready = False
+
+
+class WallSelect(Gtk.Window):
+    ROT = math.radians(58)        # rotation of the side cards
+    FOCAL = 1400.0                # camera focal distance (px)
+
+    def __init__(self):
+        super().__init__(type=Gtk.WindowType.POPUP)
+        self.set_title('WallSelect')
+        self.set_app_paintable(True)
+        screen = self.get_screen()
+        visual = screen.get_rgba_visual()
+        if visual and screen.is_composited():
+            self.set_visual(visual)
+
+        display = Gdk.Display.get_default()
+        seat = display.get_default_seat()
+        _, px, py = seat.get_pointer().get_position()[0:3]
+        mon = display.get_monitor_at_point(px, py) or display.get_primary_monitor() or display.get_monitor(0)
+        geo = mon.get_geometry()
+        self.move(geo.x, geo.y)
+        self.set_default_size(geo.width, geo.height)
+        self.W, self.H = geo.width, geo.height
+
+        self.pal = load_palette()
+        self.accent = self.pal['blue']
+        self.accent2 = self.pal['magenta']
+
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        self.all_walls = self.scan()
+        self.walls = list(self.all_walls)
+        self.filter_text = ''
+
+        cur = current_wall()
+        self.index = next((i for i, w in enumerate(self.walls) if w.path == cur), 0)
+        self.current_path = cur
+        self.pos = self.index - 4.0     # cards fly in from the left
+        self.vel = 0.0
+        self.t0 = time.monotonic()
+        self.alpha = 0.0
+        self.leaving = None             # (start_time, apply?)
+        self.finished = False
+        self.bg_prev = None
+        self.bg_cur = None
+        self.bg_fade_t = 0.0
+        self.hitboxes = []
+        self.last_frame = time.monotonic()
+        self.last_draw = 0.0
+        self.flash = 0.0
+        self.frame = None
+        self.layers = {}
+
+        self.add_events(Gdk.EventMask.SCROLL_MASK | Gdk.EventMask.SMOOTH_SCROLL_MASK |
+                        Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.KEY_PRESS_MASK)
+        self.connect('draw', self.on_draw)
+        self.connect('key-press-event', self.on_key)
+        self.connect('scroll-event', self.on_scroll)
+        self.connect('button-press-event', self.on_click)
+        self.connect('map-event', self.on_map)
+        self.connect('destroy', Gtk.main_quit)
+        self.add_tick_callback(self.on_tick)
+
+        self.pool = ThreadPoolExecutor(max_workers=max(2, min(4, (os.cpu_count() or 2) - 1)))
+        self.load_thumbs()
+        self.cleanup_orphans()
+
+    # ---------------------------------------------------------------- data
+    def scan(self):
+        try:
+            files = sorted(f for f in os.listdir(WALL_DIR) if f.lower().endswith(EXTS))
+        except OSError:
+            files = []
+        return [Wall(os.path.join(WALL_DIR, f)) for f in files]
+
+    def cleanup_orphans(self):
+        keep = {os.path.basename(w.thumb) for w in self.all_walls}
+        for f in os.listdir(CACHE_DIR):
+            if f not in keep and not f.startswith("."):
+                try:
+                    os.remove(os.path.join(CACHE_DIR, f))
+                except OSError:
+                    pass
+
+    def load_thumbs(self):
+        # Focused card first so the screen fills from the center outwards
+        order = sorted(range(len(self.walls)), key=lambda i: abs(i - self.index))
+        for i in order:
+            self.pool.submit(self.make_thumb, self.walls[i])
+
+    def make_thumb(self, wall):
+        try:
+            fresh = os.path.getmtime(wall.thumb) >= os.path.getmtime(wall.path)
+        except OSError:
+            fresh = False
+        if not fresh:
+            subprocess.run(['magick', '-define', f'jpeg:size={THUMB_W * 2}x{THUMB_H * 2}',
+                            wall.path + '[0]', '-strip', '-thumbnail',
+                            f'{THUMB_W}x{THUMB_H}^', '-gravity', 'center', '-extent',
+                            f'{THUMB_W}x{THUMB_H}', '-quality', '88', wall.thumb],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            pix = GdkPixbuf.Pixbuf.new_from_file(wall.thumb)
+            small = pix.scale_simple(24, 14, GdkPixbuf.InterpType.BILINEAR)
+            blur = small.scale_simple(384, 216, GdkPixbuf.InterpType.BILINEAR)
+        except GLib.Error:
+            return
+        # Default (not idle) priority: idle sources starve while animating
+        GLib.idle_add(self.thumb_ready, wall, pix, blur, priority=GLib.PRIORITY_DEFAULT)
+
+    def thumb_ready(self, wall, pix, blur):
+        wall.surface = Gdk.cairo_surface_create_from_pixbuf(pix, 1, None)
+        wall.backdrop = Gdk.cairo_surface_create_from_pixbuf(blur, 1, None)
+        wall.ready = True
+        if self.walls and wall is self.walls[self.index] and self.bg_cur is None:
+            self.bg_cur = wall.backdrop
+            self.bg_fade_t = time.monotonic()
+        return False
+
+    # ----------------------------------------------------------- behaviour
+    def on_map(self, *_):
+        self.grab_input(0)
+
+    def grab_input(self, tries):
+        seat = Gdk.Display.get_default().get_default_seat()
+        status = seat.grab(self.get_window(), Gdk.SeatCapabilities.ALL, True, None, None, None, None)
+        if status != Gdk.GrabStatus.SUCCESS and tries < 40:
+            GLib.timeout_add(25, self.grab_input, tries + 1)
+        return False
+
+    def select(self, idx):
+        if not self.walls:
+            return
+        idx = max(0, min(len(self.walls) - 1, idx))
+        if idx != self.index:
+            self.index = idx
+            w = self.walls[idx]
+            if w.backdrop is not None:
+                self.bg_prev = self.bg_cur
+                self.bg_cur = w.backdrop
+                self.bg_fade_t = time.monotonic()
+
+    def apply_filter(self):
+        focused = self.walls[self.index].path if self.walls else None
+        q = self.filter_text.lower()
+        self.walls = [w for w in self.all_walls if q in w.title.lower() or q in w.name.lower()]
+        idx = next((i for i, w in enumerate(self.walls) if w.path == focused), 0)
+        self.index = -1
+        self.pos = float(idx)
+        self.select(idx)
+
+    def quit(self, apply=False):
+        if self.leaving is None:
+            self.leaving = (time.monotonic(), apply)
+            if apply:
+                self.flash = 1.0
+
+    def finish(self, apply):
+        if apply and self.walls:
+            set_wallpaper(self.walls[self.index].path)
+        self.pool.shutdown(wait=False, cancel_futures=True)
+        self.destroy()
+
+    def on_key(self, _w, ev):
+        k = ev.keyval
+        ctrl = ev.state & Gdk.ModifierType.CONTROL_MASK
+        n = len(self.walls)
+        if k == Gdk.KEY_Escape:
+            if self.filter_text:
+                self.filter_text = ''
+                self.apply_filter()
+            else:
+                self.quit()
+        elif k in (Gdk.KEY_Return, Gdk.KEY_KP_Enter) and n:
+            self.quit(apply=True)
+        elif k in (Gdk.KEY_Left, Gdk.KEY_Up, Gdk.KEY_KP_Left) or (k == Gdk.KEY_h and ctrl):
+            self.select(self.index - 1)
+        elif k in (Gdk.KEY_Right, Gdk.KEY_Down, Gdk.KEY_KP_Right, Gdk.KEY_Tab) or (k == Gdk.KEY_l and ctrl):
+            self.select(self.index + 1)
+        elif k == Gdk.KEY_ISO_Left_Tab:
+            self.select(self.index - 1)
+        elif k in (Gdk.KEY_Home,):
+            self.select(0)
+        elif k in (Gdk.KEY_End,):
+            self.select(n - 1)
+        elif k == Gdk.KEY_Page_Up:
+            self.select(self.index - 5)
+        elif k == Gdk.KEY_Page_Down:
+            self.select(self.index + 5)
+        elif ctrl and k in (Gdk.KEY_r, Gdk.KEY_R) and n > 1:
+            self.select(random.choice([i for i in range(n) if i != self.index]))
+        elif ctrl and k in (Gdk.KEY_q, Gdk.KEY_c):
+            self.quit()
+        elif k == Gdk.KEY_BackSpace:
+            if self.filter_text:
+                self.filter_text = self.filter_text[:-1]
+                self.apply_filter()
+        else:
+            ch = chr(Gdk.keyval_to_unicode(k)) if Gdk.keyval_to_unicode(k) else ''
+            if ch and (ch.isalnum() or ch in ' -_') and not ctrl:
+                self.filter_text += ch
+                self.apply_filter()
+        return True
+
+    def on_scroll(self, _w, ev):
+        if ev.direction == Gdk.ScrollDirection.SMOOTH:
+            ok, dx, dy = ev.get_scroll_deltas()
+            d = dy if abs(dy) >= abs(dx) else dx
+            if abs(d) < 0.3:
+                return True
+            self.select(self.index + (1 if d > 0 else -1))
+        elif ev.direction in (Gdk.ScrollDirection.DOWN, Gdk.ScrollDirection.RIGHT):
+            self.select(self.index + 1)
+        else:
+            self.select(self.index - 1)
+        return True
+
+    def on_click(self, _w, ev):
+        if ev.button == 3:
+            self.quit()
+            return True
+        for idx, quad in reversed(self.hitboxes):
+            if point_in_quad(ev.x, ev.y, quad):
+                if idx == self.index:
+                    self.quit(apply=True)
+                else:
+                    self.select(idx)
+                return True
+        if ev.button == 1:
+            self.quit()
+        return True
+
+    def on_tick(self, _widget, _clock):
+        now = time.monotonic()
+        dt = min(0.05, now - self.last_frame)
+        self.last_frame = now
+        # Critically damped spring towards the focused card
+        k, c = 140.0, 2 * math.sqrt(140.0)
+        acc = k * (self.index - self.pos) - c * self.vel
+        self.vel += acc * dt
+        self.pos += self.vel * dt
+        self.flash = max(0.0, self.flash - dt * 3)
+
+        if self.leaving:
+            t = min(1.0, (now - self.leaving[0]) / 0.28)
+            self.alpha = 1 - ease_out_cubic(t)
+            if t >= 1 and not self.finished:
+                self.finished = True
+                GLib.idle_add(self.finish, self.leaving[1], priority=GLib.PRIORITY_HIGH)
+        else:
+            self.alpha = min(1.0, ease_out_cubic(min(1, (now - self.t0) / 0.35)))
+        busy = (abs(self.vel) > 1e-3 or abs(self.index - self.pos) > 1e-3 or self.flash > 0
+                 or self.alpha < 1 or self.leaving or now - self.bg_fade_t < 0.5)
+        # While idle only the ambient HUD moves: ~24 fps is plenty
+        if busy or now - self.last_draw > 1 / 24:
+            self.last_draw = now
+            self.queue_draw()
+        return True
+
+    # -------------------------------------------------------------- drawing
+    def on_draw(self, _w, cr):
+        W, H = self.W, self.H
+        now = time.monotonic()
+        # Render the whole frame in software: GTK's X11 surface would route
+        # the perspective slices through XRender, which is slow (and on some
+        # drivers simply drops transformed images).
+        if self.frame is None:
+            self.frame = cairo.ImageSurface(cairo.FORMAT_RGB24, W, H)
+        fcr = cairo.Context(self.frame)
+        self.draw_backdrop(fcr, W, H, now)
+        self.draw_grid(fcr, W, H, now)
+        self.draw_cards(fcr, W, H, now)
+        self.draw_hud(fcr, W, H, now)
+        self.frame.flush()
+
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+        cr.set_source_surface(self.frame, 0, 0)
+        cr.paint_with_alpha(self.alpha)
+        return True
+
+    def backdrop_layer(self, surf):
+        """Full-screen background for a wall, built once and reused."""
+        layer = self.layers.get(surf)
+        if layer is not None:
+            return layer
+        W, H = self.W, self.H
+        layer = cairo.ImageSurface(cairo.FORMAT_RGB24, W, H)
+        cr = cairo.Context(layer)
+        bg = self.pal['bg']
+        cr.set_source_rgb(*bg)
+        cr.paint()
+        if surf is not None:
+            sw, sh = surf.get_width(), surf.get_height()
+            s = max(W / sw, H / sh) * 1.08
+            cr.save()
+            cr.translate(W / 2, H / 2)
+            cr.scale(s, s)
+            cr.set_source_surface(surf, -sw / 2, -sh / 2)
+            cr.get_source().set_filter(cairo.FILTER_BILINEAR)
+            cr.paint_with_alpha(0.85)
+            cr.restore()
+        cr.set_source_rgba(*bg, 0.55)
+        cr.paint()
+        rg = cairo.RadialGradient(W / 2, H * 0.45, H * 0.2, W / 2, H * 0.45, max(W, H) * 0.75)
+        rg.add_color_stop_rgba(0, 0, 0, 0, 0)
+        rg.add_color_stop_rgba(1, 0, 0, 0, 0.75)
+        cr.set_source(rg)
+        cr.paint()
+        if len(self.layers) > 4:
+            keep = (self.bg_prev, self.bg_cur)
+            for k in [k for k in self.layers if k not in keep]:
+                del self.layers[k]
+        self.layers[surf] = layer
+        return layer
+
+    def draw_backdrop(self, cr, W, H, now):
+        fade = min(1.0, (now - self.bg_fade_t) / 0.45)
+        cr.set_source_surface(self.backdrop_layer(self.bg_prev if fade < 1 else self.bg_cur), 0, 0)
+        cr.paint()
+        if fade < 1:
+            cr.set_source_surface(self.backdrop_layer(self.bg_cur), 0, 0)
+            cr.paint_with_alpha(fade)
+
+    def draw_grid(self, cr, W, H, now):
+        """Tron-like perspective floor that scrolls with the carousel."""
+        horizon = self.floor_y()
+        cr.save()
+        cr.rectangle(0, horizon, W, H - horizon)
+        cr.clip()
+        acc = self.accent
+        cr.set_line_width(1)
+        # vertical lines converging to a vanishing point
+        vp_x = W / 2
+        step = W / 14
+        shift = (self.pos % 1.0) * step
+        for i in range(-30, 31):
+            xb = vp_x + i * step - shift * 3
+            cr.move_to(vp_x + (xb - vp_x) * 0.05, horizon)
+            cr.line_to(xb, H)
+        cr.set_source_rgba(*acc, 0.10)
+        cr.stroke()
+        # horizontal lines rushing towards the viewer
+        phase = (now * 0.25) % 1.0
+        for j in range(14):
+            t = (j + phase) / 14
+            y = horizon + (H - horizon) * (t ** 2.2)
+            cr.move_to(0, y)
+            cr.line_to(W, y)
+            cr.set_source_rgba(*acc, 0.04 + 0.12 * t)
+            cr.stroke()
+        # horizon glow
+        lg = cairo.LinearGradient(0, horizon - 2, 0, horizon + 60)
+        lg.add_color_stop_rgba(0, *acc, 0.35)
+        lg.add_color_stop_rgba(1, *acc, 0)
+        cr.rectangle(0, horizon - 2, W, 62)
+        cr.set_source(lg)
+        cr.fill()
+        cr.restore()
+
+    def card_size(self):
+        cw = self.W * 0.40
+        return cw, cw * 9 / 16
+
+    def floor_y(self):
+        return self.H * 0.43 + self.card_size()[1] / 2 + self.H * 0.03
+
+    def card_transform(self, d):
+        """3D placement of a card at distance d from the focus."""
+        cw = self.card_size()[0]
+        ad = abs(d)
+        sgn = 1 if d > 0 else -1
+        if ad <= 1:
+            x = sgn * ad * cw * 0.66
+            rot = -sgn * self.ROT * ad
+            z = ad * cw * 0.55
+        else:
+            x = sgn * (cw * 0.66 + (ad - 1) * cw * 0.26)
+            rot = -sgn * self.ROT
+            z = cw * 0.55 + (ad - 1) * cw * 0.12
+        return x, z, rot
+
+    def project(self, x, y, z):
+        s = self.FOCAL / (self.FOCAL + z)
+        return self.W / 2 + x * s, self.H * 0.43 + y * s
+
+    def card_points(self, x, z, rot, cw, u, y):
+        lx = (u - 0.5) * cw
+        return self.project(x + lx * math.cos(rot), y, z + lx * math.sin(rot))
+
+    def draw_cards(self, cr, W, H, now):
+        self.hitboxes = []
+        if not self.walls:
+            self.draw_text(cr, 'NO WALLPAPERS MATCH' if self.filter_text else 'NO WALLPAPERS FOUND',
+                           W / 2, H * 0.43, 22, self.pal['fg'], 0.8, bold=True, align='center')
+            return
+        cw, ch = self.card_size()
+        visible = [i for i in range(len(self.walls)) if abs(i - self.pos) < 4.5]
+        visible.sort(key=lambda i: -abs(i - self.pos))
+        cards = []
+        for i in visible:
+            d = i - self.pos
+            x, z, rot = self.card_transform(d)
+            fade = max(0.0, min(1.0, 4.5 - abs(d)))
+            cards.append((i, x, z, rot, fade))
+
+        # All the mirror images in one layer, faded into the floor at once
+        top = self.floor_y() - H * 0.05
+        cr.push_group()
+        for i, x, z, rot, fade in cards:
+            self.draw_slices(cr, self.walls[i], x, z, rot, cw, ch, fade * 0.45, False, now, mirror=True)
+        cr.pop_group_to_source()
+        lg = cairo.LinearGradient(0, top, 0, top + ch * 0.5)
+        lg.add_color_stop_rgba(0, 0, 0, 0, 0.9)
+        lg.add_color_stop_rgba(1, 0, 0, 0, 0)
+        cr.mask(lg)
+
+        for i, x, z, rot, fade in cards:
+            quad = self.draw_card(cr, self.walls[i], x, z, rot, cw, ch, fade, i == self.index, now)
+            self.hitboxes.append((i, quad))
+
+    def draw_slices(self, cr, wall, x, z, rot, cw, ch, alpha, focused, now, mirror=False):
+        """Paint the card image as vertical strips: fake perspective in 2D."""
+        turned = abs(math.sin(rot))
+        slices = 1 if turned < 0.01 else (10 if mirror else 20)
+        surf = wall.surface
+        sw, sh = (surf.get_width(), surf.get_height()) if surf else (1, 1)
+        for s in range(slices):
+            u0, u1 = s / slices, (s + 1) / slices
+            x0, y0 = self.card_points(x, z, rot, cw, u0, -ch / 2)
+            x1, y1 = self.card_points(x, z, rot, cw, u1, -ch / 2)
+            _, yb0 = self.card_points(x, z, rot, cw, u0, ch / 2)
+            _, yb1 = self.card_points(x, z, rot, cw, u1, ch / 2)
+            h, h1 = yb0 - y0, yb1 - y1
+            wpx = x1 - x0
+            if abs(wpx) < 0.01:
+                continue
+            # clip to the exact trapezoid of this strip (overlap 0.5px: no seams)
+            e = 0.5 if x1 > x0 else -0.5
+            cr.save()
+            if mirror:
+                top = yb0 + h * 0.02
+                cr.move_to(x0 - e, top)
+                cr.line_to(x1 + e, yb1 + h1 * 0.02)
+                cr.line_to(x1 + e, yb1 + h1 * 0.52)
+                cr.line_to(x0 - e, top + h * 0.5)
+            else:
+                top = y0
+                cr.move_to(x0 - e, y0)
+                cr.line_to(x1 + e, y1)
+                cr.line_to(x1 + e, yb1)
+                cr.line_to(x0 - e, yb0)
+            cr.close_path()
+            cr.clip()
+            if surf is not None:
+                if mirror:
+                    cr.translate(x0, top + h)
+                    cr.scale(wpx / (sw * (u1 - u0)), -h / sh)
+                else:
+                    cr.translate(x0, top)
+                    cr.scale(wpx / (sw * (u1 - u0)), h / sh)
+                cr.set_source_surface(surf, -u0 * sw, 0)
+                pat = cr.get_source()
+                pat.set_filter(cairo.FILTER_GOOD if focused and slices == 1 else cairo.FILTER_BILINEAR)
+                pat.set_extend(cairo.EXTEND_PAD)
+                if alpha > 0.99:
+                    cr.paint()
+                else:
+                    cr.paint_with_alpha(alpha)
+            else:
+                shimmer = 0.5 + 0.5 * math.sin(now * 4 + u0 * 6)
+                cr.set_source_rgba(*self.accent, (0.06 + 0.08 * shimmer) * alpha)
+                cr.paint()
+            cr.restore()
+
+    def draw_card(self, cr, wall, x, z, rot, cw, ch, alpha, focused, now):
+        tl = self.card_points(x, z, rot, cw, 0, -ch / 2)
+        tr = self.card_points(x, z, rot, cw, 1, -ch / 2)
+        br = self.card_points(x, z, rot, cw, 1, ch / 2)
+        bl = self.card_points(x, z, rot, cw, 0, ch / 2)
+        quad = (tl, tr, br, bl)
+
+        if focused:
+            pulse = 0.5 + 0.5 * math.sin(now * 3)
+            for r, a in ((26, 0.06), (14, 0.10), (6, 0.18)):
+                cr.set_line_width(r)
+                self.path_quad(cr, quad)
+                cr.set_source_rgba(*self.accent, a * (0.7 + 0.3 * pulse) * alpha)
+                cr.stroke()
+
+        self.draw_slices(cr, wall, x, z, rot, cw, ch, alpha, focused, now)
+
+        # side cards get darker the further they turn away
+        if not focused:
+            depth = min(1, abs(math.sin(rot)) * 1.3) * 0.42 + min(0.3, max(0, abs(z) / cw - 0.55) * 0.9)
+            self.path_quad(cr, quad)
+            cr.set_source_rgba(0, 0, 0, depth * alpha)
+            cr.fill()
+
+        # neon frame
+        self.path_quad(cr, quad)
+        cr.set_line_width(2 if focused else 1)
+        col = self.accent if focused else self.pal['fg']
+        cr.set_source_rgba(*col, (0.95 if focused else 0.18) * alpha)
+        cr.stroke()
+
+        if focused:
+            self.draw_brackets(cr, quad, alpha, now)
+            if wall.path == self.current_path:
+                self.draw_badge(cr, tl, alpha)
+        return quad
+
+    def draw_brackets(self, cr, quad, alpha, now):
+        """HUD corner brackets around the focused card."""
+        (x0, y0), (x1, _), (_, y1), _ = quad
+        pad = 14 + 3 * math.sin(now * 3)
+        L = 34
+        x0, y0, x1, y1 = x0 - pad, y0 - pad, x1 + pad, y1 + pad
+        cr.set_line_width(3)
+        cr.set_source_rgba(*self.accent2, 0.95 * alpha)
+        for cx, cy, dx, dy in ((x0, y0, 1, 1), (x1, y0, -1, 1), (x1, y1, -1, -1), (x0, y1, 1, -1)):
+            cr.move_to(cx, cy + dy * L)
+            cr.line_to(cx, cy)
+            cr.line_to(cx + dx * L, cy)
+        cr.stroke()
+
+    def draw_badge(self, cr, tl, alpha):
+        x, y = tl[0] + 14, tl[1] + 14
+        text = '  ACTIVE'
+        layout = self.layout(cr, text, 10, bold=True)
+        tw, th = layout.get_pixel_size()
+        self.round_rect(cr, x, y, tw + 18, th + 8, 6)
+        cr.set_source_rgba(*self.pal['green'], 0.9 * alpha)
+        cr.fill()
+        cr.move_to(x + 9, y + 4)
+        cr.set_source_rgba(*self.pal['bg'], alpha)
+        PangoCairo.show_layout(cr, layout)
+
+    def draw_hud(self, cr, W, H, now):
+        fg, acc = self.pal['fg'], self.accent
+        m = 48
+        # top bar
+        self.draw_text(cr, '󰸉  WALLPAPER // SELECTOR', m, 36, 13, acc, 0.95, bold=True)
+        self.draw_text(cr, f'RICE: {RICE.upper()}', W - m, 36, 11, fg, 0.6, align='right')
+        cr.set_line_width(1)
+        lg = cairo.LinearGradient(m, 0, W - m, 0)
+        lg.add_color_stop_rgba(0, *acc, 0.8)
+        lg.add_color_stop_rgba(0.5, *self.accent2, 0.35)
+        lg.add_color_stop_rgba(1, *acc, 0.05)
+        cr.move_to(m, 66)
+        cr.line_to(W - m, 66)
+        cr.set_source(lg)
+        cr.stroke()
+        # scanning dot on the line
+        sx = m + ((now * 0.35) % 1.0) * (W - 2 * m)
+        cr.arc(sx, 66, 2.5, 0, 2 * math.pi)
+        cr.set_source_rgba(*self.accent2, 0.9)
+        cr.fill()
+
+        n = len(self.walls)
+        if n:
+            w = self.walls[self.index]
+            title_y = H * 0.79
+            self.draw_text(cr, w.title, W / 2, title_y, 22, fg, 0.95, bold=True, align='center',
+                           spacing=3)
+            self.draw_text(cr, f'{self.index + 1:02d}  /  {n:02d}', W / 2, title_y + 44, 11,
+                           acc, 0.85, align='center', spacing=4)
+            # progress track
+            tw = min(520, W * 0.4)
+            tx, ty = W / 2 - tw / 2, title_y + 76
+            self.round_rect(cr, tx, ty, tw, 3, 1.5)
+            cr.set_source_rgba(*fg, 0.12)
+            cr.fill()
+            seg = tw / n
+            px = tx + (max(0, min(n - 1, self.pos))) * seg
+            self.round_rect(cr, px, ty - 1, max(seg, 10), 5, 2.5)
+            cr.set_source_rgba(*acc, 0.95)
+            cr.fill()
+
+        # filter box
+        if self.filter_text:
+            txt = f'  {self.filter_text}_'
+            layout = self.layout(cr, txt, 12, bold=True)
+            tw, th = layout.get_pixel_size()
+            x, y = W / 2 - (tw + 36) / 2, 92
+            self.round_rect(cr, x, y, tw + 36, th + 16, 10)
+            cr.set_source_rgba(*self.pal['bg'], 0.75)
+            cr.fill_preserve()
+            cr.set_source_rgba(*acc, 0.8)
+            cr.set_line_width(1.5)
+            cr.stroke()
+            cr.move_to(x + 18, y + 8)
+            cr.set_source_rgba(*fg, 1)
+            PangoCairo.show_layout(cr, layout)
+
+        hint = '←/→  NAVIGATE    ⏎  APPLY    TYPE  FILTER    CTRL+R  RANDOM    ESC  EXIT'
+        self.draw_text(cr, hint, W / 2, H - 42, 9, fg, 0.45, align='center', spacing=2)
+
+        if self.flash > 0:
+            cr.set_source_rgba(*acc, 0.25 * self.flash)
+            cr.paint()
+
+    # ---------------------------------------------------------------- utils
+    def layout(self, cr, text, size, bold=False, spacing=0):
+        layout = PangoCairo.create_layout(cr)
+        desc = Pango.FontDescription(f'{FONT} {"Bold " if bold else ""}{size}')
+        layout.set_font_description(desc)
+        if spacing:
+            attrs = Pango.AttrList()
+            attrs.insert(Pango.attr_letter_spacing_new(spacing * Pango.SCALE))
+            layout.set_attributes(attrs)
+        layout.set_text(text, -1)
+        return layout
+
+    def draw_text(self, cr, text, x, y, size, rgb, alpha, bold=False, align='left', spacing=0):
+        layout = self.layout(cr, text, size, bold, spacing)
+        tw, th = layout.get_pixel_size()
+        if align == 'center':
+            x -= tw / 2
+        elif align == 'right':
+            x -= tw
+        cr.move_to(x, y - th / 2)
+        cr.set_source_rgba(*rgb, alpha)
+        PangoCairo.show_layout(cr, layout)
+
+    @staticmethod
+    def path_quad(cr, quad):
+        cr.move_to(*quad[0])
+        for p in quad[1:]:
+            cr.line_to(*p)
+        cr.close_path()
+
+    @staticmethod
+    def round_rect(cr, x, y, w, h, r):
+        cr.new_sub_path()
+        cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+        cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+        cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+        cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
+        cr.close_path()
+
+
+def point_in_quad(x, y, quad):
+    inside = False
+    n = len(quad)
+    for i in range(n):
+        (x1, y1), (x2, y2) = quad[i], quad[(i + 1) % n]
+        if (y1 > y) != (y2 > y) and x < (x2 - x1) * (y - y1) / (y2 - y1) + x1:
+            inside = not inside
+    return inside
+
+
+def set_wallpaper(path):
+    """Same effect as the rofi selector: store it in the rice and paint it."""
+    try:
+        with open(THEME_CFG) as f:
+            lines = f.readlines()
+        for i, line in enumerate(lines):
+            if line.startswith('ENGINE='):
+                lines[i] = 'ENGINE="Default"\n'
+            elif line.startswith('DEFAULT_WALL='):
+                lines[i] = f'DEFAULT_WALL="{path}"\n'
+        with open(THEME_CFG, 'w') as f:
+            f.writelines(lines)
+    except OSError as e:
+        print(f'WallSelect: cannot update {THEME_CFG}: {e}', file=sys.stderr)
+    subprocess.Popen(['sh', '-c', '''
+        pkill -x xwinwrap 2>/dev/null
+        [ -f /tmp/wall_refresh.pid ] && kill "$(cat /tmp/wall_refresh.pid)" 2>/dev/null
+        rm -f /tmp/wall_refresh.pid
+        feh --bg-fill "$1" && WallSync
+    ''', '_', path], start_new_session=True)
+
+
+def main():
+    GLib.set_prgname('WallSelect')
+    # single instance
+    lock = os.path.join(CACHE_DIR, '.lock')
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    import fcntl
+    fd = open(lock, 'w')
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        sys.exit(0)
+    win = WallSelect()
+    win.show_all()
+    Gtk.main()
+
+
+if __name__ == '__main__':
+    main()
