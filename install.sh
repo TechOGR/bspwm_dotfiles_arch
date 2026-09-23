@@ -465,6 +465,7 @@ install_packages() {
         papirus-icon-theme
         xss-lock
         rsync thunar eza bat
+        python-gobject python-cairo
     )
     local optional=(networkmanager network-manager-applet pavucontrol)
     local pkg
@@ -540,12 +541,17 @@ install_lockscreen() {
         install_pkg i3lock yes || true
     fi
 
-    # Use the repository's exact default wallpaper for the lockscreen as well.
-    local wallpaper="$HOME/Imágenes/Wallpapers/noche_car_man.jpg"
+    # Use the rice's own default wallpaper (DEFAULT_WALL) for the lockscreen.
+    # ScreenLocker keeps it in sync afterwards whenever the wallpaper changes.
+    local rice_dir="$SCRIPT_DIR/config/bspwm/rices/crackone"
+    local default_wall wallpaper
+    default_wall=$(sed -n 's/^DEFAULT_WALL="\(.*\)"/\1/p' "$rice_dir/theme-config.bash")
+    wallpaper="$rice_dir/walls/${default_wall##*/}"
+    [[ -f "$wallpaper" ]] || wallpaper=$(find "$rice_dir/walls" -type f \( -iname '*.jpg' -o -iname '*.png' \) 2>/dev/null | sort | head -n1)
     if command_exists betterlockscreen && [[ -f "$wallpaper" ]]; then
         info "Preparando Betterlockscreen con el wallpaper predeterminado del rice..."
-        if run_with_live_progress "Betterlockscreen → wallpaper" betterlockscreen -u "$wallpaper" --blur 0.5; then
-            success "Lockscreen sincronizado con noche_car_man.jpg."
+        if run_with_live_progress "Betterlockscreen → wallpaper" betterlockscreen -u "$wallpaper" --fx dim; then
+            success "Lockscreen sincronizado con $(basename "$wallpaper")."
         else
             warn "No se pudo generar la caché de Betterlockscreen con el wallpaper predeterminado."
         fi
