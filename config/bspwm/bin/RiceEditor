@@ -53,6 +53,14 @@ try:
     import barconf  # noqa: E402  (polybar.json <-> bar.ini, shared with BarCtl)
 except Exception:
     barconf = None
+try:
+    import avatar  # noqa: E402  (profile picture made by AvatarForge)
+except Exception:
+    avatar = None
+
+
+def avatar_path():
+    return avatar.current_path() if avatar else os.path.join(BSPWM, 'config/assets/profile.png')
 
 HOME = os.path.expanduser('~')
 BSPWM = os.path.join(HOME, '.config/bspwm')
@@ -618,7 +626,26 @@ class NeonLogo(Animated):
     def __init__(self, app, path, size=132):
         super().__init__(app, fps=30)
         self.set_size_request(size, size)
-        self.surface = load_surface(path, size - 34, size - 34) if os.path.exists(path) else None
+        self.size, self.path, self.mtime = size, path, None
+        self.surface = None
+        self.reload()
+        # the avatar follows AvatarForge live; a click opens it
+        GLib.timeout_add_seconds(2, self.reload)
+        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.set_tooltip_text('Change the avatar (AvatarForge)')
+        self.connect('button-press-event', lambda *_: spawn([os.path.join(BIN, 'AvatarForge')]))
+
+    def reload(self):
+        path = avatar_path()
+        try:
+            m = (path, os.path.getmtime(path))
+        except OSError:
+            m = None
+        if m != self.mtime:
+            self.mtime = m
+            s = self.size - 34
+            self.surface = load_surface(path, s, s) if m else None
+        return True
 
     def paint(self, cr, w, h):
         t = time.monotonic()
@@ -1165,7 +1192,7 @@ class RiceEditor(Gtk.Window):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         box.get_style_context().add_class('sidebar')
         box.set_size_request(236, -1)
-        logo = NeonLogo(self, os.path.join(BSPWM, 'config/assets/profile.png'))
+        logo = NeonLogo(self, avatar_path())
         logo.set_halign(Gtk.Align.CENTER)
         box.pack_start(logo, False, False, 4)
 
@@ -2777,6 +2804,16 @@ class RiceEditor(Gtk.Window):
 
     def page_appearance(self):
         p = self.page()
+        c = self.card('󰀄', 'Avatar', 'UserCard · RiceEditor · picture or ASCII art')
+        conf = avatar.load() if avatar else {}
+        mode = 'ASCII art' if conf.get('mode') == 'ascii' else 'Picture'
+        src = conf.get('source', 'user_logo.png')
+        c.pack_start(self.row('Profile picture', f'{mode} of {src} · the .png files of '
+                              f'rices/{RICE}/user_icons (click the logo too)',
+                              self.button('󰀄  Open AvatarForge', 'neon',
+                                          lambda *_: spawn([os.path.join(BIN, 'AvatarForge')]))),
+                     False, False, 0)
+        p.pack_start(c, False, False, 0)
         res = self.cfg.resolve(['gtk_theme', 'gtk_icons', 'gtk_cursor', 'rofi_font'])
         c = self.card('󰉼', 'GTK', 'xsettingsd · applied live')
         for var, kind, title in (('gtk_theme', 'gtk', 'GTK theme'), ('gtk_icons', 'icons', 'Icon theme'),
@@ -2809,7 +2846,8 @@ class RiceEditor(Gtk.Window):
     SNAP_FILES = [('theme-config.bash', THEME_CFG), ('picom.conf', PICOM_CONF),
                   ('picom-rules.conf', PICOM_RULES), ('bspwmrc', BSPWMRC), ('kitty.conf', KITTY_CONF),
                   ('dock.json', os.path.join(BSPWM, 'config/dock.json')),
-                  ('polybar.json', os.path.join(BSPWM, 'config/polybar.json'))]
+                  ('polybar.json', os.path.join(BSPWM, 'config/polybar.json')),
+                  ('avatar.json', os.path.join(BSPWM, 'config/avatar.json'))]
 
     def page_snapshots(self):
         p = self.page()

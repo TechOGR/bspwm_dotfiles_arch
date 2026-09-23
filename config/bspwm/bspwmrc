@@ -78,7 +78,10 @@ run picom --config "${HOME}"/.config/bspwm/config/picom/picom.conf
 run xsettingsd --config="${HOME}"/.config/bspwm/config/xsettingsd >/dev/null 2>&1
 
 # Launch eww daemon
-pidof -q eww || { eww -c "${HOME}"/.config/bspwm/eww daemon & }
+# (ping, not pidof: a daemon whose socket went missing made "eww open" start
+# a second daemon and every widget showed up twice)
+eww -c "${HOME}"/.config/bspwm/eww ping >/dev/null 2>&1 || {
+    pkill -f "^eww -c ${HOME}/.config/bspwm/eww" ; eww -c "${HOME}"/.config/bspwm/eww daemon & }
 
 # Launch workspace thumbnail capture + hover-preview watcher
 # (toggleable module: super + alt + m -> ModulesList -> "Preview de workspaces")

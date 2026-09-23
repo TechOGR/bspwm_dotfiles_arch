@@ -86,10 +86,10 @@ case "$1" in
 		KeyHelp
 		;;
 	--usercard)
-		eww -c "$WIDGET_DIR" open --toggle launchermenu
+		UserCard
 		;;
 	--player)
-		eww -c "$WIDGET_DIR" open --toggle music
+		MusicPlayer
 		;;
 	--sysmonitor)
 		Term --sysmonitor

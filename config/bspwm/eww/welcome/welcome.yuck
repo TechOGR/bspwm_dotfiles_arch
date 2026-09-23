@@ -3,7 +3,7 @@
 ;; Show a welcome window for the bspwm environment.
 ;;
 
-;;(defpoll username :interval "24h" "whoami")
+(defpoll username :interval "24h" "whoami")
 
 (defwidget welcome []
     (scroll :hscroll false :vscroll true

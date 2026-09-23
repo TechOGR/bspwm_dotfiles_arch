@@ -1,0 +1,586 @@
+#!/usr/bin/env python3
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# UserCard - HUD profile card of the rice (replaces the eww one)
+#   ✔ Avatar from AvatarForge (picture or ASCII art) · click to change
+#   ✔ user@host, uptime, OS, kernel, WM, shell, packages, updates
+#   ✔ Weather
+#   ✔ Live CPU / RAM / disk / temperature rings
+#   ✔ Quick toggles: network, bluetooth, airplane, night light,
+#     game mode, caffeine
+#   ✔ Shortcuts: RiceEditor, wallpapers, keybinds, screenshot, power
+#   ✔ Only one instance: a second launch closes it (no more double
+#     card); Esc or a click outside closes it too
+#
+# Usage: UserCard
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+import os
+import sys
+import math
+import time
+import json
+import socket
+import platform
+import threading
+import subprocess
+
+sys.path.insert(0, os.path.expanduser('~/.config/bspwm/lib'))
+import riceui as ui  # noqa: E402
+from riceui import Gtk, Gdk, GLib, GdkPixbuf, cairo  # noqa: E402
+import avatar  # noqa: E402
+
+SCRIPTS = os.path.join(ui.BSPWM, 'eww/profilecard/scripts')
+W = 392
+
+
+def sh(cmd, timeout=6):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                              shell=isinstance(cmd, str)).stdout.strip()
+    except Exception:
+        return ''
+
+
+def spawn(*cmd):
+    subprocess.Popen(list(cmd), start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def os_name():
+    try:
+        for line in open('/etc/os-release'):
+            if line.startswith('PRETTY_NAME='):
+                return line.split('=', 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    return platform.system()
+
+
+def uptime():
+    try:
+        secs = int(float(open('/proc/uptime').read().split()[0]))
+    except (OSError, ValueError):
+        return '?'
+    d, r = divmod(secs, 86400)
+    h, m = divmod(r // 60, 60)
+    return (f'{d}d ' if d else '') + f'{h}h {m:02d}m'
+
+
+# ─────────────────────────────────────────────────────────── system stats
+class Stats:
+    def __init__(self):
+        self.prev = None
+
+    def cpu(self):
+        try:
+            v = list(map(int, open('/proc/stat').readline().split()[1:]))
+        except (OSError, ValueError):
+            return 0
+        idle, total = v[3] + v[4], sum(v)
+        if not self.prev:
+            self.prev = (idle, total)
+            return 0
+        di, dt = idle - self.prev[0], total - self.prev[1]
+        self.prev = (idle, total)
+        return max(0, min(100, 100 * (1 - di / dt))) if dt else 0
+
+    @staticmethod
+    def ram():
+        info = {}
+        try:
+            for line in open('/proc/meminfo'):
+                k, v = line.split(':')
+                info[k] = int(v.split()[0])
+            used = info['MemTotal'] - info['MemAvailable']
+            return 100 * used / info['MemTotal'], used / 1048576, info['MemTotal'] / 1048576
+        except (OSError, KeyError, ValueError):
+            return 0, 0, 0
+
+    @staticmethod
+    def disk():
+        st = os.statvfs('/')
+        total = st.f_blocks * st.f_frsize
+        used = total - st.f_bfree * st.f_frsize
+        return 100 * used / total if total else 0, used / 1e9, total / 1e9
+
+    @staticmethod
+    def temp():
+        best = None
+        for base in ('/sys/class/thermal', '/sys/class/hwmon'):
+            try:
+                for d in os.listdir(base):
+                    for f in ('temp', 'temp1_input'):
+                        p = os.path.join(base, d, f)
+                        if os.path.exists(p):
+                            t = int(open(p).read()) / 1000
+                            if 0 < t < 130:
+                                best = max(best or 0, t)
+            except OSError:
+                pass
+        return best
+
+
+class Ring(Gtk.DrawingArea):
+    """Neon gauge ring."""
+
+    def __init__(self, card, icon, color):
+        super().__init__()
+        self.card, self.icon, self.color = card, icon, color
+        self.value, self.shown, self.label, self.sub = 0.0, 0.0, '--', ''
+        self.set_size_request(78, 96)
+        self.connect('draw', self.draw)
+
+    def set(self, value, label, sub=''):
+        self.value, self.label, self.sub = value, label, sub
+        self.queue_draw()
+
+    def draw(self, w, cr):
+        c = self.card.c
+        col = c[self.color]
+        Wd = w.get_allocated_width()
+        cx, cy, r = Wd / 2, 38, 30
+        cr.set_line_width(5)
+        cr.arc(cx, cy, r, 0, 2 * math.pi)
+        cr.set_source_rgba(*c['fg'], 0.08)
+        cr.stroke()
+        v = max(0.0, min(1.0, self.value / 100))
+        if v > 0:
+            a0 = -math.pi / 2
+            cr.set_line_cap(cairo.LINE_CAP_ROUND)
+            cr.arc(cx, cy, r, a0, a0 + v * 2 * math.pi)
+            cr.set_source_rgba(*col, 1)
+            cr.stroke()
+            cr.set_line_width(11)
+            cr.arc(cx, cy, r, a0, a0 + v * 2 * math.pi)
+            cr.set_source_rgba(*col, 0.12)
+            cr.stroke()
+        ui.text(cr, self.icon, cx, cy - 12, 10, (*col, 1), align='center', valign='middle')
+        ui.text(cr, self.label, cx, cy + 7, 9, (*c['fg'], 0.95), bold=True, align='center', valign='middle')
+        ui.text(cr, self.sub, cx, 84, 6.5, (*c['fg'], 0.5), align='center', valign='middle', spacing=1)
+        return False
+
+
+class Avatar(Gtk.DrawingArea):
+    def __init__(self, card, size=92):
+        super().__init__()
+        self.card, self.size = card, size
+        self.set_size_request(size + 12, size + 12)
+        self.mtime = None
+        self.pix = None
+        self.reload()
+        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.set_tooltip_text('Change the avatar (AvatarForge)')
+        self.connect('draw', self.draw)
+        self.connect('button-press-event', lambda *_: (spawn(os.path.join(ui.BSPWM, 'bin/AvatarForge')),
+                                                       card.close()))
+        self.connect('realize', lambda w: w.get_window().set_cursor(
+            Gdk.Cursor.new_from_name(w.get_display(), 'pointer')))
+        GLib.timeout_add_seconds(2, self.reload)
+
+    def reload(self):
+        path = avatar.current_path()
+        try:
+            m = os.path.getmtime(path)
+        except OSError:
+            m = None
+        if m != self.mtime:
+            self.mtime = m
+            try:
+                self.pix = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, self.size * 2, self.size * 2, True)
+            except GLib.Error:
+                self.pix = None
+            self.queue_draw()
+        return True
+
+    def draw(self, w, cr):
+        c = self.card.c
+        s = self.size
+        x0 = y0 = 6
+        r = s * 0.24
+        ui.rounded(cr, x0 - 4, y0 - 4, s + 8, s + 8, r + 4)
+        g = cairo.LinearGradient(0, 0, s, s)
+        g.add_color_stop_rgba(0, *c['cyan'], 1)
+        g.add_color_stop_rgba(1, *c['magenta'], 1)
+        cr.set_source(g)
+        cr.set_line_width(2)
+        cr.stroke()
+        ui.rounded(cr, x0, y0, s, s, r)
+        cr.save()
+        cr.clip()
+        cr.set_source_rgb(*c['black'])
+        cr.paint()
+        if self.pix:
+            k = s / max(self.pix.get_width(), self.pix.get_height())
+            cr.translate(x0 + (s - self.pix.get_width() * k) / 2, y0 + (s - self.pix.get_height() * k) / 2)
+            cr.scale(k, k)
+            Gdk.cairo_set_source_pixbuf(cr, self.pix, 0, 0)
+            cr.get_source().set_filter(cairo.FILTER_GOOD)
+            cr.paint()
+        cr.restore()
+        return False
+
+
+# ─────────────────────────────────────────────────────────────── card
+class Card(Gtk.Window):
+    TOGGLES = [
+        # key, label, icon(on), icon(off), status cmd -> on?, toggle cmd
+        ('net', 'Network', '󰈀', '󰖪', None, ['OpenApps', '--netmanager']),
+        ('bt', 'Bluetooth', '󰂯', '󰂲', None, [os.path.join(SCRIPTS, 'Bluetooth'), '--toggle']),
+        ('air', 'Airplane', '󰀝', '󰀞', None, [os.path.join(SCRIPTS, 'Airplane'), '--toggle']),
+        ('night', 'Night light', '󰹐', '󱠃', None, [os.path.join(SCRIPTS, 'Redshift'), 'toggle']),
+        ('game', 'Game mode', '󰺵', '󰺵', None, [os.path.join(SCRIPTS, 'GameMode'), '--toggle']),
+        ('caf', 'Caffeine', '󰅶', '󰾪', None, ['CaffeinePolybar', '--toggle']),
+    ]
+
+    def __init__(self):
+        super().__init__(type=Gtk.WindowType.POPUP)
+        self.set_title('UserCard')
+        ui.rgba_window(self)
+        self.pal = ui.load_palette()
+        self.c = ui.rgb_palette(self.pal)
+        self.stats = Stats()
+        self.closing = None
+        self.t0 = time.monotonic()
+        self.install_css()
+
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        outer.get_style_context().add_class('hud')
+        self.add(outer)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        box.get_style_context().add_class('card')
+        box.set_size_request(W, -1)
+        outer.pack_start(box, True, True, 0)
+
+        # ── profile
+        head = Gtk.Box(spacing=14)
+        head.pack_start(Avatar(self), False, False, 0)
+        who = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        who.set_valign(Gtk.Align.CENTER)
+        user = Gtk.Label(label=os.environ.get('USER', 'user'), xalign=0)
+        user.get_style_context().add_class('user')
+        who.pack_start(user, False, False, 0)
+        host = Gtk.Label(xalign=0)
+        host.set_markup(f'<span foreground="{self.pal["magenta"]}">@</span>{socket.gethostname()}')
+        host.get_style_context().add_class('host')
+        who.pack_start(host, False, False, 0)
+        self.up = Gtk.Label(xalign=0)
+        self.up.get_style_context().add_class('dim')
+        who.pack_start(self.up, False, False, 2)
+        head.pack_start(who, True, True, 0)
+        btns = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        btns.set_valign(Gtk.Align.CENTER)
+        for icon, tip, cmd in (('󰌾', 'Lock', ['ScreenLocker']), ('󰐥', 'Session menu', ['PowerMenu'])):
+            b = self.icon_btn(icon, tip, cmd)
+            btns.pack_start(b, False, False, 0)
+        head.pack_end(btns, False, False, 0)
+        box.pack_start(head, False, False, 0)
+
+        # ── system info
+        grid = Gtk.Grid(column_spacing=10, row_spacing=6)
+        grid.get_style_context().add_class('panel2')
+        self.info = {}
+        rows = [('os', '󰣇', 'OS'), ('kernel', '', 'KERNEL'), ('wm', '󱂬', 'WM'),
+                ('shell', '', 'SHELL'), ('pkgs', '󰏖', 'PACKAGES'), ('upd', '󰚰', 'UPDATES')]
+        for i, (key, icon, name) in enumerate(rows):
+            col, row = (i % 2) * 3, i // 2
+            ic = Gtk.Label(label=icon)
+            ic.get_style_context().add_class('ic')
+            grid.attach(ic, col, row, 1, 1)
+            k = Gtk.Label(label=name, xalign=0)
+            k.get_style_context().add_class('key')
+            grid.attach(k, col + 1, row, 1, 1)
+            v = Gtk.Label(label='…', xalign=0)
+            v.set_ellipsize(3)
+            v.set_max_width_chars(13)
+            v.get_style_context().add_class('val')
+            grid.attach(v, col + 2, row, 1, 1)
+            self.info[key] = v
+        self.info['os'].set_text(os_name().split()[0])
+        self.info['kernel'].set_text(platform.release().split('-')[0])
+        self.info['wm'].set_text('bspwm')
+        self.info['shell'].set_text(os.path.basename(os.environ.get('SHELL', 'sh')))
+        ev = Gtk.EventBox()
+        ev.add(grid)
+        ev.set_tooltip_text('Click to update the system')
+        ev.connect('button-press-event', lambda *_: (spawn('OpenApps', '--update'), self.close()))
+        box.pack_start(ev, False, False, 0)
+
+        # ── weather
+        wx = Gtk.Box(spacing=12)
+        wx.get_style_context().add_class('panel2')
+        self.w_icon = Gtk.Label(label='󰖐')
+        self.w_icon.get_style_context().add_class('wicon')
+        wx.pack_start(self.w_icon, False, False, 0)
+        wt = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        wt.set_valign(Gtk.Align.CENTER)
+        self.w_desc = Gtk.Label(label='weather…', xalign=0)
+        self.w_desc.get_style_context().add_class('wdesc')
+        wt.pack_start(self.w_desc, False, False, 0)
+        self.w_city = Gtk.Label(label='', xalign=0)
+        self.w_city.get_style_context().add_class('dim')
+        wt.pack_start(self.w_city, False, False, 0)
+        wx.pack_start(wt, True, True, 0)
+        self.w_temp = Gtk.Label(label='--°')
+        self.w_temp.get_style_context().add_class('wtemp')
+        wx.pack_end(self.w_temp, False, False, 0)
+        box.pack_start(wx, False, False, 0)
+
+        # ── gauges
+        rings = Gtk.Box(homogeneous=True)
+        rings.get_style_context().add_class('panel2')
+        self.r_cpu = Ring(self, '󰻠', 'blue')
+        self.r_ram = Ring(self, '󰍛', 'cyan')
+        self.r_disk = Ring(self, '󰋊', 'magenta')
+        self.r_temp = Ring(self, '󰔏', 'yellow')
+        for r in (self.r_cpu, self.r_ram, self.r_disk, self.r_temp):
+            rings.pack_start(r, True, True, 0)
+        ev = Gtk.EventBox()
+        ev.add(rings)
+        ev.set_tooltip_text('Open the system monitor')
+        ev.connect('button-press-event', lambda *_: (spawn('OpenApps', '--sysmonitor'), self.close()))
+        box.pack_start(ev, False, False, 0)
+
+        # ── toggles
+        tg = Gtk.Grid(column_spacing=8, row_spacing=8, column_homogeneous=True)
+        self.tog = {}
+        for i, (key, label, on_i, _off_i, _st, cmd) in enumerate(self.TOGGLES):
+            b = Gtk.Button()
+            b.get_style_context().add_class('tog')
+            v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            b.icon = Gtk.Label(label=on_i)
+            b.icon.get_style_context().add_class('ticon')
+            v.pack_start(b.icon, False, False, 0)
+            b.text = Gtk.Label(label=label)
+            b.text.get_style_context().add_class('tname')
+            v.pack_start(b.text, False, False, 0)
+            b.state = Gtk.Label(label='…')
+            b.state.set_ellipsize(3)
+            b.state.set_max_width_chars(11)
+            b.state.get_style_context().add_class('tstate')
+            v.pack_start(b.state, False, False, 0)
+            b.add(v)
+            b.connect('clicked', lambda _b, k=key, c=cmd: self.toggle(k, c))
+            tg.attach(b, i % 3, i // 3, 1, 1)
+            self.tog[key] = b
+        box.pack_start(tg, False, False, 0)
+
+        # ── shortcuts
+        sc = Gtk.Box(spacing=6, homogeneous=True)
+        for icon, tip, cmd in (('󰏘', 'Rice Editor', ['RiceEditor']), ('󰸉', 'Wallpapers', ['WallSelect']),
+                               ('󰌌', 'Keybinds', ['OpenApps', '--KeyHelp']),
+                               ('󰹑', 'Screenshot', ['ScreenShoTer']), ('󰎈', 'Music', ['MusicPlayer']),
+                               ('󰀄', 'Avatar', [os.path.join(ui.BSPWM, 'bin/AvatarForge')])):
+            sc.pack_start(self.icon_btn(icon, tip, cmd, 'short'), True, True, 0)
+        box.pack_start(sc, False, False, 0)
+
+        self.add_events(Gdk.EventMask.KEY_PRESS_MASK | Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.connect('key-press-event', self.on_key)
+        self.connect('button-press-event', self.on_click)
+        self.connect('draw', self.on_draw)
+        self.connect('map-event', lambda *_: ui.grab_input(self))
+        self.connect('destroy', Gtk.main_quit)
+        self.connect('size-allocate', lambda *_: self.place())
+        self.add_tick_callback(self.fade)
+
+        self.tick_stats()
+        GLib.timeout_add(2000, self.tick_stats)
+        self.bg_refresh()
+        GLib.timeout_add(4000, self.bg_refresh)
+        threading.Thread(target=self.fetch_weather, daemon=True).start()
+
+    # ─────────────────────────────────────────────────────────── helpers
+    def install_css(self):
+        css = Gtk.CssProvider()
+        css.load_from_data((ui.hud_css(self.pal) + '''
+.card { padding: 18px; background-color: alpha(@bg, 0.95); border: 1px solid alpha(@accent, 0.5);
+        border-radius: 20px; }
+.user { font-size: 15pt; font-weight: 800; letter-spacing: 1px; }
+.hud label.host { font-size: 9pt; color: @cyan; }
+.panel2 { background-color: alpha(@black, 0.6); border: 1px solid alpha(@fg, 0.06); border-radius: 14px;
+          padding: 10px 12px; }
+.hud label.ic { color: @accent; font-size: 10pt; }
+.hud label.key { font-size: 6.5pt; font-weight: 800; letter-spacing: 2px; color: alpha(@fg, 0.45); }
+.val { font-size: 9pt; font-weight: 700; }
+.hud label.wicon { font-size: 26pt; color: @cyan; min-width: 44px; }
+.wdesc { font-size: 10pt; font-weight: 800; }
+.hud label.wtemp { font-size: 18pt; font-weight: 800; color: @accent2; }
+button.tog { background-image: none; background-color: alpha(@black, 0.6); box-shadow: none;
+             border: 1px solid alpha(@fg, 0.07); border-radius: 14px; padding: 8px 4px; }
+button.tog:hover { border-color: @accent; }
+button.tog.on { border-color: alpha(@cyan, 0.8); background-color: alpha(@cyan, 0.08);
+                box-shadow: 0 0 14px alpha(@cyan, 0.25); }
+.hud label.ticon { font-size: 15pt; color: alpha(@fg, 0.45); }
+.hud button.tog.on label.ticon { color: @cyan; }
+.tname { font-size: 7.5pt; font-weight: 800; }
+.hud label.tstate { font-size: 6.5pt; letter-spacing: 1px; color: alpha(@fg, 0.5); }
+button.ibtn, button.short { background-image: none; background-color: alpha(@black, 0.6); box-shadow: none;
+             border: 1px solid alpha(@fg, 0.08); border-radius: 10px; padding: 5px 9px; color: @fg;
+             font-size: 11pt; }
+button.ibtn:hover, button.short:hover { border-color: @accent; color: @accent;
+             box-shadow: 0 0 12px alpha(@accent, 0.3); }
+''').encode())
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css,
+                                                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+    def icon_btn(self, icon, tip, cmd, cls='ibtn'):
+        b = Gtk.Button(label=icon)
+        b.get_style_context().add_class(cls)
+        b.set_tooltip_text(tip)
+        b.connect('clicked', lambda *_: (spawn(*cmd), self.close()))
+        return b
+
+    def place(self):
+        geo = ui.monitor_geometry()
+        try:
+            sys.path.insert(0, os.path.join(ui.BSPWM, 'lib'))
+            import barconf
+            conf = barconf.load()
+            top = conf['height'] + conf['offset_y'] + 10 if conf['position'] == 'top' else 14
+        except Exception:
+            top = 50
+        self.move(geo.x + 14, geo.y + top)
+
+    # ─────────────────────────────────────────────────────────── data
+    def tick_stats(self):
+        cpu = self.stats.cpu()
+        self.r_cpu.set(cpu, f'{cpu:.0f}%', 'CPU')
+        p, used, total = self.stats.ram()
+        self.r_ram.set(p, f'{p:.0f}%', f'{used:.1f}/{total:.0f}G')
+        p, used, total = self.stats.disk()
+        self.r_disk.set(p, f'{p:.0f}%', f'{used:.0f}/{total:.0f}G')
+        t = self.stats.temp()
+        self.r_temp.set(t or 0, f'{t:.0f}°' if t else 'N/A', 'TEMP')
+        self.up.set_text(f'󰔟  up {uptime()}')
+        return not self.closing
+
+    def bg_refresh(self):
+        threading.Thread(target=self.fetch, daemon=True).start()
+        return not self.closing
+
+    def fetch(self):
+        d = {}
+        try:
+            d['upd'] = open(os.path.expanduser('~/.cache/Updates.txt')).read().strip() or '0'
+        except OSError:
+            d['upd'] = '?'
+        if not getattr(self, 'pkgs', None):
+            self.pkgs = sh('pacman -Qq | wc -l') or '?'
+        d['pkgs'] = self.pkgs
+        net = sh("nmcli -t -f TYPE,STATE,CONNECTION dev status | awk -F: '$2==\"connected\" && $1!=\"loopback\""
+                 " {print $1\":\"$3; exit}'")
+        d['net'] = (bool(net), net.split(':', 1)[-1] if net else 'offline')
+        bt = sh([os.path.join(SCRIPTS, 'Bluetooth'), '--name'])
+        d['bt'] = (bt not in ('Off', 'Null', ''), 'no adapter' if bt in ('Null', '') else bt)
+        air = sh([os.path.join(SCRIPTS, 'Airplane'), '--status'])
+        d['air'] = (air == 'On', air or 'Off')
+        night = sh([os.path.join(SCRIPTS, 'Redshift'), 'state'])
+        d['night'] = (night == 'on', night or 'off')
+        game = sh([os.path.join(SCRIPTS, 'GameMode'), '--status'])
+        d['game'] = (game == 'On', game or 'Off')
+        try:
+            caf = open(os.path.join(os.environ.get('XDG_CACHE_HOME', os.path.expanduser('~/.cache')),
+                                    'caffeine_state')).read().strip() == 'on'
+        except OSError:
+            caf = False
+        d['caf'] = (caf, 'on' if caf else 'off')
+        GLib.idle_add(self.apply_data, d)
+
+    def fetch_weather(self):
+        """Network bound: its own thread, cached 10 min between openings."""
+        cache = os.path.join(ui.HOME, '.cache', os.environ.get('USER', 'user'), 'usercard_weather.json')
+        try:
+            if time.time() - os.path.getmtime(cache) < 600:
+                with open(cache) as f:
+                    GLib.idle_add(self.apply_weather, json.load(f))
+                return
+        except (OSError, ValueError):
+            pass
+        w = [sh(['Weather', k], 10) for k in ('icon', 'current_temp', 'weather_desc', 'city')]
+        if any(w):
+            with open(cache, 'w') as f:
+                json.dump(w, f)
+        GLib.idle_add(self.apply_weather, w)
+
+    def apply_weather(self, w):
+        icon, temp, desc, city = (w + ['', '', '', ''])[:4]
+        self.w_icon.set_text(icon or '󰖐')
+        self.w_temp.set_text(f'{temp}°' if temp else '--°')
+        self.w_desc.set_text(desc or 'no weather data')
+        self.w_city.set_text(f'󰍎 {city}' if city else '')
+        return False
+
+    def apply_data(self, d):
+        self.info['upd'].set_text(d['upd'])
+        self.info['pkgs'].set_text(d['pkgs'])
+        for key, off_icon in ((t[0], t[3]) for t in self.TOGGLES):
+            on, state = d[key]
+            b = self.tog[key]
+            (b.get_style_context().add_class if on else b.get_style_context().remove_class)('on')
+            on_icon = next(t[2] for t in self.TOGGLES if t[0] == key)
+            b.icon.set_text(on_icon if on else off_icon)
+            b.state.set_text(str(state).upper())
+        return False
+
+    def toggle(self, key, cmd):
+        if key == 'net':
+            spawn(*cmd)
+            self.close()
+            return
+        threading.Thread(target=lambda: (sh(cmd, 20), self.fetch()), daemon=True).start()
+
+    # ─────────────────────────────────────────────────────────── events
+    def on_key(self, _w, ev):
+        if ev.keyval == Gdk.KEY_Escape:
+            self.close()
+            return True
+        return False
+
+    def on_click(self, _w, ev):
+        w, h = self.get_size()
+        wx, wy = self.get_position()
+        if not (wx <= ev.x_root <= wx + w and wy <= ev.y_root <= wy + h):
+            self.close()
+        return False
+
+    def on_draw(self, _w, cr):
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+        return False
+
+    def fade(self, *_):
+        now = time.monotonic()
+        if self.closing:
+            a = 1 - (now - self.closing) / 0.12
+            if a <= 0:
+                self.destroy()
+                return False
+        else:
+            a = min(1.0, (now - self.t0) / 0.15)
+        if self.get_window():
+            self.get_window().set_opacity(max(0.0, a))
+        return self.closing is not None or a < 1.0
+
+    def close(self):
+        if not self.closing:
+            self.closing = time.monotonic()
+            self.add_tick_callback(self.fade)
+
+
+def main():
+    GLib.set_prgname('UserCard')
+    _lock = ui.single_instance('usercard', toggle=True)  # noqa: F841
+    win = Card()
+    ui.quit_on_sigterm(win.close)
+    win.show_all()
+    Gtk.main()
+
+
+if __name__ == '__main__':
+    main()

@@ -1,4 +1,2 @@
-(include "profilecard/profilecard.yuck")
-(include "player/player.yuck")
 (include "welcome/welcome.yuck")
 (include "wspreview/wspreview.yuck")

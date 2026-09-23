@@ -465,7 +465,7 @@ install_packages() {
         papirus-icon-theme
         xss-lock
         rsync thunar eza bat
-        python-gobject python-cairo
+        python-gobject python-cairo python-pillow ffmpeg
     )
     local optional=(networkmanager network-manager-applet pavucontrol)
     local pkg

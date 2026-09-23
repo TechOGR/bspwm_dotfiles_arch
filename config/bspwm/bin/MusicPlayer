@@ -1,0 +1,730 @@
+#!/usr/bin/env python3
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# MusicPlayer - HUD music player of the rice (replaces the eww one)
+#   ✔ Any MPRIS player (browsers, Spotify, mpv, …) through playerctl,
+#     and MPD through mpc · click the source chip to switch player
+#   ✔ Album art with a blurred cover backdrop and neon frame
+#   ✔ Title / artist / album, animated equalizer while playing
+#   ✔ Seekable progress bar (click or drag), elapsed / total time
+#   ✔ Shuffle · previous · play/pause · next · loop · volume
+#   ✔ Keyboard: Space play/pause · ←→ seek 5 s · ↑↓ volume ·
+#     N next · P previous · Tab next player · Esc close
+#   ✔ Follows the rice palette · a second launch closes it
+#
+# Usage: MusicPlayer
+#
+# Dependencies: playerctl, mpc (optional), ffmpeg (MPD covers)
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+import os
+import sys
+import math
+import time
+import random
+import hashlib
+import threading
+import subprocess
+import urllib.parse
+import urllib.request
+
+sys.path.insert(0, os.path.expanduser('~/.config/bspwm/lib'))
+import riceui as ui  # noqa: E402
+from riceui import Gtk, Gdk, GLib, GdkPixbuf, cairo  # noqa: E402
+
+W = 460
+ART = 150
+CACHE = os.path.join(ui.HOME, '.cache', os.environ.get('USER', 'user'), 'musicplayer')
+MUSIC_DIR = os.path.join(ui.HOME, 'Music')
+SEP = '\x1f'
+os.makedirs(CACHE, exist_ok=True)
+
+
+def run(cmd, timeout=3):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout.strip()
+    except Exception:
+        return ''
+
+
+def fmt_time(s):
+    s = max(0, int(s))
+    return f'{s // 3600}:{s % 3600 // 60:02d}:{s % 60:02d}' if s >= 3600 else f'{s // 60}:{s % 60:02d}'
+
+
+# ─────────────────────────────────────────────────────────── backends
+class Backend:
+    """playerctl for MPRIS players, mpc for MPD."""
+
+    def __init__(self):
+        self.caps = {}
+
+    def supports(self, p, prop):
+        """Browsers expose no Shuffle / LoopStatus: ask once per player."""
+        key = (p, prop)
+        if key not in self.caps:
+            try:
+                r = subprocess.run(['playerctl', '-p', p, prop], capture_output=True, text=True, timeout=3)
+                self.caps[key] = r.returncode == 0 and 'could not' not in r.stdout.lower()
+            except Exception:
+                self.caps[key] = False
+        return self.caps[key]
+
+    @staticmethod
+    def players():
+        out = [p for p in run(['playerctl', '-l']).splitlines() if p]
+        if 'mpd' not in ' '.join(out).lower() and run(['mpc', 'current']) != '':
+            out.append('mpd')
+        return out
+
+    @staticmethod
+    def pretty(name):
+        base = name.split('.')[0]
+        return {'mpd': 'MPD', 'brave': 'Brave', 'chromium': 'Chromium', 'firefox': 'Firefox',
+                'spotify': 'Spotify', 'mpv': 'mpv', 'vlc': 'VLC'}.get(base, base.title())
+
+    def state(self, p):
+        if p == 'mpd':
+            return self.mpd_state()
+        fmt = SEP.join(['{{status}}', '{{title}}', '{{artist}}', '{{album}}', '{{mpris:artUrl}}',
+                        '{{position}}', '{{mpris:length}}', '{{volume}}', '{{shuffle}}', '{{loop}}'])
+        out = run(['playerctl', '-p', p, 'metadata', '--format', fmt])
+        f = out.split(SEP)
+        if len(f) < 10:
+            return None
+
+        def num(v, div=1):
+            try:
+                return float(v) / div
+            except ValueError:
+                return 0.0
+        return dict(status=f[0] or 'Stopped', title=f[1] or 'Unknown title', artist=f[2], album=f[3],
+                    art=f[4], position=num(f[5], 1e6), length=num(f[6], 1e6), volume=num(f[7]),
+                    shuffle=f[8] == 'true', loop=f[9] if f[9] in ('Track', 'Playlist') else 'None',
+                    can_shuffle=self.supports(p, 'shuffle'), can_loop=self.supports(p, 'loop'))
+
+    def mpd_state(self):
+        out = run(['mpc', '-f', SEP.join(['%title%', '%artist%', '%album%', '%file%']), 'status'])
+        lines = out.splitlines()
+        if not lines:
+            return None
+        st = dict(status='Stopped', title='Nothing queued', artist='', album='', art='', position=0,
+                  length=0, volume=0.5, shuffle=False, loop='None', can_shuffle=True, can_loop=True)
+        if len(lines) >= 3:
+            f = lines[0].split(SEP) + ['', '', '', '']
+            st.update(title=f[0] or os.path.basename(f[3]), artist=f[1], album=f[2], art=f'mpd:{f[3]}')
+            st['status'] = 'Playing' if '[playing]' in lines[1] else 'Paused'
+            try:
+                cur, tot = lines[1].split()[2].split('/')
+
+                def secs(t):
+                    return sum(int(x) * 60 ** i for i, x in enumerate(reversed(t.split(':'))))
+                st['position'], st['length'] = secs(cur), secs(tot)
+            except (IndexError, ValueError):
+                pass
+        opts = lines[-1]
+        st['shuffle'] = 'random: on' in opts
+        st['loop'] = 'Playlist' if 'repeat: on' in opts else 'None'
+        try:
+            st['volume'] = int(opts.split('volume:')[1].split('%')[0]) / 100
+        except (IndexError, ValueError):
+            pass
+        return st
+
+    @staticmethod
+    def cmd(p, action, arg=None):
+        if p == 'mpd':
+            m = {'toggle': ['toggle'], 'next': ['next'], 'prev': ['prev'], 'shuffle': ['random'],
+                 'loop': ['repeat'], 'seek': ['seek', str(int(arg or 0))],
+                 'volume': ['volume', str(int((arg or 0) * 100))]}[action]
+            subprocess.Popen(['mpc', '-q', *m], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return
+        m = {'toggle': ['play-pause'], 'next': ['next'], 'prev': ['previous'], 'shuffle': ['shuffle', 'Toggle'],
+             'loop': ['loop', {'None': 'Playlist', 'Playlist': 'Track'}.get(arg, 'None')],
+             'seek': ['position', f'{arg or 0:.2f}'], 'volume': ['volume', f'{arg or 0:.2f}']}[action]
+        subprocess.Popen(['playerctl', '-p', p, *m], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    @staticmethod
+    def art_path(url):
+        """Local file for an MPRIS artUrl / an MPD file (cached)."""
+        if not url:
+            return ''
+        if url.startswith('file://'):
+            p = urllib.parse.unquote(url[7:])
+            return p if os.path.isfile(p) else ''
+        key = hashlib.md5(url.encode()).hexdigest()
+        out = os.path.join(CACHE, key + '.png')
+        if os.path.isfile(out):
+            return out
+        if url.startswith('mpd:'):
+            src = os.path.join(MUSIC_DIR, url[4:])
+            subprocess.run(['ffmpeg', '-y', '-loglevel', 'quiet', '-i', src, '-an', '-frames:v', '1', out],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return out if os.path.isfile(out) else ''
+        if url.startswith('http'):
+            try:
+                with urllib.request.urlopen(url.replace('open.spotify.com', 'i.scdn.co'), timeout=6) as r, \
+                        open(out, 'wb') as f:
+                    f.write(r.read())
+                return out
+            except Exception:
+                return ''
+        return ''
+
+
+# ─────────────────────────────────────────────────────────── widgets
+class Art(Gtk.DrawingArea):
+    def __init__(self, win):
+        super().__init__()
+        self.win = win
+        self.set_size_request(ART + 10, ART + 10)
+        self.connect('draw', self.draw)
+
+    def draw(self, w, cr):
+        c, s = self.win.c, ART
+        x0 = y0 = 5
+        playing = self.win.st and self.win.st['status'] == 'Playing'
+        glow = 0.25 + (0.15 * math.sin(time.monotonic() * 2.2) if playing else 0)
+        ui.rounded(cr, x0 - 3, y0 - 3, s + 6, s + 6, 20)
+        g = cairo.LinearGradient(0, 0, s, s)
+        g.add_color_stop_rgba(0, *c['cyan'], 0.9)
+        g.add_color_stop_rgba(1, *c['magenta'], 0.9)
+        cr.set_source(g)
+        cr.set_line_width(2)
+        cr.stroke()
+        ui.rounded(cr, x0 - 6, y0 - 6, s + 12, s + 12, 22)
+        cr.set_source_rgba(*c['cyan'], glow * 0.3)
+        cr.set_line_width(3)
+        cr.stroke()
+        ui.rounded(cr, x0, y0, s, s, 17)
+        cr.save()
+        cr.clip()
+        pix = self.win.art_pix
+        if pix:
+            k = max(s / pix.get_width(), s / pix.get_height())
+            cr.translate(x0 + (s - pix.get_width() * k) / 2, y0 + (s - pix.get_height() * k) / 2)
+            cr.scale(k, k)
+            Gdk.cairo_set_source_pixbuf(cr, pix, 0, 0)
+            cr.get_source().set_filter(cairo.FILTER_GOOD)
+            cr.paint()
+        else:
+            lg = cairo.LinearGradient(x0, y0, x0 + s, y0 + s)
+            lg.add_color_stop_rgba(0, *c['black'], 1)
+            lg.add_color_stop_rgba(1, *c['bg'], 1)
+            cr.set_source(lg)
+            cr.paint()
+            ui.text(cr, '󰎈', x0 + s / 2, y0 + s / 2, 40, (*c['magenta'], 0.8), align='center', valign='middle')
+        cr.restore()
+        return False
+
+
+class Equalizer(Gtk.DrawingArea):
+    N = 22
+
+    def __init__(self, win):
+        super().__init__()
+        self.win = win
+        self.set_size_request(-1, 34)
+        self.levels = [0.08] * self.N
+        self.targets = [0.08] * self.N
+        self.connect('draw', self.draw)
+
+    def step(self, playing):
+        for i in range(self.N):
+            if playing and random.random() < 0.35:
+                shape = 0.55 + 0.45 * math.sin(i / self.N * math.pi)
+                self.targets[i] = random.uniform(0.15, 1.0) * shape
+            elif not playing:
+                self.targets[i] = 0.06
+            self.levels[i] += (self.targets[i] - self.levels[i]) * 0.35
+        self.queue_draw()
+
+    def draw(self, w, cr):
+        c = self.win.c
+        Wd, H = w.get_allocated_width(), w.get_allocated_height()
+        bw = Wd / self.N
+        g = cairo.LinearGradient(0, H, 0, 0)
+        g.add_color_stop_rgba(0, *c['cyan'], 0.9)
+        g.add_color_stop_rgba(1, *c['magenta'], 0.9)
+        for i, v in enumerate(self.levels):
+            h = max(2, v * H)
+            ui.rounded(cr, i * bw + 1.5, H - h, bw - 3, h, 1.5)
+        cr.set_source(g)
+        cr.fill()
+        return False
+
+
+class Progress(Gtk.DrawingArea):
+    def __init__(self, win):
+        super().__init__()
+        self.win = win
+        self.set_size_request(-1, 18)
+        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK |
+                        Gdk.EventMask.POINTER_MOTION_MASK)
+        self.drag = None
+        self.connect('draw', self.draw)
+        self.connect('button-press-event', self.press)
+        self.connect('motion-notify-event', self.motion)
+        self.connect('button-release-event', self.release)
+        self.connect('realize', lambda w: w.get_window().set_cursor(
+            Gdk.Cursor.new_from_name(w.get_display(), 'pointer')))
+
+    def frac(self):
+        st = self.win.st
+        if self.drag is not None:
+            return self.drag
+        if not st or not st['length']:
+            return 0
+        return max(0.0, min(1.0, self.win.position() / st['length']))
+
+    def press(self, w, ev):
+        self.drag = max(0.0, min(1.0, ev.x / w.get_allocated_width()))
+        self.queue_draw()
+
+    def motion(self, w, ev):
+        if self.drag is not None:
+            self.drag = max(0.0, min(1.0, ev.x / w.get_allocated_width()))
+            self.queue_draw()
+
+    def release(self, w, _ev):
+        if self.drag is not None and self.win.st and self.win.st['length']:
+            self.win.seek_to(self.drag * self.win.st['length'])
+        self.drag = None
+
+    def draw(self, w, cr):
+        c = self.win.c
+        Wd, H = w.get_allocated_width(), w.get_allocated_height()
+        y = H / 2
+        f = self.frac()
+        ui.rounded(cr, 0, y - 2, Wd, 4, 2)
+        cr.set_source_rgba(*c['fg'], 0.12)
+        cr.fill()
+        if f > 0:
+            g = cairo.LinearGradient(0, 0, Wd, 0)
+            g.add_color_stop_rgba(0, *c['cyan'], 1)
+            g.add_color_stop_rgba(1, *c['magenta'], 1)
+            ui.rounded(cr, 0, y - 2, Wd * f, 4, 2)
+            cr.set_source(g)
+            cr.fill()
+        x = Wd * f
+        cr.arc(x, y, 9, 0, 2 * math.pi)
+        cr.set_source_rgba(*c['cyan'], 0.18)
+        cr.fill()
+        cr.arc(x, y, 5, 0, 2 * math.pi)
+        cr.set_source_rgba(*c['fg'], 1)
+        cr.fill()
+        return False
+
+
+# ─────────────────────────────────────────────────────────────── window
+class Player(Gtk.Window):
+    def __init__(self):
+        super().__init__(type=Gtk.WindowType.POPUP)
+        self.set_title('MusicPlayer')
+        ui.rgba_window(self)
+        self.pal = ui.load_palette()
+        self.c = ui.rgb_palette(self.pal)
+        self.be = Backend()
+        self.players, self.player = [], None
+        self.st, self.st_time = None, time.monotonic()
+        self.art_url, self.art_pix, self.backdrop = None, None, None
+        self.closing, self.t0 = None, time.monotonic()
+        self.alive = True
+        self.install_css()
+
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        outer.get_style_context().add_class('hud')
+        self.add(outer)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        box.get_style_context().add_class('player')
+        box.set_size_request(W, -1)
+        outer.pack_start(box, True, True, 0)
+
+        head = Gtk.Box(spacing=8)
+        title = Gtk.Label(xalign=0)
+        title.set_markup(f'<span foreground="{self.pal["cyan"]}">󰎈</span>  NOW '
+                         f'<span foreground="{self.pal["magenta"]}">//</span> PLAYING')
+        title.get_style_context().add_class('ptitle')
+        head.pack_start(title, True, True, 0)
+        self.src = Gtk.Button(label='…')
+        self.src.get_style_context().add_class('chip')
+        self.src.set_tooltip_text('Switch player (Tab)')
+        self.src.connect('clicked', lambda *_: self.next_player())
+        head.pack_end(self.src, False, False, 0)
+        box.pack_start(head, False, False, 0)
+
+        mid = Gtk.Box(spacing=16)
+        self.art = Art(self)
+        mid.pack_start(self.art, False, False, 0)
+        info = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        info.set_valign(Gtk.Align.CENTER)
+        self.l_title = Gtk.Label(xalign=0)
+        self.l_title.set_line_wrap(True)
+        self.l_title.set_lines(2)
+        self.l_title.set_ellipsize(3)
+        self.l_title.set_max_width_chars(22)
+        self.l_title.get_style_context().add_class('song')
+        info.pack_start(self.l_title, False, False, 0)
+        self.l_artist = Gtk.Label(xalign=0)
+        self.l_artist.set_ellipsize(3)
+        self.l_artist.set_max_width_chars(26)
+        self.l_artist.get_style_context().add_class('artist')
+        info.pack_start(self.l_artist, False, False, 0)
+        self.l_album = Gtk.Label(xalign=0)
+        self.l_album.set_ellipsize(3)
+        self.l_album.set_max_width_chars(28)
+        self.l_album.get_style_context().add_class('album')
+        info.pack_start(self.l_album, False, False, 0)
+        self.eq = Equalizer(self)
+        info.pack_start(self.eq, False, False, 8)
+        mid.pack_start(info, True, True, 0)
+        box.pack_start(mid, False, False, 0)
+
+        self.prog = Progress(self)
+        box.pack_start(self.prog, False, False, 0)
+        times = Gtk.Box()
+        self.l_pos = Gtk.Label(label='0:00')
+        self.l_len = Gtk.Label(label='0:00')
+        for lb in (self.l_pos, self.l_len):
+            lb.get_style_context().add_class('time')
+        times.pack_start(self.l_pos, False, False, 0)
+        times.pack_end(self.l_len, False, False, 0)
+        box.pack_start(times, False, False, 0)
+
+        ctl = Gtk.Box(spacing=10)
+        ctl.set_halign(Gtk.Align.CENTER)
+        self.b_shuffle = self.ctl_btn('󰒟', 'Shuffle', lambda: self.act('shuffle'))
+        self.b_prev = self.ctl_btn('󰒮', 'Previous (P)', lambda: self.act('prev'))
+        self.b_play = self.ctl_btn('󰐊', 'Play / pause (Space)', lambda: self.act('toggle'), 'play')
+        self.b_next = self.ctl_btn('󰒭', 'Next (N)', lambda: self.act('next'))
+        self.b_loop = self.ctl_btn('󰑗', 'Loop', lambda: self.act('loop', self.st and self.st['loop']))
+        for b in (self.b_shuffle, self.b_prev, self.b_play, self.b_next, self.b_loop):
+            ctl.pack_start(b, False, False, 0)
+        box.pack_start(ctl, False, False, 2)
+
+        vol = Gtk.Box(spacing=10)
+        self.l_vol = Gtk.Label(label='󰕾')
+        self.l_vol.get_style_context().add_class('vicon')
+        vol.pack_start(self.l_vol, False, False, 0)
+        self.vol = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
+        self.vol.set_draw_value(False)
+        self.vol_lock = False
+        self.vol.connect('value-changed', self.on_vol)
+        vol.pack_start(self.vol, True, True, 0)
+        self.l_volp = Gtk.Label(label='--%')
+        self.l_volp.get_style_context().add_class('time')
+        self.l_volp.set_width_chars(4)
+        vol.pack_start(self.l_volp, False, False, 0)
+        box.pack_start(vol, False, False, 0)
+
+        self.empty = Gtk.Label(label='')
+        self.empty.get_style_context().add_class('album')
+        box.pack_start(self.empty, False, False, 0)
+        foot = Gtk.Label(label='SPACE PLAY   ·   ←→ SEEK   ·   ↑↓ VOLUME   ·   TAB PLAYER   ·   ESC')
+        foot.get_style_context().add_class('foot')
+        box.pack_start(foot, False, False, 0)
+
+        self.add_events(Gdk.EventMask.KEY_PRESS_MASK | Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.connect('key-press-event', self.on_key)
+        self.connect('button-press-event', self.on_click)
+        self.connect('draw', self.on_draw)
+        self.connect('map-event', lambda *_: ui.grab_input(self))
+        self.connect('destroy', self.on_destroy)
+        self.connect('size-allocate', lambda *_: self.place())
+        self.add_tick_callback(self.fade)
+        threading.Thread(target=self.poll_loop, daemon=True).start()
+        GLib.timeout_add(66, self.animate)
+        self.render()
+
+    # ─────────────────────────────────────────────────────── ui helpers
+    def install_css(self):
+        css = Gtk.CssProvider()
+        css.load_from_data((ui.hud_css(self.pal) + '''
+.player { padding: 18px 20px 12px 20px; }
+.hud label.ptitle { font-size: 9pt; font-weight: 800; letter-spacing: 4px; }
+.hud label.song { font-size: 13pt; font-weight: 800; }
+.hud label.artist { font-size: 10pt; color: @cyan; font-weight: 700; }
+.hud label.album { font-size: 8pt; color: alpha(@fg, 0.55); }
+.hud label.time { font-size: 8pt; color: alpha(@fg, 0.6); font-weight: 700; }
+.hud label.vicon { font-size: 13pt; color: @accent; }
+.hud label.foot { font-size: 6.5pt; letter-spacing: 2px; color: alpha(@fg, 0.35); }
+button.chip { background-image: none; background-color: alpha(@black, 0.6); box-shadow: none;
+              border: 1px solid alpha(@accent2, 0.5); border-radius: 9px; padding: 2px 10px;
+              color: @accent2; font-size: 8pt; font-weight: 800; letter-spacing: 1px; min-height: 0; }
+button.chip:hover { box-shadow: 0 0 12px alpha(@accent2, 0.35); }
+button.ctl { background-image: none; background-color: alpha(@black, 0.45); box-shadow: none;
+             border: 1px solid alpha(@fg, 0.08); border-radius: 50%; min-width: 40px; min-height: 40px;
+             padding: 0; color: @fg; font-size: 15pt; }
+button.ctl:hover { border-color: @accent; color: @accent; box-shadow: 0 0 14px alpha(@accent, 0.3); }
+button.ctl.on { color: @cyan; border-color: alpha(@cyan, 0.7); }
+button.ctl:disabled { color: alpha(@fg, 0.2); }
+button.play { min-width: 58px; min-height: 58px; font-size: 22pt; color: @bg;
+              background-color: @cyan; border: none; box-shadow: 0 0 22px alpha(@cyan, 0.5); }
+button.play:hover { background-color: @accent; color: @bg; }
+/* .hud label sets every label to @fg: give the button glyphs their colors back */
+.hud button.chip label { color: @accent2; }
+.hud button.ctl:hover label { color: @accent; }
+.hud button.ctl.on label { color: @cyan; }
+.hud button.ctl:disabled label { color: alpha(@fg, 0.2); }
+.hud button.play label, .hud button.play:hover label { color: @bg; }
+scale trough { background-color: alpha(@fg, 0.12); border-radius: 4px; min-height: 4px; }
+scale highlight { background-image: linear-gradient(to right, @cyan, @accent2); border-radius: 4px; }
+scale slider { background-color: @fg; border-radius: 50%; min-width: 12px; min-height: 12px;
+               box-shadow: 0 0 10px alpha(@cyan, 0.5); }
+''').encode())
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css,
+                                                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+    def ctl_btn(self, icon, tip, cb, extra=None):
+        b = Gtk.Button(label=icon)
+        b.get_style_context().add_class('ctl')
+        if extra:
+            b.get_style_context().add_class(extra)
+        b.set_tooltip_text(tip)
+        b.set_valign(Gtk.Align.CENTER)
+        b.connect('clicked', lambda *_: cb())
+        return b
+
+    def place(self):
+        geo = ui.monitor_geometry()
+        w, _h = self.get_size()
+        try:
+            import barconf
+            conf = barconf.load()
+            top = conf['height'] + conf['offset_y'] + 10 if conf['position'] == 'top' else 14
+        except Exception:
+            top = 50
+        self.move(geo.x + geo.width - w - 14, geo.y + top)
+
+    # ─────────────────────────────────────────────────────── data
+    def poll_loop(self):
+        while self.alive:
+            players = self.be.players()
+            player = self.player if self.player in players else None
+            if player is None and players:
+                states = {p: self.be.state(p) for p in players}
+                playing = [p for p, s in states.items() if s and s['status'] == 'Playing']
+                player = playing[0] if playing else players[0]
+            st = self.be.state(player) if player else None
+            art = self.be.art_path(st['art']) if st else ''
+            GLib.idle_add(self.update, players, player, st, art)
+            time.sleep(1)
+
+    def update(self, players, player, st, art):
+        self.players, self.player = players, player
+        self.st, self.st_time = st, time.monotonic()
+        key = art or None
+        if key != self.art_url:
+            self.art_url = key
+            self.art_pix = None
+            self.backdrop = None
+            if art:
+                try:
+                    self.art_pix = GdkPixbuf.Pixbuf.new_from_file_at_scale(art, ART * 2, ART * 2, True)
+                    small = self.art_pix.scale_simple(12, 12, GdkPixbuf.InterpType.BILINEAR)
+                    self.backdrop = small.scale_simple(96, 96, GdkPixbuf.InterpType.BILINEAR)
+                except GLib.Error:
+                    self.art_pix = None
+            self.art.queue_draw()
+            self.queue_draw()
+        self.render()
+        return False
+
+    def position(self):
+        st = self.st
+        if not st:
+            return 0
+        pos = st['position']
+        if st['status'] == 'Playing':
+            pos += time.monotonic() - self.st_time
+        return min(pos, st['length'] or pos)
+
+    def render(self):
+        st = self.st
+        n = len(self.players)
+        self.src.set_label(f'󰓃  {self.be.pretty(self.player).upper()}' + (f'  {n}' if n > 1 else '')
+                           if self.player else '󰓄  NO PLAYER')
+        if not st:
+            self.l_title.set_text('Nothing playing')
+            self.l_artist.set_text('open a player or MPD')
+            self.l_album.set_text('')
+            self.empty.set_markup('<span>󰝚  </span>Start music in a browser, Spotify, mpv… or MPD')
+            self.empty.show()
+            for b in (self.b_prev, self.b_play, self.b_next, self.b_shuffle, self.b_loop):
+                b.set_sensitive(False)
+            return
+        self.empty.hide()
+        for b in (self.b_prev, self.b_play, self.b_next):
+            b.set_sensitive(True)
+        self.l_title.set_text(st['title'])
+        self.l_artist.set_text(st['artist'] or '—')
+        self.l_album.set_text(st['album'])
+        self.b_play.set_label('󰏤' if st['status'] == 'Playing' else '󰐊')
+        self.b_shuffle.set_sensitive(st['can_shuffle'])
+        self.b_loop.set_sensitive(st['can_loop'])
+        (self.b_shuffle.get_style_context().add_class if st['shuffle']
+         else self.b_shuffle.get_style_context().remove_class)('on')
+        self.b_loop.set_label('󰑘' if st['loop'] == 'Track' else '󰑖')
+        (self.b_loop.get_style_context().add_class if st['loop'] != 'None'
+         else self.b_loop.get_style_context().remove_class)('on')
+        self.l_len.set_text(fmt_time(st['length']))
+        if not self.vol_lock:
+            self.vol_lock = True
+            self.vol.set_value(st['volume'] * 100)
+            self.vol_lock = False
+        v = st['volume'] * 100
+        self.l_volp.set_text(f'{v:.0f}%')
+        self.l_vol.set_text('󰝟' if v < 1 else '󰕿' if v < 34 else '󰖀' if v < 67 else '󰕾')
+
+    def animate(self):
+        if not self.alive:
+            return False
+        playing = bool(self.st and self.st['status'] == 'Playing')
+        # only moves while playing: an idle player costs the compositor nothing
+        if playing or max(self.eq.levels) > 0.07:
+            self.eq.step(playing)
+        if playing:
+            self.l_pos.set_text(fmt_time(self.position()))
+            self.prog.queue_draw()
+            self.art.queue_draw()
+        elif self.st:
+            self.l_pos.set_text(fmt_time(self.position()))
+        return True
+
+    # ─────────────────────────────────────────────────────── actions
+    def act(self, action, arg=None):
+        if self.player:
+            self.be.cmd(self.player, action, arg)
+            if action == 'toggle' and self.st:
+                # instant feedback, the poller confirms it a moment later
+                self.st['position'] = self.position()
+                self.st_time = time.monotonic()
+                self.st['status'] = 'Paused' if self.st['status'] == 'Playing' else 'Playing'
+                self.render()
+
+    def seek_to(self, secs):
+        if self.st:
+            self.act('seek', secs)
+            self.st['position'], self.st_time = secs, time.monotonic()
+            self.prog.queue_draw()
+
+    def on_vol(self, s):
+        if self.vol_lock or not self.st:
+            return
+        self.act('volume', s.get_value() / 100)
+        self.st['volume'] = s.get_value() / 100
+        self.render()
+
+    def next_player(self):
+        if len(self.players) > 1:
+            i = self.players.index(self.player) if self.player in self.players else -1
+            self.player = self.players[(i + 1) % len(self.players)]
+            self.st = self.be.state(self.player)
+            self.st_time = time.monotonic()
+            self.art_url = 'switch'
+            threading.Thread(target=lambda: GLib.idle_add(
+                self.update, self.players, self.player, self.st,
+                self.be.art_path(self.st['art']) if self.st else ''), daemon=True).start()
+
+    # ─────────────────────────────────────────────────────── events
+    def on_key(self, _w, ev):
+        k = ev.keyval
+        if k == Gdk.KEY_Escape:
+            self.close()
+        elif k in (Gdk.KEY_space, Gdk.KEY_Return):
+            self.act('toggle')
+        elif k in (Gdk.KEY_n, Gdk.KEY_N):
+            self.act('next')
+        elif k in (Gdk.KEY_p, Gdk.KEY_P):
+            self.act('prev')
+        elif k in (Gdk.KEY_Left, Gdk.KEY_Right) and self.st:
+            self.seek_to(max(0, self.position() + (5 if k == Gdk.KEY_Right else -5)))
+        elif k in (Gdk.KEY_Up, Gdk.KEY_Down):
+            self.vol.set_value(self.vol.get_value() + (5 if k == Gdk.KEY_Up else -5))
+        elif k in (Gdk.KEY_Tab, Gdk.KEY_ISO_Left_Tab):
+            self.next_player()
+        else:
+            return False
+        return True
+
+    def on_click(self, _w, ev):
+        w, h = self.get_size()
+        wx, wy = self.get_position()
+        if not (wx <= ev.x_root <= wx + w and wy <= ev.y_root <= wy + h):
+            self.close()
+        return False
+
+    def on_draw(self, w, cr):
+        c = self.c
+        Wd, H = w.get_allocated_width(), w.get_allocated_height()
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+        ui.rounded(cr, 0.5, 0.5, Wd - 1, H - 1, 22)
+        cr.save()
+        cr.clip_preserve()
+        cr.set_source_rgba(*c['bg'], 0.96)
+        cr.fill_preserve()
+        if self.backdrop:
+            # blurred cover wash
+            k = max(Wd, H) / self.backdrop.get_width()
+            cr.save()
+            cr.scale(k, k)
+            Gdk.cairo_set_source_pixbuf(cr, self.backdrop, 0, (H / k - self.backdrop.get_height()) / 2)
+            cr.get_source().set_filter(cairo.FILTER_BILINEAR)
+            cr.paint_with_alpha(0.28)
+            cr.restore()
+            lg = cairo.LinearGradient(0, 0, 0, H)
+            lg.add_color_stop_rgba(0, *c['bg'], 0.35)
+            lg.add_color_stop_rgba(1, *c['bg'], 0.85)
+            cr.set_source(lg)
+            cr.paint()
+        cr.restore()
+        g = cairo.LinearGradient(0, 0, Wd, H)
+        g.add_color_stop_rgba(0, *c['cyan'], 0.6)
+        g.add_color_stop_rgba(1, *c['magenta'], 0.6)
+        cr.set_source(g)
+        cr.set_line_width(1.2)
+        cr.stroke()
+        return False
+
+    def fade(self, *_):
+        now = time.monotonic()
+        if self.closing:
+            a = 1 - (now - self.closing) / 0.12
+            if a <= 0:
+                self.destroy()
+                return False
+        else:
+            a = min(1.0, (now - self.t0) / 0.15)
+        if self.get_window():
+            self.get_window().set_opacity(max(0.0, a))
+        return self.closing is not None or a < 1.0
+
+    def close(self):
+        if not self.closing:
+            self.closing = time.monotonic()
+            self.add_tick_callback(self.fade)
+
+    def on_destroy(self, *_):
+        self.alive = False
+        Gtk.main_quit()
+
+
+def main():
+    GLib.set_prgname('MusicPlayer')
+    _lock = ui.single_instance('musicplayer', toggle=True)  # noqa: F841
+    win = Player()
+    ui.quit_on_sigterm(win.close)
+    win.show_all()
+    win.render()
+    Gtk.main()
+
+
+if __name__ == '__main__':
+    main()

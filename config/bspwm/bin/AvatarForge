@@ -1,0 +1,393 @@
+#!/usr/bin/env python3
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# AvatarForge - profile picture tool of the rice
+#   ✔ Takes the .png files (only .png) of rices/<rice>/user_icons
+#     (user_logo.png is the default one)
+#   ✔ Picture mode: the image as it is, scaled to fit
+#   ✔ ASCII mode: turns it into ASCII art drawn with JetBrainsMono:
+#     columns, character set, colors (picture / palette gradient /
+#     single color), invert, contrast, background — live preview
+#   ✔ Apply: UserCard and RiceEditor show it right away
+#   ✔ Copy the ASCII art as text
+#
+# Usage: AvatarForge            open the tool
+#        AvatarForge --apply    re-render the saved choice (theme apply)
+#        AvatarForge --text     print the ASCII art
+#
+# Dependencies: python-pillow, python-gobject
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+import io
+import os
+import sys
+import subprocess
+
+sys.path.insert(0, os.path.expanduser('~/.config/bspwm/lib'))
+import avatar  # noqa: E402
+
+PREVIEW = 300
+
+
+def gui():
+    import riceui as ui
+    from riceui import Gtk, Gdk, GLib, GdkPixbuf, cairo
+
+    def to_pixbuf(img):
+        buf = io.BytesIO()
+        img.save(buf, 'PNG')
+        loader = GdkPixbuf.PixbufLoader.new_with_type('png')
+        loader.write(buf.getvalue())
+        loader.close()
+        return loader.get_pixbuf()
+
+    class Forge(Gtk.Window):
+        def __init__(self):
+            super().__init__(title='AvatarForge')
+            self.set_wmclass('AvatarForge', 'AvatarForge')
+            self.set_type_hint(Gdk.WindowTypeHint.DIALOG)   # bspwm floats it
+            self.set_default_size(940, 560)
+            self.set_position(Gtk.WindowPosition.CENTER)
+            self.pal = ui.load_palette()
+            self.c = ui.rgb_palette(self.pal)
+            self.conf = avatar.load()
+            self.loading = True
+            self.timer = None
+            self.preview = None
+            self.install_css()
+
+            root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+            root.get_style_context().add_class('hud')
+            root.get_style_context().add_class('forge')
+            self.add(root)
+
+            head = Gtk.Box(spacing=10)
+            t = Gtk.Label(xalign=0)
+            t.set_markup(f'<span foreground="{self.pal["cyan"]}">󰀄</span>  AVATAR '
+                         f'<span foreground="{self.pal["magenta"]}">//</span> FORGE')
+            t.get_style_context().add_class('title')
+            head.pack_start(t, True, True, 0)
+            path = Gtk.Label(label=avatar.icons_dir().replace(avatar.HOME, '~') + '/*.png')
+            path.get_style_context().add_class('dim')
+            head.pack_end(path, False, False, 0)
+            root.pack_start(head, False, False, 0)
+
+            body = Gtk.Box(spacing=18)
+            root.pack_start(body, True, True, 0)
+
+            # ── sources
+            left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            left.get_style_context().add_class('col')
+            body.pack_start(left, False, False, 0)
+            left.pack_start(self.section('SOURCE'), False, False, 0)
+            sc = Gtk.ScrolledWindow()
+            sc.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            sc.set_size_request(230, -1)
+            self.flow = Gtk.FlowBox()
+            self.flow.set_valign(Gtk.Align.START)
+            self.flow.set_selection_mode(Gtk.SelectionMode.NONE)
+            self.flow.set_max_children_per_line(2)
+            self.flow.set_min_children_per_line(2)
+            self.flow.set_row_spacing(8)
+            self.flow.set_column_spacing(8)
+            sc.add(self.flow)
+            left.pack_start(sc, True, True, 0)
+            row = Gtk.Box(spacing=6)
+            for label, cb in (('󰉋  Folder', self.open_folder), ('󰑓  Refresh', lambda *_: self.fill_sources())):
+                b = Gtk.Button(label=label)
+                b.get_style_context().add_class('chip')
+                b.connect('clicked', cb)
+                row.pack_start(b, True, True, 0)
+            left.pack_start(row, False, False, 0)
+
+            # ── preview
+            mid = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            body.pack_start(mid, True, True, 0)
+            mid.pack_start(self.section('PREVIEW'), False, False, 0)
+            self.area = Gtk.DrawingArea()
+            self.area.set_size_request(PREVIEW + 40, PREVIEW + 40)
+            self.area.connect('draw', self.on_draw)
+            mid.pack_start(self.area, True, True, 0)
+            self.info = Gtk.Label(label='')
+            self.info.get_style_context().add_class('dim')
+            mid.pack_start(self.info, False, False, 0)
+
+            # ── options
+            right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+            right.get_style_context().add_class('col')
+            right.set_size_request(270, -1)
+            body.pack_start(right, False, False, 0)
+            right.pack_start(self.section('MODE'), False, False, 0)
+            modes = Gtk.Box(spacing=6, homogeneous=True)
+            self.mode_btns = {}
+            for key, label in (('image', '󰋩  PICTURE'), ('ascii', '󰯂  ASCII')):
+                b = Gtk.Button(label=label)
+                b.get_style_context().add_class('mode')
+                b.connect('clicked', lambda _b, k=key: self.set('mode', k))
+                modes.pack_start(b, True, True, 0)
+                self.mode_btns[key] = b
+            right.pack_start(modes, False, False, 0)
+
+            self.pic_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            right.pack_start(self.pic_box, False, False, 0)
+            self.plate = self.toggle('Light plate (dark logos)', self.conf['plate'], 'plate', box=self.pic_box)
+            self.ascii_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            right.pack_start(self.ascii_box, False, False, 0)
+            self.ascii_box.pack_start(self.section('ASCII'), False, False, 4)
+            self.cols = self.slider('Columns', 16, 120, 1, self.conf['cols'], 'cols', int)
+            self.contrast = self.slider('Contrast', 0.6, 2.5, 0.1, self.conf['contrast'], 'contrast', float)
+            self.charset = self.combo('Characters', [(k, f'{k}  {v.strip()[:10]}') for k, v in
+                                                     avatar.CHARSETS.items()], self.conf['charset'], 'charset')
+            self.color = self.combo('Colors', avatar.COLOR_MODES, self.conf['color'], 'color')
+            self.invert = self.toggle('Invert', self.conf['invert'], 'invert')
+            self.bgsw = self.toggle('Background', self.conf['background'], 'background')
+
+            right.pack_start(Gtk.Box(), True, True, 0)
+            copy = Gtk.Button(label='󰆏  Copy ASCII text')
+            copy.get_style_context().add_class('chip')
+            copy.connect('clicked', self.copy_text)
+            right.pack_start(copy, False, False, 0)
+            apply = Gtk.Button(label='󰄬   APPLY AVATAR')
+            apply.get_style_context().add_class('go')
+            apply.connect('clicked', self.apply)
+            right.pack_start(apply, False, False, 0)
+
+            self.toast = Gtk.Label(label='CLICK A SOURCE · TUNE · APPLY   ·   ESC CLOSE')
+            self.toast.get_style_context().add_class('foot')
+            root.pack_start(self.toast, False, False, 0)
+
+            self.connect('key-press-event', self.on_key)
+            self.connect('destroy', Gtk.main_quit)
+            self.fill_sources()
+            self.sync_mode()
+            self.loading = False
+            self.refresh()
+
+        # ─────────────────────────────────────────────────────── widgets
+        def install_css(self):
+            css = Gtk.CssProvider()
+            css.load_from_data((ui.hud_css(self.pal) + '''
+window { background-color: @bg; }
+.forge { padding: 20px 22px 14px 22px; }
+.title { font-size: 12pt; font-weight: 800; letter-spacing: 4px; }
+.section { font-size: 7pt; font-weight: 800; letter-spacing: 3px; color: @accent2; }
+.col { background-color: alpha(@black, 0.55); border: 1px solid alpha(@fg, 0.06);
+       border-radius: 16px; padding: 14px; }
+.opt { font-size: 9pt; }
+button.src { background-image: none; background-color: alpha(@bg, 0.8); box-shadow: none;
+             border: 1px solid alpha(@fg, 0.08); border-radius: 12px; padding: 6px; }
+button.src:hover { border-color: @accent; }
+button.src.active { border-color: @cyan; box-shadow: 0 0 14px alpha(@cyan, 0.35); }
+button.src label { font-size: 7pt; }
+button.mode, button.chip { background-image: none; background-color: alpha(@bg, 0.8); box-shadow: none;
+             border: 1px solid alpha(@fg, 0.1); border-radius: 10px; padding: 6px 8px; color: @fg;
+             font-size: 8pt; font-weight: 700; }
+button.mode:hover, button.chip:hover { border-color: @accent; }
+button.mode.active { border-color: @accent2; color: @accent2; box-shadow: 0 0 14px alpha(@accent2, 0.3); }
+button.go { background-image: none; background-color: alpha(@cyan, 0.12); box-shadow: 0 0 16px alpha(@cyan, 0.25);
+            border: 1px solid @cyan; border-radius: 12px; padding: 9px; color: @cyan;
+            font-weight: 800; letter-spacing: 2px; }
+button.go:hover { background-color: alpha(@cyan, 0.22); }
+scale trough { background-color: alpha(@fg, 0.12); border-radius: 4px; min-height: 4px; }
+scale highlight { background-color: @accent; border-radius: 4px; }
+scale slider { background-color: @cyan; border-radius: 50%; min-width: 12px; min-height: 12px; }
+switch { background-color: alpha(@fg, 0.12); border-radius: 12px; }
+switch:checked { background-color: @accent; }
+combobox button { background-image: none; background-color: alpha(@bg, 0.8); border: 1px solid alpha(@fg, 0.1);
+                  border-radius: 8px; box-shadow: none; color: @fg; }
+.foot { font-size: 7pt; letter-spacing: 2px; color: alpha(@fg, 0.4); }
+''').encode())
+            Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css,
+                                                     Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+        def section(self, text):
+            lb = Gtk.Label(label=text, xalign=0)
+            lb.get_style_context().add_class('section')
+            return lb
+
+        def opt_row(self, title, widget, value_label=None, box=None):
+            r = Gtk.Box(spacing=8)
+            lb = Gtk.Label(label=title, xalign=0)
+            lb.get_style_context().add_class('opt')
+            r.pack_start(lb, False, False, 0)
+            if value_label:
+                r.pack_end(value_label, False, False, 0)
+            r.pack_end(widget, True, True, 0)
+            (box or self.ascii_box).pack_start(r, False, False, 0)
+
+        def slider(self, title, lo, hi, step, value, key, cast):
+            sc = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, lo, hi, step)
+            sc.set_draw_value(False)
+            sc.set_value(float(value))
+            val = Gtk.Label(label=str(value))
+            val.get_style_context().add_class('dim')
+            val.set_width_chars(4)
+
+            def changed(s):
+                v = cast(round(s.get_value(), 1))
+                val.set_text(str(v))
+                self.set(key, v)
+            sc.connect('value-changed', changed)
+            self.opt_row(title, sc, val)
+            return sc
+
+        def combo(self, title, items, active, key):
+            cb = Gtk.ComboBoxText()
+            for k, label in items:
+                cb.append(k, label)
+            cb.set_active_id(active)
+            cb.connect('changed', lambda c: self.set(key, c.get_active_id()))
+            self.opt_row(title, cb)
+            return cb
+
+        def toggle(self, title, active, key, box=None):
+            sw = Gtk.Switch()
+            sw.set_active(bool(active))
+            sw.set_halign(Gtk.Align.END)
+            sw.connect('notify::active', lambda s, _p: self.set(key, s.get_active()))
+            self.opt_row(title, sw, box=box)
+            return sw
+
+        def fill_sources(self, *_):
+            for ch in self.flow.get_children():
+                ch.destroy()
+            self.src_btns = {}
+            icons = avatar.list_icons()
+            if not icons:
+                lb = Gtk.Label(label='No .png files in\nuser_icons yet')
+                lb.get_style_context().add_class('dim')
+                self.flow.add(lb)
+            for path in icons:
+                name = os.path.basename(path)
+                b = Gtk.Button()
+                b.get_style_context().add_class('src')
+                v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+                try:
+                    img = Gtk.Image.new_from_pixbuf(GdkPixbuf.Pixbuf.new_from_file_at_scale(path, 72, 72, True))
+                except GLib.Error:
+                    img = Gtk.Image.new_from_icon_name('image-missing', Gtk.IconSize.DIALOG)
+                v.pack_start(img, False, False, 0)
+                lb = Gtk.Label(label=name)
+                lb.set_max_width_chars(12)
+                lb.set_ellipsize(3)
+                v.pack_start(lb, False, False, 0)
+                b.add(v)
+                b.set_tooltip_text(name)
+                b.connect('clicked', lambda _b, n=name: self.set('source', n))
+                self.flow.add(b)
+                self.src_btns[name] = b
+            self.mark(self.src_btns, self.conf.get('source'))
+            self.flow.show_all()
+
+        @staticmethod
+        def mark(btns, active):
+            for k, b in btns.items():
+                (b.get_style_context().add_class if k == active else b.get_style_context().remove_class)('active')
+
+        def sync_mode(self):
+            self.mark(self.mode_btns, self.conf['mode'])
+            self.ascii_box.set_sensitive(self.conf['mode'] == 'ascii')
+            self.pic_box.set_sensitive(self.conf['mode'] != 'ascii')
+            if hasattr(self, 'src_btns'):
+                self.mark(self.src_btns, self.conf.get('source'))
+
+        # ─────────────────────────────────────────────────────── logic
+        def set(self, key, value):
+            if self.loading:
+                return
+            self.conf[key] = value
+            self.sync_mode()
+            if self.timer:
+                GLib.source_remove(self.timer)
+            self.timer = GLib.timeout_add(140, self.refresh)
+
+        def refresh(self):
+            self.timer = None
+            try:
+                img = avatar._source(self.conf)
+                if self.conf['mode'] == 'ascii':
+                    res = avatar.render_ascii(img, self.conf, PREVIEW)
+                    self.info.set_text(f'ASCII · {self.conf["cols"]} columns · {self.conf["charset"]}')
+                else:
+                    res = avatar.render_picture(img, PREVIEW, self.conf.get('plate'))
+                    self.info.set_text(f'PICTURE · {img.width}×{img.height} px scaled to fit')
+                self.preview = to_pixbuf(res)
+            except Exception as e:  # a broken png must not kill the tool
+                self.preview = None
+                self.info.set_text(f'cannot read this image: {e}')
+            self.area.queue_draw()
+            return False
+
+        def on_draw(self, w, cr):
+            W, H = w.get_allocated_width(), w.get_allocated_height()
+            s = min(W, H) - 30
+            x0, y0 = (W - s) / 2, (H - s) / 2
+            c = self.c
+            ui.rounded(cr, x0 - 6, y0 - 6, s + 12, s + 12, s * 0.22 + 6)
+            g = cairo.LinearGradient(x0, y0, x0 + s, y0 + s)
+            g.add_color_stop_rgba(0, *c['cyan'], 0.9)
+            g.add_color_stop_rgba(1, *c['magenta'], 0.9)
+            cr.set_source(g)
+            cr.set_line_width(2)
+            cr.stroke()
+            ui.rounded(cr, x0, y0, s, s, s * 0.22)
+            cr.save()
+            cr.clip()
+            cr.set_source_rgb(*c['black'])
+            cr.paint()
+            if self.preview:
+                k = s / self.preview.get_width()
+                cr.translate(x0, y0)
+                cr.scale(k, k)
+                Gdk.cairo_set_source_pixbuf(cr, self.preview, 0, 0)
+                cr.get_source().set_filter(cairo.FILTER_GOOD)
+                cr.paint()
+            cr.restore()
+            return False
+
+        def apply(self, *_):
+            avatar.save(self.conf)
+            avatar.render(self.conf)
+            self.toast.set_text('AVATAR APPLIED — USERCARD AND RICEEDITOR ARE UPDATED')
+            subprocess.Popen(['dunstify', '-r', '4455', '-i', avatar.OUT, 'Avatar', 'New profile picture applied'],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        def copy_text(self, *_):
+            txt = avatar.ascii_text(self.conf)
+            p = subprocess.Popen(['xclip', '-selection', 'clipboard'], stdin=subprocess.PIPE)
+            p.communicate(txt.encode())
+            self.toast.set_text('ASCII TEXT COPIED TO THE CLIPBOARD')
+
+        def open_folder(self, *_):
+            os.makedirs(avatar.icons_dir(), exist_ok=True)
+            subprocess.Popen(['xdg-open', avatar.icons_dir()], start_new_session=True)
+
+        def on_key(self, _w, ev):
+            if ev.keyval == Gdk.KEY_Escape:
+                self.destroy()
+                return True
+            return False
+
+    GLib.set_prgname('AvatarForge')
+    _lock = ui.single_instance('avatarforge', toggle=True)  # noqa: F841
+    win = Forge()
+    ui.quit_on_sigterm(win.destroy)
+    win.show_all()
+    Gtk.main()
+
+
+def main():
+    if '--apply' in sys.argv:
+        avatar.render()
+    elif '--text' in sys.argv:
+        print(avatar.ascii_text())
+    else:
+        gui()
+
+
+if __name__ == '__main__':
+    main()
