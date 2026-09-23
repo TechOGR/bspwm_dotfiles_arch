@@ -1120,7 +1120,7 @@ class RiceEditor(Gtk.Window):
             self.stack.add_named(scroller, key)
 
         self.connect('key-press-event', self.on_key)
-        self.connect('destroy', Gtk.main_quit)
+        self.connect('destroy', self.on_destroy)
         self.go('dashboard')
         self.loading = False
         GLib.timeout_add_seconds(1, self.update_stats)
@@ -1212,6 +1212,8 @@ class RiceEditor(Gtk.Window):
                 self.header.set_section(icon, title.upper(), sub)
         if key == 'lockscreen':
             self.lock_prev.reload()
+        if key == 'dock' and not self.loading:
+            self.dock_sync()
 
     def on_key(self, _w, ev):
         ctrl = ev.state & Gdk.ModifierType.CONTROL_MASK
@@ -1252,13 +1254,24 @@ class RiceEditor(Gtk.Window):
 
     def debounce(self, key, ms, fn):
         if key in self.timers:
-            GLib.source_remove(self.timers[key])
+            GLib.source_remove(self.timers[key][0])
 
         def fire():
             self.timers.pop(key, None)
             fn()
             return False
-        self.timers[key] = GLib.timeout_add(ms, fire)
+        self.timers[key] = (GLib.timeout_add(ms, fire), fn)
+
+    def on_destroy(self, *_):
+        # a slider moved right before closing must still be saved
+        for src, fn in list(self.timers.values()):
+            GLib.source_remove(src)
+            try:
+                fn()
+            except Exception as e:  # noqa: BLE001  never block the exit
+                print(f'RiceEditor: {e}', file=sys.stderr)
+        self.timers.clear()
+        Gtk.main_quit()
 
     def page(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
@@ -2062,23 +2075,22 @@ class RiceEditor(Gtk.Window):
             p.pack_start(c, False, False, 0)
             return p
         conf = self.dock_conf()
-        c = self.card('󱂬', 'Dock', 'bottom of the screen · follows the palette')
-        c.pack_start(self.row('Show the dock', 'Also starts with the session',
-                              self.switch(conf.get('enabled', True), self.dock_enable)), False, False, 0)
-        c.pack_start(self.row('Auto-hide', 'Slides away until the pointer touches the bottom edge; '
-                              'windows then use the whole screen',
-                              self.switch(conf.get('autohide'), lambda v: self.dock_set('autohide', v, 'Auto-hide'))),
+        self.dock_w = {}
+        c = self.card('󱂬', 'Dock', 'bottom of the screen · follows the palette · saved in config/dock.json')
+        self.dock_w['enabled'] = self.switch(conf.get('enabled', True), self.dock_enable)
+        c.pack_start(self.row('Show the dock', 'Also starts with the session', self.dock_w['enabled']),
                      False, False, 0)
-        c.pack_start(self.row('Magnification', 'Wave zoom of the icons under the pointer',
-                              self.switch(conf.get('magnify', True),
-                                          lambda v: self.dock_set('magnify', v, 'Magnification'))), False, False, 0)
-        c.pack_start(self.row('Launcher button', 'Applications button at the left of the dock',
-                              self.switch(conf.get('show_launcher', True),
-                                          lambda v: self.dock_set('show_launcher', v, 'Launcher button'))),
-                     False, False, 0)
+        for key, title, sub in (
+                ('autohide', 'Auto-hide', 'Slides away until the pointer touches the bottom edge and comes '
+                                          'back over the windows; they then use the whole screen'),
+                ('magnify', 'Magnification', 'Wave zoom of the icons under the pointer'),
+                ('show_launcher', 'Launcher button', 'Applications button at the left of the dock')):
+            self.dock_w[key] = self.switch(conf.get(key), lambda v, k=key, t=title: self.dock_set(k, v, t))
+            c.pack_start(self.row(title, sub, self.dock_w[key]), False, False, 0)
         sc, lab = self.scale(28, 72, 2, conf.get('icon_size', 44), 0,
-                             lambda v: self.dock_set('icon_size', v, 'Icon size'), fmt=lambda v: f'{int(v)} px',
+                             lambda v: self.dock_set('icon_size', int(v), 'Icon size'), fmt=lambda v: f'{int(v)} px',
                              delay=350)
+        self.dock_w['icon_size'] = sc
         sc.set_size_request(220, -1)
         c.pack_start(self.row('Icon size', '', sc, lab), False, False, 0)
         c.pack_start(self.row('Dock process', 'Restart it if something looks off',
@@ -2113,6 +2125,23 @@ class RiceEditor(Gtk.Window):
         self.dock_fill_list()
         self.dock_fill_picker()
         return p
+
+    def dock_sync(self):
+        """Show what dock.json holds now (the dock's own menu edits it too)."""
+        if not getattr(self, 'dock_w', None):
+            return
+        conf = self.dock_conf()
+        was, self.loading = self.loading, True
+        try:
+            for key, w in self.dock_w.items():
+                if isinstance(w, Gtk.Switch):
+                    w.set_active(bool(conf.get(key)))
+                else:
+                    w.set_value(float(conf.get(key, 44)))
+        finally:
+            self.loading = was
+        self.dock_fill_list()
+        self.dock_fill_picker()
 
     @staticmethod
     def app_icon(info, size):
@@ -2437,11 +2466,12 @@ class RiceEditor(Gtk.Window):
 
     # ─────────────────────────────────────────────────────── snapshots
     SNAP_FILES = [('theme-config.bash', THEME_CFG), ('picom.conf', PICOM_CONF),
-                  ('picom-rules.conf', PICOM_RULES), ('bspwmrc', BSPWMRC), ('kitty.conf', KITTY_CONF)]
+                  ('picom-rules.conf', PICOM_RULES), ('bspwmrc', BSPWMRC), ('kitty.conf', KITTY_CONF),
+                  ('dock.json', os.path.join(BSPWM, 'config/dock.json'))]
 
     def page_snapshots(self):
         p = self.page()
-        c = self.card('󰁯', 'Save state', 'theme-config · picom · bspwmrc · kitty')
+        c = self.card('󰁯', 'Save state', 'theme-config · picom · bspwmrc · kitty · dock')
         self.snap_entry = Gtk.Entry()
         self.snap_entry.set_placeholder_text('snapshot name (optional)')
         self.snap_entry.set_width_chars(30)

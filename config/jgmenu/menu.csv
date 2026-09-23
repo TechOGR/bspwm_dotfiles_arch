@@ -1,0 +1,60 @@
+# =============================================================
+# jgmenu - right click desktop menu (HUD style)
+#
+# This is the TEMPLATE: edit this file, not prepend.csv.
+# config/modules/06-jgmenu.sh renders it into prepend.csv every time
+# the rice palette changes (Theme.sh / RiceEditor), replacing:
+#   {bg} {fg} {black} {blackb} {red} {green} {yellow} {blue}
+#   {magenta} {cyan} {white} {rice}
+# Item names are pango markup, so icons are colored nerd glyphs.
+# =============================================================
+
+# ── header: search capsule + neon ticks
+@rect,,8,8,254,34,9,left,top,{blue} 55,{black} 90,
+@rect,,9,9,4,32,2,left,top,{cyan} 100,{cyan} 100,
+@icon,,22,17,16,16,0,left,top,,,.config/jgmenu/search.svg
+@search,,46,17,200,16,0,left,top,{fg} 75,,SEARCH  ·  type to filter
+@rect,,14,50,38,2,1,left,top,{cyan} 100,{cyan} 100,
+@rect,,56,50,14,2,1,left,top,{magenta} 100,{magenta} 100,
+@rect,,74,50,6,2,1,left,top,{blue} 100,{blue} 100,
+@rect,,84,50,172,2,1,left,top,{blackb} 45,{blackb} 45,
+
+^sep(<span foreground="{blackb}">//</span> LAUNCH <span foreground="{blackb}">· {rice}</span>)
+<span foreground="{cyan}">󰆍</span>   Terminal,OpenApps --floating
+<span foreground="{blue}">󰖟</span>   Web Browser,brave
+<span foreground="{yellow}">󰉋</span>   File Manager,env GTK_THEME=Adwaita:dark thunar
+<span foreground="{blue}">󰨞</span>   VS Code,code
+<span foreground="{magenta}">󰀻</span>   Applications,OpenApps --menu
+<span foreground="{blackb}">󰕰</span>   All apps,^checkout(lx-apps)
+
+^sep(<span foreground="{blackb}">//</span> RICE)
+<span foreground="{magenta}">󰏘</span>   Rice Editor,RiceEditor
+<span foreground="{cyan}">󰸉</span>   Wallpapers,WallSelect
+<span foreground="{green}">󰌌</span>   Keybinds,OpenApps --KeyHelp
+<span foreground="{blue}">󰕮</span>   Widgets,^checkout(wg)
+<span foreground="{blue}">󰖲</span>   BSPWM,^checkout(wm)
+
+^sep(<span foreground="{blackb}">//</span> SESSION)
+<span foreground="{yellow}">󰌾</span>   Lock screen,ScreenLocker -r
+<span foreground="{red}">󰐥</span>   Power,^checkout(exit)
+
+^tag(wg)
+^sep(<span foreground="{blackb}">//</span> WIDGETS)
+<span foreground="{cyan}">󰀄</span>   User Card,OpenApps --usercard
+<span foreground="{magenta}">󰎈</span>   Music Player,OpenApps --player
+
+^tag(wm)
+^sep(<span foreground="{blackb}">//</span> BSPWM)
+<span foreground="{magenta}">󰏘</span>   Rice Editor,RiceEditor
+<span foreground="{green}">󰌌</span>   Keybinds,OpenApps --KeyHelp
+<span foreground="{cyan}">󰑓</span>   Soft Reload,SoftReload
+<span foreground="{yellow}">󰜉</span>   Restart WM,bspc wm -r
+<span foreground="{red}">󰍃</span>   Logout,bspc quit
+
+^tag(exit)
+^sep(<span foreground="{blackb}">//</span> POWER)
+<span foreground="{yellow}">󰌾</span>   Lock,ScreenLocker -r
+<span foreground="{blue}">󰜉</span>   Reboot,systemctl reboot
+<span foreground="{red}">󰐥</span>   Shut down,systemctl poweroff
+
+^tag(lx-apps)

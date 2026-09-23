@@ -1,35 +1,50 @@
+# =============================================================
+# jgmenu - HUD look to match RiceEditor / Dock / AppLauncher
+# Everything above "# Colors" is yours to tweak; the colors block and
+# prepend.csv (from menu.csv) are regenerated from the rice palette by
+# ~/.config/bspwm/config/modules/06-jgmenu.sh
+# =============================================================
 position_mode       = pointer
 stay_alive          = 0
 csv_cmd             = apps
 csv_no_dirs         = 0
 tint2_look          = 0
-terminal_exec       = st
-terminal_args       =
-menu_width          = 205
-menu_padding_top    = 38
-menu_padding_right  = 5
-menu_padding_bottom = 5
-menu_padding_left   = 5
-menu_radius         = 6
-menu_border         = 2
+terminal_exec       = kitty
+terminal_args       = -e
+hide_on_startup     = 0
+menu_width          = 270
+menu_padding_top    = 60
+menu_padding_right  = 8
+menu_padding_bottom = 8
+menu_padding_left   = 8
+menu_radius         = 12
+menu_border         = 1
 menu_halign         = left
 sub_hover_action    = 1
-item_margin_y       = 5
-item_height         = 25
-item_padding_x      = 8
-item_radius         = 6
-item_border         = 0
-sep_height          = 2
-font                = Clarity City Bold 13px
-icon_size           = 16
-icon_theme          = Papirus-Dark
-arrow_string        = 󰄾
+sub_spacing         = 6
+item_margin_y       = 2
+item_height         = 28
+item_padding_x      = 12
+item_radius         = 7
+item_border         = 1
+sep_height          = 7
+sep_halign          = left
+font                = JetBrainsMono Nerd Font Medium 12px
+icon_size           = 0
+arrow_string        = 󰅂
+arrow_width         = 14
 
 # Colors
-color_menu_border = #222330
-color_menu_bg = #1a1b26
+color_menu_bg = #1a1b26 98
+color_menu_border = #7aa2f7 80
+color_norm_bg = #000000 0
 color_norm_fg = #c0caf5
-color_sel_bg = #222330
-color_sel_fg = #c0caf5
-color_sep_fg = #414868
-color_norm_bg = #ffffff 0
+color_sel_bg = #7aa2f7 16
+color_sel_fg = #7dcfff
+color_sel_border = #7dcfff 70
+color_sep_fg = #414868 45
+color_title_fg = #bb9af7
+color_title_bg = #000000 0
+color_title_border = #000000 0
+color_scroll_ind = #7dcfff 60
+sep_markup = font="JetBrainsMono Nerd Font ExtraBold 7.5" letter_spacing="2600" foreground="#bb9af7"

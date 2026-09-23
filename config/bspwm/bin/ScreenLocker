@@ -121,7 +121,8 @@ hex_rgba() { # "#rrggbb" alpha(0-1) -> rgba(r,g,b,a)
 # Render (or reuse) the lock image for a wallpaper. Prints its path.
 render_lock_image() {
     local wall=$1 key out tmp
-    key=$(printf '%s|%s|%s|%s|%s|%s|%s|%s|%s' "$wall" "$(stat -c %Y "$wall")" \
+    # "v2": bump when the render below changes so old caches are not reused
+    key=$(printf 'v2|%s|%s|%s|%s|%s|%s|%s|%s|%s' "$wall" "$(stat -c %Y "$wall")" \
         "$resolution" "$LOCK_BLUR" "$LOCK_DIM" "$LOCK_POS" "$LOCK_GLASS" "$L_BG" "$L_ACCENT" | md5sum)
     out="$CACHE_DIR/lock-${key%% *}.png"
 
@@ -134,15 +135,21 @@ render_lock_image() {
         if [ "$LOCK_GLASS" = "true" ]; then
             local geo="${PANEL_W}x${PANEL_H}+${PANEL_X}+${PANEL_Y}"
             local rect="roundrectangle 0,0,$((PANEL_W - 1)),$((PANEL_H - 1)),$PANEL_R,$PANEL_R"
-            set -- "$@" \
-                \( +clone -crop "$geo" +repage -blur 0x22 \
+            local x2=$((PANEL_X + PANEL_W - 1)) y2=$((PANEL_Y + PANEL_H - 1))
+            local bar=$((PANEL_W / 6))
+            # +gravity: the -gravity center of the resize would shift the
+            # crop and misalign the frosted part with its frame.
+            # -alpha set: without it the masked corners turn black.
+            set -- "$@" +gravity \
+                \( +clone -alpha set -crop "$geo" +repage -blur 0x22 \
                     \( -size "${PANEL_W}x${PANEL_H}" xc:none -fill white -draw "$rect" \) \
                     -compose DstIn -composite \) \
-                -gravity northwest -geometry "+${PANEL_X}+${PANEL_Y}" -compose over -composite \
+                -geometry "+${PANEL_X}+${PANEL_Y}" -compose over -composite \
                 -fill "$(hex_rgba "$L_BG" 0.55)" -stroke "$(hex_rgba "$L_ACCENT" 0.55)" -strokewidth 2 \
-                -draw "roundrectangle $PANEL_X,$PANEL_Y,$((PANEL_X + PANEL_W - 1)),$((PANEL_Y + PANEL_H - 1)),$PANEL_R,$PANEL_R" \
-                -stroke none -fill "$(hex_rgba "$L_ACCENT" 0.9)" \
-                -draw "rectangle $((PANEL_X + PANEL_W / 3)),$((PANEL_Y - 1)),$((PANEL_X + PANEL_W * 2 / 3)),$((PANEL_Y + 2))"
+                -draw "roundrectangle $PANEL_X,$PANEL_Y,$x2,$y2,$PANEL_R,$PANEL_R" \
+                -stroke none -fill "$(hex_rgba "$L_ACCENT" 0.95)" \
+                -draw "roundrectangle $((PANEL_X + PANEL_W / 2 - bar)),$((PANEL_Y - 1)),$((PANEL_X + PANEL_W / 2 + bar)),$((PANEL_Y + 2)),2,2" \
+                -draw "roundrectangle $((PANEL_X + PANEL_W / 2 - bar / 2)),$((y2 - 2)),$((PANEL_X + PANEL_W / 2 + bar / 2)),$((y2 + 1)),2,2"
         fi
 
         magick "$@" -define png:compression-level=1 "$tmp" && mv -f "$tmp" "$out" || {

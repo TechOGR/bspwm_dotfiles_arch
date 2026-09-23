@@ -1,35 +1,50 @@
-@icon,,15,12,18,18,0,left,top,,,.config/bspwm/config/assets/search.svg
-@search,,46,12,120,20,2,left,top,#c0caf5,,Type to search
-^sep()
+# GENERATED from menu.csv by 06-jgmenu.sh -- edit menu.csv instead
 
-Terminal,OpenApps --floating,terminal
-Web Browser,brave,brave
-File Manager, env GTK_THEME=Adwaita:dark thunar, system-file-manager
-VsCode,code,code
-Keybinds,OpenApps --KeyHelp,preferences-desktop-keyboard-shortcuts
-^sep()
+@rect,,8,8,254,34,9,left,top,#7aa2f7 55,#15161e 90,
+@rect,,9,9,4,32,2,left,top,#7dcfff 100,#7dcfff 100,
+@icon,,22,17,16,16,0,left,top,,,.config/jgmenu/search.svg
+@search,,46,17,200,16,0,left,top,#c0caf5 75,,SEARCH  ·  type to filter
+@rect,,14,50,38,2,1,left,top,#7dcfff 100,#7dcfff 100,
+@rect,,56,50,14,2,1,left,top,#bb9af7 100,#bb9af7 100,
+@rect,,74,50,6,2,1,left,top,#7aa2f7 100,#7aa2f7 100,
+@rect,,84,50,172,2,1,left,top,#414868 45,#414868 45,
 
-Applications,^checkout(lx-apps),start-here
-^sep()
+^sep(<span foreground="#414868">//</span> LAUNCH <span foreground="#414868">· CRACKONE</span>)
+<span foreground="#7dcfff">󰆍</span>   Terminal,OpenApps --floating
+<span foreground="#7aa2f7">󰖟</span>   Web Browser,brave
+<span foreground="#e0af68">󰉋</span>   File Manager,env GTK_THEME=Adwaita:dark thunar
+<span foreground="#7aa2f7">󰨞</span>   VS Code,code
+<span foreground="#bb9af7">󰀻</span>   Applications,OpenApps --menu
+<span foreground="#414868">󰕰</span>   All apps,^checkout(lx-apps)
 
-Widgets,^checkout(wg),kmenuedit
-BSPWM,^checkout(wm),gnome-windows
-Exit,^checkout(exit),system-shutdown
+^sep(<span foreground="#414868">//</span> RICE)
+<span foreground="#bb9af7">󰏘</span>   Rice Editor,RiceEditor
+<span foreground="#7dcfff">󰸉</span>   Wallpapers,WallSelect
+<span foreground="#9ece6a">󰌌</span>   Keybinds,OpenApps --KeyHelp
+<span foreground="#7aa2f7">󰕮</span>   Widgets,^checkout(wg)
+<span foreground="#7aa2f7">󰖲</span>   BSPWM,^checkout(wm)
+
+^sep(<span foreground="#414868">//</span> SESSION)
+<span foreground="#e0af68">󰌾</span>   Lock screen,ScreenLocker -r
+<span foreground="#f7768e">󰐥</span>   Power,^checkout(exit)
 
 ^tag(wg)
-User Card,OpenApps --usercard,system-users
-Music Player,OpenApps --player,musique
+^sep(<span foreground="#414868">//</span> WIDGETS)
+<span foreground="#7dcfff">󰀄</span>   User Card,OpenApps --usercard
+<span foreground="#bb9af7">󰎈</span>   Music Player,OpenApps --player
 
 ^tag(wm)
-Rice Editor,RiceEditor,preferences-desktop-theme
-Keybinds,OpenApps --KeyHelp,preferences-desktop-keyboard-shortcuts
-Restart WM,bspc wm -r,system-reboot
-Soft Reload,SoftReload,system-reboot
-Logout,bspc quit,system-log-out
+^sep(<span foreground="#414868">//</span> BSPWM)
+<span foreground="#bb9af7">󰏘</span>   Rice Editor,RiceEditor
+<span foreground="#9ece6a">󰌌</span>   Keybinds,OpenApps --KeyHelp
+<span foreground="#7dcfff">󰑓</span>   Soft Reload,SoftReload
+<span foreground="#e0af68">󰜉</span>   Restart WM,bspc wm -r
+<span foreground="#f7768e">󰍃</span>   Logout,bspc quit
 
 ^tag(exit)
-Block computer,ScreenLocker -r,system-lock-screen
-Reboot,systemctl reboot,system-reboot
-Shutdown,systemctl poweroff,system-shutdown
+^sep(<span foreground="#414868">//</span> POWER)
+<span foreground="#e0af68">󰌾</span>   Lock,ScreenLocker -r
+<span foreground="#7aa2f7">󰜉</span>   Reboot,systemctl reboot
+<span foreground="#f7768e">󰐥</span>   Shut down,systemctl poweroff
 
 ^tag(lx-apps)

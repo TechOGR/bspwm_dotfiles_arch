@@ -92,6 +92,7 @@ class Dock(Gtk.Window):
         self.active = None
         self.pointer = None        # x inside the window, None when away
         self.shown = 1.0           # 0 hidden (slid down) .. 1 visible
+        self.want_shown = 1.0
         self.fullscreen = False
         self.sweeping = False
         self.input_rect = None
@@ -131,7 +132,7 @@ class Dock(Gtk.Window):
         self.conf_mtime, self.pal_sig = mtime, sig
         self.conf = ui.load_dock_conf()
         if not self.conf.get('enabled', True):
-            Gtk.main_quit()
+            self.destroy()  # on_destroy gives the reserved space back
             return
         S = int(max(28, min(72, self.conf.get('icon_size', 44))))
         if S != getattr(self, 'S', S):
@@ -244,6 +245,15 @@ class Dock(Gtk.Window):
             region = cairo.Region(cairo.RectangleInt(*rect))
             gdkwin.input_shape_combine_region(region, 0, 0)
 
+    def raise_top(self):
+        """bspwm stacks its tiled/monocle windows above unmanaged docks, and
+        keep_above is not honoured for them: raise the dock by hand so it
+        always slides in *over* the windows."""
+        gdkwin = self.get_window()
+        if gdkwin and self.want_shown > 0:
+            gdkwin.raise_()
+        return False
+
     # ────────────────────────────────────────────────── window spying
     def spy_windows(self):
         """Event driven: xprop -spy prints a line whenever the lists change."""
@@ -291,13 +301,15 @@ class Dock(Gtk.Window):
     def spy_bspwm(self):
         try:
             proc = subprocess.Popen(['bspc', 'subscribe', 'node_state', 'node_focus', 'desktop_focus',
-                                     'node_remove'], stdout=subprocess.PIPE, text=True)
+                                     'node_remove', 'node_add', 'node_stack', 'node_layer'],
+                                    stdout=subprocess.PIPE, text=True)
         except OSError:
             return
         for _ in proc.stdout:
             fs = subprocess.run(['bspc', 'query', '-N', '-n', 'focused.fullscreen'],
                                 capture_output=True, text=True).stdout.strip() != ''
             GLib.idle_add(self.set_fullscreen, fs)
+            GLib.idle_add(self.raise_top)  # a new/restacked window may cover it
 
     def set_fullscreen(self, fs):
         self.fullscreen = fs
@@ -396,7 +408,8 @@ class Dock(Gtk.Window):
     def on_destroy(self, *_):
         want = self.base_padding()
         subprocess.run(['bspc', 'config', 'bottom_padding', str(want)])
-        Gtk.main_quit()
+        if Gtk.main_level():
+            Gtk.main_quit()
 
     # ───────────────────────────────────────────────────── animation
     def watch(self):
@@ -417,6 +430,10 @@ class Dock(Gtk.Window):
             near = py >= self.mon.y + self.mon.height - 3 and wx <= px <= wx + self.Wd
             over = self.pointer is not None
             want_shown = 1.0 if (near or over) else 0.0
+        if want_shown > self.want_shown:
+            self.want_shown = want_shown
+            self.raise_top()  # before it starts sliding in
+        self.want_shown = want_shown
         self.shown += (want_shown - self.shown) * 0.25
         if abs(want_shown - self.shown) < 0.01:
             self.shown = want_shown
@@ -632,6 +649,7 @@ def main():
     dock = Dock()
     ui.quit_on_sigterm(dock.destroy)
     dock.show_all()
+    dock.raise_top()
     Gtk.main()
 
 
