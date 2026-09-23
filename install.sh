@@ -466,8 +466,15 @@ install_packages() {
         xss-lock
         rsync thunar eza bat
         python-gobject python-cairo python-pillow ffmpeg
+        # HUD tools (Dock, AppLauncher, RiceEditor, UserCard, MusicPlayer,
+        # ScreenShoTer, PowerMenu, AvatarForge, BarCtl auto-hide) are GTK3
+        gtk3
+        # system monitor (btop), night light, keyboard layout on the
+        # lockscreen, screenshot sound (paplay)
+        btop redshift xorg-setxkbmap libpulse
     )
-    local optional=(networkmanager network-manager-applet pavucontrol)
+    # bluez: Bluetooth toggles of UserCard / polybar module
+    local optional=(networkmanager network-manager-applet pavucontrol bluez bluez-utils)
     local pkg
 
     for pkg in "${official[@]}"; do
