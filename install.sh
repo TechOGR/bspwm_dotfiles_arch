@@ -464,7 +464,7 @@ install_packages() {
         ttf-jetbrains-mono-nerd ttf-font-awesome noto-fonts-emoji
         papirus-icon-theme
         xss-lock
-        rsync
+        rsync thunar
     )
     local optional=(networkmanager network-manager-applet pavucontrol)
     local pkg
