@@ -138,7 +138,7 @@ geany_theme="z0mbi3-TokyoNight"
 ENGINE="Default"
 
 CUSTOM_DIR="$HOME/Imágenes/Wallpapers"
-DEFAULT_WALL="/home/t3ch0gr/.config/bspwm/rices/crackone/walls/pirate-ship-island-digital-art-4k-wallpaper-uhdpaper.com-659@2@b.jpg"
+DEFAULT_WALL="$HOME/.config/bspwm/rices/crackone/walls/pirate-ship-island-digital-art-4k-wallpaper-uhdpaper.com-659@2@b.jpg"
 ANIMATED_WALL="$HOME/.config/bspwm/rices/crackone/walls/videos/animated_wall-1.mp4"
 VIDEO_PAUSE="windows"	# Pause the video: never | windows (covered desktop) | fullscreen
 VIDEO_FIT="fill"		# fill (crop) | fit (bars) | stretch
