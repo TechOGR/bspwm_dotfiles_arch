@@ -91,6 +91,36 @@ LOCK_GLASS="true"		# Frosted glass panel behind the clock true|false
 LOCK_CLOCK="%H:%M"		# Clock format (strftime)
 LOCK_GREETER="Type the password to Unlock"
 
+# Login lock (betterlockscreen + BetterLock, RiceEditor -> Login Lock)
+BL_WALL="current"		# current | random | custom
+BL_WALL_PATH=""			# Picture used when BL_WALL=custom
+BL_FX="dimblur"			# none | dim | blur | dimblur | pixel | dimpixel | color
+BL_DIM="35"				# Darkening in % (0-90)
+BL_BLUR="10"			# Blur strength (1-40)
+BL_PIXEL="14"			# Pixel block size (4-60)
+BL_POS="center"			# Login card position: left | center | right
+BL_CARD="true"			# Frosted glass login card true|false
+BL_CARD_ALPHA="55"		# Card tint in % (0-95)
+BL_RADIUS="28"			# Card corner radius
+BL_AVATAR="true"		# AvatarForge avatar in the card true|false
+BL_SHAPE="circle"		# Avatar shape: circle | squircle | hexagon
+BL_NAME=""				# Name on the card (empty = user name)
+BL_GREETER="Type your password"
+BL_MESSAGE=""			# Bottom line, e.g. contact info
+BL_CLOCK="%H:%M"		# Clock format (strftime)
+BL_DATE="%A, %d %B"		# Date format (strftime)
+BL_INDICATOR="ring"		# ring (around the avatar) | bar
+BL_ACCENT="${blue}"		# Ring / keypress / date
+BL_ACCENT2="${magenta}"	# Gradient of the card border, now playing
+BL_FG="${fg}"			# Texts
+BL_VERIFY="${green}"	# Verifying
+BL_WRONG="${red}"		# Wrong password / Caps Lock
+BL_LAYOUT="true"		# Keyboard layout under the password field
+BL_MEDIA="true"			# Now playing (playerctl) at the bottom
+BL_OFF="60"				# Seconds until the display turns off while locked
+BL_IDLE="0"				# Auto-lock after N idle minutes (0 = never)
+BL_SUSPEND="true"		# Lock before suspend (xss-lock)
+
 # Gtk theme
 gtk_theme="$gtk_themeb"
 gtk_icons="TokyoNight-SE"

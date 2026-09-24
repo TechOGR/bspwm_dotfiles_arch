@@ -13,7 +13,7 @@
 #   ✔ Every option applies LIVE (bspc / picom reload / theme modules)
 #   ✔ Palettes with instant re-theme (the editor re-themes itself too)
 #   ✔ Windows, compositor, terminal, wallpaper, notifications,
-#     lockscreen, GTK/rofi appearance
+#     lockscreen, login lock (betterlockscreen), GTK/rofi appearance
 #   ✔ Live terminal + lockscreen previews, system HUD gauges
 #   ✔ Snapshots: save / restore the whole rice state (auto daily backup)
 #
@@ -60,7 +60,9 @@ except Exception:
 
 
 def avatar_path():
-    return avatar.current_path() if avatar else os.path.join(BSPWM, 'config/assets/profile.png')
+    if avatar:
+        return avatar.current_path()
+    return os.path.join(BSPWM, 'config/assets/avatar.png')
 
 HOME = os.path.expanduser('~')
 BSPWM = os.path.join(HOME, '.config/bspwm')
@@ -72,6 +74,9 @@ BSPWMRC = os.path.join(BSPWM, 'bspwmrc')
 KITTY_CONF = os.path.join(HOME, '.config/kitty/kitty.conf')
 ZSHRC = os.path.join(HOME, '.zshrc')
 SNAP_DIR = os.path.join(HOME, '.local/share/rice-editor/snapshots')
+BETTERLOCK = os.path.join(BSPWM, 'bin/BetterLock')
+BL_PREVIEW = os.path.join(HOME, '.cache/betterlockscreen/rice/preview.png')
+BL_RC = os.path.join(HOME, '.config/betterlockscreen/betterlockscreenrc')
 FONT = 'JetBrainsMono Nerd Font'
 IMG_EXTS = ('.jpg', '.jpeg', '.png', '.webp')
 
@@ -1080,6 +1085,53 @@ class LockPreview(Animated):
         cr.stroke()
 
 
+class LoginPreview(Animated):
+    """betterlockscreen preview: the real render made by BetterLock --preview."""
+
+    def __init__(self, app):
+        super().__init__(app, fps=12)
+        self.set_size_request(-1, 340)
+        self.surface = None
+        self.busy = False
+
+    def reload(self):
+        if os.path.exists(BL_PREVIEW):
+            run_bg(lambda: load_surface(BL_PREVIEW, 1280, 720),
+                   lambda sf: (setattr(self, 'surface', sf), self.queue_draw()))
+
+    def paint(self, cr, W, H):
+        c = self.app.rgb
+        pw = min(W, H * 16 / 9)
+        ph = pw * 9 / 16
+        ox, oy = (W - pw) / 2, (H - ph) / 2
+        cr.save()
+        rounded(cr, ox, oy, pw, ph, 12)
+        cr.clip()
+        if self.surface:
+            sw, sh = self.surface.get_width(), self.surface.get_height()
+            cr.save()
+            cr.translate(ox, oy)
+            cr.scale(pw / sw, ph / sh)
+            cr.set_source_surface(self.surface, 0, 0)
+            cr.get_source().set_filter(cairo.FILTER_GOOD)
+            cr.paint()
+            cr.restore()
+        else:
+            cr.set_source_rgb(*c['black'])
+            cr.paint()
+        if self.busy or not self.surface:
+            cr.set_source_rgba(0, 0, 0, 0.55)
+            cr.paint()
+            dots = '.' * (int(time.monotonic() * 3) % 4)
+            draw_text(cr, f'RENDERING{dots}', ox + pw / 2, oy + ph / 2 - 10, 11, (*c['blue'], 1),
+                      bold=True, align='center', spacing=3)
+        cr.restore()
+        rounded(cr, ox + 0.5, oy + 0.5, pw - 1, ph - 1, 12)
+        cr.set_line_width(1)
+        cr.set_source_rgba(*c['blue'], 0.5)
+        cr.stroke()
+
+
 # ═══════════════════════════════════════════════════════════ main window
 class RiceEditor(Gtk.Window):
     SECTIONS = [
@@ -1092,7 +1144,8 @@ class RiceEditor(Gtk.Window):
         ('dock', '󱂬', 'Dock', 'PINNED APPS · SIZE · BEHAVIOUR'),
         ('polybar', '󱔓', 'Polybar', 'THEMES · STYLE · MODULES · AUTO-HIDE'),
         ('notifications', '󰂚', 'Notifications', 'DUNST · PLACEMENT · STYLE · MOTION'),
-        ('lockscreen', '󰌾', 'Lockscreen', 'I3LOCK-COLOR · BETTERLOCKSCREEN'),
+        ('lockscreen', '󰌾', 'Lockscreen', 'I3LOCK-COLOR · QUICK LOCK · SUPER+SHIFT+S'),
+        ('loginlock', '󰍁', 'Login Lock', 'BETTERLOCKSCREEN · AVATAR CARD · AUTO-LOCK'),
         ('appearance', '󰉼', 'Appearance', 'GTK · ICONS · CURSOR · ROFI'),
         ('snapshots', '󰁯', 'Snapshots', 'SAVE · RESTORE THE WHOLE RICE STATE'),
         ('help', '󰋗', 'Help', 'SHORTCUTS · HOW IT WORKS'),
@@ -1152,6 +1205,7 @@ class RiceEditor(Gtk.Window):
             'terminal': self.page_terminal, 'wallpaper': self.page_wallpaper,
             'dock': self.page_dock, 'polybar': self.page_polybar,
             'notifications': self.page_notifications, 'lockscreen': self.page_lockscreen,
+            'loginlock': self.page_loginlock,
             'appearance': self.page_appearance, 'snapshots': self.page_snapshots,
             'help': self.page_help,
         }
@@ -1255,6 +1309,11 @@ class RiceEditor(Gtk.Window):
                 self.header.set_section(icon, title.upper(), sub)
         if key == 'lockscreen':
             self.lock_prev.reload()
+        if key == 'loginlock' and not self.loading:
+            if os.path.exists(BL_PREVIEW):
+                self.bl_prev.reload()
+            else:
+                self.bl_render()
         if key == 'dock' and not self.loading:
             self.dock_sync()
         if key == 'polybar' and not self.loading:
@@ -2780,6 +2839,209 @@ class RiceEditor(Gtk.Window):
             self.lock_prev.reload()
         run_bg(work, done)
 
+    # ────────────────────────────────────────────────────── login lock
+    def page_loginlock(self):
+        p = self.page()
+        cfg = self.cfg
+        c = self.card('󰍹', 'Preview', 'real render · Super + Shift + L')
+        self.bl_prev = LoginPreview(self)
+        c.pack_start(self.bl_prev, False, False, 4)
+        hb = Gtk.Box(spacing=8)
+        hb.pack_start(self.button('󰌾  Lock now', 'neon', lambda *_: spawn([BETTERLOCK])), False, False, 0)
+        b = self.button('󰔛  Try it (8 s)', 'ghost', lambda *_: spawn([BETTERLOCK, '--test']))
+        b.set_tooltip_text('Locks for real and unlocks by itself after 8 seconds')
+        hb.pack_start(b, False, False, 0)
+        hb.pack_start(self.button('󰑓  Re-render', 'ghost', lambda *_: self.bl_render()), False, False, 0)
+        c.pack_start(hb, False, False, 6)
+        p.pack_start(c, False, False, 0)
+
+        # ── background
+        c = self.card('󰋩', 'Background', 'wallpaper · effect')
+        cur = cfg.raw('BL_WALL_PATH')
+        self.bl_file = self.button(f'󰋩  {os.path.basename(cur) if cur else "Choose…"}', 'ghost',
+                                   lambda *_: self.bl_choose_wall())
+        self.bl_file.get_child().set_max_width_chars(26)
+        self.bl_file.get_child().set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+        self.bl_src = self.combo([('current', 'Wallpaper on screen'), ('random', 'Random of the rice (each lock)'),
+                                  ('custom', 'A picture of mine')],
+                                 cfg.raw('BL_WALL', 'current'), lambda v: self.set_bl('BL_WALL', v))
+        c.pack_start(self.row('Source', 'What is behind the login card', self.bl_src), False, False, 0)
+        c.pack_start(self.row('Picture', 'Used with "A picture of mine"', self.bl_file), False, False, 0)
+        c.pack_start(self.row('Effect', '',
+                              self.combo([('dimblur', 'Dim + blur'), ('blur', 'Blur'), ('dim', 'Dim'),
+                                          ('pixel', 'Pixelate'), ('dimpixel', 'Dim + pixelate'),
+                                          ('color', 'Solid palette color'), ('none', 'None (sharp)')],
+                                         cfg.raw('BL_FX', 'dimblur'), lambda v: self.set_bl('BL_FX', v))),
+                     False, False, 0)
+        for var, lo, hi, dflt, title, desc, fmt in (
+                ('BL_DIM', 0, 90, '35', 'Dim', 'dim / dimblur / dimpixel', lambda v: f'{int(v)}%'),
+                ('BL_BLUR', 1, 40, '10', 'Blur', 'blur / dimblur', None),
+                ('BL_PIXEL', 4, 60, '14', 'Pixel size', 'pixel / dimpixel', lambda v: f'{int(v)} px')):
+            sc, lab = self.scale(lo, hi, 1, cfg.raw(var, dflt), 0, lambda v, k=var: self.set_bl(k, v), fmt=fmt)
+            c.pack_start(self.row(title, desc, sc, lab), False, False, 0)
+        p.pack_start(c, False, False, 0)
+
+        # ── card
+        c = self.card('󰀄', 'Login card', 'avatar · name · glass')
+        c.pack_start(self.row('Glass card', 'Frosted panel behind the avatar and the password field',
+                              self.switch(cfg.raw('BL_CARD', 'true') == 'true',
+                                          lambda on: self.set_bl('BL_CARD', 'true' if on else 'false'))),
+                     False, False, 0)
+        sc, lab = self.scale(0, 95, 5, cfg.raw('BL_CARD_ALPHA', '55'), 0,
+                             lambda v: self.set_bl('BL_CARD_ALPHA', v), fmt=lambda v: f'{int(v)}%')
+        c.pack_start(self.row('Card tint', 'How much palette color covers the glass', sc, lab), False, False, 0)
+        sc, lab = self.scale(0, 60, 2, cfg.raw('BL_RADIUS', '28'), 0,
+                             lambda v: self.set_bl('BL_RADIUS', v), fmt=lambda v: f'{int(v)} px')
+        c.pack_start(self.row('Corner radius', '', sc, lab), False, False, 0)
+        c.pack_start(self.row('Position', '',
+                              self.combo([('center', 'center'), ('left', 'left'), ('right', 'right')],
+                                         cfg.raw('BL_POS', 'center'), lambda v: self.set_bl('BL_POS', v))),
+                     False, False, 0)
+        c.pack_start(self.row('Avatar', 'The AvatarForge picture, the password ring goes around it',
+                              self.button('󰀄  AvatarForge', 'ghost',
+                                          lambda *_: spawn([os.path.join(BIN, 'AvatarForge')])),
+                              self.switch(cfg.raw('BL_AVATAR', 'true') == 'true',
+                                          lambda on: self.set_bl('BL_AVATAR', 'true' if on else 'false'))),
+                     False, False, 0)
+        c.pack_start(self.row('Avatar shape', '',
+                              self.combo([('circle', 'Circle'), ('squircle', 'Squircle'), ('hexagon', 'Hexagon')],
+                                         cfg.raw('BL_SHAPE', 'circle'), lambda v: self.set_bl('BL_SHAPE', v))),
+                     False, False, 0)
+        for var, title, desc, dflt, ph in (
+                ('BL_NAME', 'Name', 'Big name under the avatar', '', os.environ.get('USER', 'user').capitalize()),
+                ('BL_GREETER', 'Password field text', '', 'Type your password', ''),
+                ('BL_MESSAGE', 'Message', 'Bottom line, e.g. "If found call +00 000"', '', 'nothing')):
+            e = Gtk.Entry()
+            e.set_width_chars(28)
+            e.set_placeholder_text(ph)
+            e.set_text(cfg.raw(var, dflt))
+            e.connect('changed', lambda w, k=var: self.debounce(k, 600, lambda: self.set_bl(k, w.get_text())))
+            c.pack_start(self.row(title, desc, e), False, False, 0)
+        p.pack_start(c, False, False, 0)
+
+        # ── clock + indicator + colors
+        c = self.card('󰥔', 'Clock, ring & colors')
+        now = datetime.now()
+        clocks = [(f, f'{lbl}  ·  {now.strftime(f)}') for f, lbl in
+                  (('%H:%M', '24h'), ('%H:%M:%S', '24h + seconds'), ('%I:%M %p', '12h'), ('%I:%M', '12h short'))]
+        dates = [(f, now.strftime(f)) for f in ('%A, %d %B', '%a %d %b %Y', '%d/%m/%Y', '%B %d', '%A')]
+        c.pack_start(self.row('Clock', '', self.combo(clocks, cfg.raw('BL_CLOCK', '%H:%M'),
+                                                      lambda v: self.set_bl('BL_CLOCK', v))), False, False, 0)
+        c.pack_start(self.row('Date', '', self.combo(dates, cfg.raw('BL_DATE', '%A, %d %B'),
+                                                     lambda v: self.set_bl('BL_DATE', v))), False, False, 0)
+        c.pack_start(self.row('Password indicator', 'Ring around the avatar, or bars under the field',
+                              self.combo([('ring', 'Ring around the avatar'), ('bar', 'Equalizer bar')],
+                                         cfg.raw('BL_INDICATOR', 'ring'),
+                                         lambda v: self.set_bl('BL_INDICATOR', v))), False, False, 0)
+        res = cfg.resolve(['BL_ACCENT', 'BL_ACCENT2', 'BL_FG', 'BL_VERIFY', 'BL_WRONG'])
+        for var, title in (('BL_ACCENT', 'Accent (ring · keypress · date)'), ('BL_ACCENT2', 'Second accent (border gradient)'),
+                           ('BL_FG', 'Texts'), ('BL_VERIFY', 'Verifying'), ('BL_WRONG', 'Wrong password · Caps Lock')):
+            c.pack_start(self.row(title, '', self.color(res.get(var, ''), lambda h, v=var: self.set_bl(v, h))),
+                         False, False, 0)
+        c.pack_start(self.row('Follow the palette', 'Colors back to the palette of the rice (they change with it)',
+                              self.button('󰏘  Reset colors', 'ghost', lambda *_: self.bl_palette_colors())),
+                     False, False, 0)
+        p.pack_start(c, False, False, 0)
+
+        # ── behaviour
+        c = self.card('󰒓', 'Behaviour', 'auto-lock · xss-lock')
+        c.pack_start(self.row('Keyboard layout', 'Under the password field',
+                              self.switch(cfg.raw('BL_LAYOUT', 'true') == 'true',
+                                          lambda on: self.set_bl('BL_LAYOUT', 'true' if on else 'false'))),
+                     False, False, 0)
+        c.pack_start(self.row('Now playing', 'Song of playerctl at the bottom (taken when it locks)',
+                              self.switch(cfg.raw('BL_MEDIA', 'true') == 'true',
+                                          lambda on: self.set_bl('BL_MEDIA', 'true' if on else 'false'))),
+                     False, False, 0)
+        sc, lab = self.scale(10, 600, 10, cfg.raw('BL_OFF', '60'), 0, lambda v: self.set_bl('BL_OFF', v, render=False),
+                             fmt=lambda v: f'{int(v)} s')
+        c.pack_start(self.row('Screen off', 'Display turns off after this while locked', sc, lab), False, False, 0)
+        sc, lab = self.scale(0, 60, 1, cfg.raw('BL_IDLE', '0'), 0,
+                             lambda v: self.set_bl('BL_IDLE', v, render=False, idle=True),
+                             fmt=lambda v: 'never' if not v else f'{int(v)} min')
+        c.pack_start(self.row('Auto-lock when idle', 'Locks after this many minutes without input', sc, lab),
+                     False, False, 0)
+        c.pack_start(self.row('Lock before suspend', 'Suspending always wakes up locked',
+                              self.switch(cfg.raw('BL_SUSPEND', 'true') == 'true',
+                                          lambda on: self.set_bl('BL_SUSPEND', 'true' if on else 'false',
+                                                                 render=False, idle=True))),
+                     False, False, 0)
+        p.pack_start(c, False, False, 0)
+
+        c = self.card('󰈔', 'Files')
+        c.pack_start(self.row('betterlockscreenrc', BL_RC.replace(HOME, '~') + ' · written by BetterLock, '
+                              'so a plain "betterlockscreen -l" looks the same',
+                              self.button('󰈔  Open', 'ghost', lambda *_: spawn(['xdg-open', BL_RC]))),
+                     False, False, 0)
+        c.pack_start(self.row('Options', f'BL_* in {THEME_CFG.replace(HOME, "~")}',
+                              self.button('󰈔  Open', 'ghost', lambda *_: spawn(['xdg-open', THEME_CFG]))),
+                     False, False, 0)
+        p.pack_start(c, False, False, 0)
+        return p
+
+    def set_bl(self, var, value, render=True, idle=False):
+        self.cfg.set(var, value)
+        self.toast(f'Login lock · {var} → {value}')
+        if render:
+            self.debounce('bl-render', 450, self.bl_render)
+        else:
+            run_bg(lambda: subprocess.run([BETTERLOCK, '--config'], timeout=30))
+        if idle:
+            run_bg(lambda: subprocess.run([BETTERLOCK, '--idle'], timeout=30))
+
+    def bl_choose_wall(self):
+        dlg = Gtk.FileChooserDialog(title='Lock picture', parent=self, action=Gtk.FileChooserAction.OPEN)
+        dlg.add_buttons('Cancel', Gtk.ResponseType.CANCEL, 'Select', Gtk.ResponseType.OK)
+        flt = Gtk.FileFilter()
+        flt.set_name('Pictures')
+        for ext in ('png', 'jpg', 'jpeg', 'webp'):
+            flt.add_pattern(f'*.{ext}')
+            flt.add_pattern(f'*.{ext.upper()}')
+        dlg.add_filter(flt)
+        cur = self.cfg.raw('BL_WALL_PATH')
+        if cur and os.path.isfile(cur):
+            dlg.set_filename(cur)
+        elif os.path.isdir(os.path.join(RICE_DIR, 'walls')):
+            dlg.set_current_folder(os.path.join(RICE_DIR, 'walls'))
+        path = dlg.get_filename() if dlg.run() == Gtk.ResponseType.OK else None
+        dlg.destroy()
+        if path:
+            self.bl_file.set_label(f'󰋩  {os.path.basename(path)}')
+            self.bl_pick_wall(path)
+
+    def bl_pick_wall(self, path):
+        if not path:
+            return
+        self.cfg.set('BL_WALL_PATH', path)
+        if self.bl_src.get_active_id() == 'custom':
+            self.set_bl('BL_WALL', 'custom')
+        else:
+            self.bl_src.set_active_id('custom')   # its handler saves BL_WALL + re-renders
+
+    def bl_palette_colors(self):
+        for var, ref in (('BL_ACCENT', 'blue'), ('BL_ACCENT2', 'magenta'), ('BL_FG', 'fg'),
+                         ('BL_VERIFY', 'green'), ('BL_WRONG', 'red')):
+            # cfg.set() strips "$": write the palette reference by hand
+            if not file_sub(THEME_CFG, rf'^{var}=("[^"]*"|\S*)', f'{var}="${{{ref}}}"'):
+                with open(THEME_CFG, 'a') as f:
+                    f.write(f'{var}="${{{ref}}}"\n')
+        self.toast('Login lock colors follow the palette — reopen the section to see them')
+        self.bl_render()
+
+    def bl_render(self):
+        self.bl_prev.busy = True
+
+        def work():
+            subprocess.run([BETTERLOCK, '--preview', BL_PREVIEW], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=120)
+
+        def done(_r):
+            self.bl_prev.busy = False
+            self.bl_prev.reload()
+            # the real lock image + betterlockscreenrc, in the background
+            spawn(['nice', '-n', '19', BETTERLOCK, '--prepare'])
+        run_bg(work, done)
+
     # ────────────────────────────────────────────────────── appearance
     @staticmethod
     def list_themes(kind):
@@ -2953,7 +3215,8 @@ class RiceEditor(Gtk.Window):
         c = self.card('󰌌', 'Shortcuts')
         for keys, what in (('Ctrl + 1 … 0', 'Jump to a section'), ('Ctrl + S', 'Save a snapshot'),
                            ('Ctrl + R', 'Soft reload (bars, picom, dunst, sxhkd)'),
-                           ('Ctrl + L', 'Lock the screen'), ('Ctrl + Q', 'Close RiceEditor')):
+                           ('Ctrl + L', 'Lock the screen'), ('Super + Shift + L', 'Login lock (betterlockscreen)'),
+                           ('Ctrl + Q', 'Close RiceEditor')):
             k = Gtk.Label(label=keys)
             k.get_style_context().add_class('value')
             c.pack_start(self.row(what, '', k), False, False, 0)

@@ -1,0 +1,702 @@
+#!/usr/bin/env python3
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# BetterLock - betterlockscreen dressed as a login screen of the rice
+#   ✔ The AvatarForge avatar in the middle, the password ring around it
+#   ✔ Frosted glass login card: name, user@host, password field
+#   ✔ Big clock + date, keyboard layout, Caps Lock warning
+#   ✔ Wallpaper: the one on screen · random of the rice · any picture
+#   ✔ Effects: none · dim · blur · dimblur · pixel · dimpixel · color
+#   ✔ Now playing + a custom message baked at lock time
+#   ✔ Writes ~/.config/betterlockscreen/betterlockscreenrc, so even a
+#     plain `betterlockscreen -l` gets this look
+#   ✔ Auto-lock when idle and before suspend (xss-lock)
+#   Options: BL_* in theme-config.bash (RiceEditor -> Login Lock)
+#
+# Usage: BetterLock [--lock | --test | --prepare | --config |
+#                    --preview FILE | --idle | --help]
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+import os
+import re
+import sys
+import glob
+import json
+import random
+import shutil
+import socket
+import hashlib
+import subprocess
+from datetime import datetime
+
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
+
+HOME = os.path.expanduser('~')
+BSPWM = os.path.join(HOME, '.config/bspwm')
+sys.path.insert(0, os.path.join(BSPWM, 'lib'))
+try:
+    import avatar  # noqa: E402  (profile picture made by AvatarForge)
+except Exception:
+    avatar = None
+
+CACHE = os.path.join(os.environ.get('XDG_CACHE_HOME', os.path.join(HOME, '.cache')), 'betterlockscreen/rice')
+LOCK_IMG = os.path.join(CACHE, 'lock.png')        # used by a plain `betterlockscreen -l`
+NOW_IMG = os.path.join(CACHE, 'lock-now.png')     # + now playing, made at lock time
+RC = os.path.join(HOME, '.config/betterlockscreen/betterlockscreenrc')
+FONT = 'JetBrainsMono NF'
+
+DEFAULTS = {
+    'BL_WALL': 'current',          # current | random | custom
+    'BL_WALL_PATH': '',            # picture for BL_WALL=custom
+    'BL_FX': 'dimblur',            # none | dim | blur | dimblur | pixel | dimpixel | color
+    'BL_DIM': '35',                # 0-90 %
+    'BL_BLUR': '10',               # 1-40
+    'BL_PIXEL': '14',              # 4-60 px blocks
+    'BL_POS': 'center',            # left | center | right
+    'BL_CARD': 'true',             # glass login card
+    'BL_CARD_ALPHA': '55',         # 0-95 % tint of the card
+    'BL_RADIUS': '28',             # card corners
+    'BL_AVATAR': 'true',
+    'BL_SHAPE': 'circle',          # circle | squircle | hexagon
+    'BL_NAME': '',                 # empty = the user name
+    'BL_GREETER': 'Type your password',
+    'BL_MESSAGE': '',              # bottom line (e.g. contact info)
+    'BL_CLOCK': '%H:%M',
+    'BL_DATE': '%A, %d %B',
+    'BL_INDICATOR': 'ring',        # ring (around the avatar) | bar
+    'BL_ACCENT': '#7aa2f7',
+    'BL_ACCENT2': '#bb9af7',
+    'BL_FG': '#c0caf5',
+    'BL_VERIFY': '#9ece6a',
+    'BL_WRONG': '#f7768e',
+    'BL_LAYOUT': 'true',           # keyboard layout under the field
+    'BL_MEDIA': 'true',            # now playing (baked at lock time)
+    'BL_OFF': '60',                # seconds until the display turns off
+    'BL_IDLE': '0',                # auto-lock after N idle minutes (0 = never)
+    'BL_SUSPEND': 'true',          # lock before suspend (xss-lock)
+}
+PALETTE = ['bg', 'fg', 'black', 'blackb', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'sl_bg']
+
+
+# ═══════════════════════════════════════════════════════════ settings
+def rice():
+    try:
+        with open(os.path.join(BSPWM, '.rice')) as f:
+            return f.read().strip()
+    except OSError:
+        return 'crackone'
+
+
+def theme_cfg():
+    return os.path.join(BSPWM, 'rices', rice(), 'theme-config.bash')
+
+
+def settings():
+    """BL_* options + palette, as bash sees them (references expanded)."""
+    keys = list(DEFAULTS) + PALETTE + ['DEFAULT_WALL']
+    script = ('. "$1" >/dev/null 2>&1; shift; '
+              'for v in "$@"; do printf "%s\\t%s\\n" "$v" "${!v}"; done')
+    vals = {}
+    try:
+        out = subprocess.run(['bash', '-c', script, '_', theme_cfg(), *keys],
+                             capture_output=True, text=True, timeout=4).stdout
+        for line in out.splitlines():
+            k, _, v = line.partition('\t')
+            if v != '':
+                vals[k] = v
+    except Exception:
+        pass
+    conf = dict(DEFAULTS)
+    conf.update({k: v for k, v in vals.items() if k in DEFAULTS})
+    # colors not set yet follow the palette
+    pal = dict(bg='#1a1b26', fg='#c0caf5', black='#15161e', blue='#7aa2f7', magenta='#bb9af7',
+               green='#9ece6a', red='#f7768e')
+    pal.update({k: v for k, v in vals.items() if k in PALETTE and valid_hex(v)})
+    for key, name in (('BL_ACCENT', 'blue'), ('BL_ACCENT2', 'magenta'), ('BL_FG', 'fg'),
+                      ('BL_VERIFY', 'green'), ('BL_WRONG', 'red')):
+        if key not in vals or not valid_hex(conf[key]):
+            conf[key] = pal[name]
+    conf['bg'], conf['black'] = pal['bg'], pal['black']
+    conf['DEFAULT_WALL'] = vals.get('DEFAULT_WALL', '')
+    return conf
+
+
+def valid_hex(v):
+    return bool(re.fullmatch(r'#[0-9a-fA-F]{6}', v or ''))
+
+
+def rgb(h):
+    h = h.lstrip('#')
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def num(conf, key, lo, hi):
+    try:
+        return max(lo, min(hi, int(float(conf[key]))))
+    except (TypeError, ValueError):
+        return max(lo, min(hi, int(DEFAULTS[key])))
+
+
+def on(conf, key):
+    return str(conf.get(key, '')).lower() in ('true', '1', 'yes', 'on')
+
+
+# ═══════════════════════════════════════════════════════════ screen
+def screen():
+    """(W, H, [(x, y, w, h), ...]) of the whole X screen and its monitors."""
+    W, H, mons = 1920, 1080, []
+    try:
+        out = subprocess.run(['xrandr', '--current'], capture_output=True, text=True, timeout=4).stdout
+        m = re.search(r'current (\d+) x (\d+)', out)
+        if m:
+            W, H = int(m.group(1)), int(m.group(2))
+        out = subprocess.run(['xrandr', '--listactivemonitors'], capture_output=True, text=True, timeout=4).stdout
+        for m in re.finditer(r'(\d+)/\d+x(\d+)/\d+\+(\d+)\+(\d+)', out):
+            w, h, x, y = map(int, m.groups())
+            mons.append((x, y, w, h))
+    except Exception:
+        pass
+    return W, H, mons or [(0, 0, W, H)]
+
+
+def scale_of(mons):
+    """Size factor of the layout, from the smallest monitor (1.0 at 1080p)."""
+    w, h = min((m[2], m[3]) for m in mons)
+    return max(0.6, min(2.5, min(w / 1920, h / 1080)))
+
+
+# ═══════════════════════════════════════════════════════════ wallpaper
+WALL_EXT = ('.jpg', '.jpeg', '.png', '.webp')
+
+
+def rice_walls():
+    d = os.path.join(BSPWM, 'rices', rice(), 'walls')
+    return sorted(p for p in glob.glob(os.path.join(d, '*')) if p.lower().endswith(WALL_EXT))
+
+
+def current_wall(conf):
+    wall = os.path.realpath(os.path.join(HOME, '.cache/current_wall'))
+    if not os.path.isfile(wall):
+        try:
+            with open(os.path.join(HOME, '.fehbg')) as f:
+                m = re.search(r"'([^']+)'", f.read().split('feh', 1)[-1])
+                wall = m.group(1) if m else ''
+        except OSError:
+            wall = ''
+    if not os.path.isfile(wall):
+        wall = conf.get('DEFAULT_WALL', '')
+    return wall if os.path.isfile(wall) else None
+
+
+def pick_wall(conf, fresh=False):
+    """fresh: a new random pick (at lock time); otherwise the last one."""
+    mode = conf['BL_WALL']
+    if mode == 'custom' and os.path.isfile(conf['BL_WALL_PATH']):
+        return conf['BL_WALL_PATH']
+    if mode == 'random':
+        memo = os.path.join(CACHE, '.random-wall')
+        walls = rice_walls()
+        try:
+            with open(memo) as f:
+                last = f.read().strip()
+        except OSError:
+            last = ''
+        if walls and (fresh or last not in walls):
+            choice = random.choice([w for w in walls if w != last] or walls)
+            with open(memo, 'w') as f:
+                f.write(choice)
+            return choice
+        if last in walls:
+            return last
+    return current_wall(conf)
+
+
+def base_image(conf, W, H):
+    """Wallpaper covering the screen with the effect applied (cached)."""
+    wall = pick_wall(conf)
+    fx = conf['BL_FX']
+    dim, blur, pixel = num(conf, 'BL_DIM', 0, 90), num(conf, 'BL_BLUR', 1, 40), num(conf, 'BL_PIXEL', 4, 60)
+    try:
+        stamp = os.path.getmtime(wall) if wall else 0
+    except OSError:
+        stamp = 0
+    key = hashlib.md5(f'v1|{wall}|{stamp}|{W}x{H}|{fx}|{dim}|{blur}|{pixel}|{conf["bg"]}'.encode()).hexdigest()
+    out = os.path.join(CACHE, f'base-{key}.png')
+    if os.path.exists(out):
+        return Image.open(out).convert('RGB')
+
+    if fx == 'color' or not wall:
+        img = Image.new('RGB', (W, H), rgb(conf['bg']))
+    else:
+        img = Image.open(wall)
+        img.draft('RGB', (W, H))          # fast JPEG downscale of 4K walls
+        img = ImageOps.fit(img.convert('RGB'), (W, H), Image.LANCZOS)
+        if 'blur' in fx:
+            # blurring a smaller copy is much faster and looks the same
+            f = 4
+            small = img.resize((max(1, W // f), max(1, H // f)), Image.BILINEAR)
+            small = small.filter(ImageFilter.GaussianBlur(blur * 1.6 / f + 0.5))
+            img = small.resize((W, H), Image.BICUBIC)
+        if 'pixel' in fx:
+            small = img.resize((max(1, W // pixel), max(1, H // pixel)), Image.BILINEAR)
+            img = small.resize((W, H), Image.NEAREST)
+        if fx.startswith('dim') and dim:
+            img = Image.blend(img, Image.new('RGB', (W, H), (0, 0, 0)), dim / 100)
+    os.makedirs(CACHE, exist_ok=True)
+    img.save(out, compress_level=1)
+    for old in sorted(glob.glob(os.path.join(CACHE, 'base-*.png')), key=os.path.getmtime)[:-4]:
+        os.remove(old)
+    return img
+
+
+# ═══════════════════════════════════════════════════════════ drawing
+_fonts = {}
+
+
+def font(px, style='Bold'):
+    k = (px, style)
+    if k not in _fonts:
+        try:
+            path = subprocess.run(['fc-match', '-f', '%{file}', f'JetBrainsMono Nerd Font:style={style}'],
+                                  capture_output=True, text=True, timeout=3).stdout.strip()
+            _fonts[k] = ImageFont.truetype(path, max(6, int(px)))
+        except Exception:
+            _fonts[k] = ImageFont.load_default()
+    return _fonts[k]
+
+
+SS = 3  # supersampling of the masks (smooth edges)
+
+
+def rrect_mask(w, h, r):
+    m = Image.new('L', (w * SS, h * SS), 0)
+    ImageDraw.Draw(m).rounded_rectangle((0, 0, w * SS - 1, h * SS - 1), r * SS, fill=255)
+    return m.resize((w, h), Image.LANCZOS)
+
+
+def shape_mask(d, shape):
+    m = Image.new('L', (d * SS, d * SS), 0)
+    dr = ImageDraw.Draw(m)
+    D = d * SS - 1
+    if shape == 'squircle':
+        dr.rounded_rectangle((0, 0, D, D), D * 0.3, fill=255)
+    elif shape == 'hexagon':
+        dr.regular_polygon((D / 2, D / 2, D / 2), 6, rotation=30, fill=255)
+    else:
+        dr.ellipse((0, 0, D, D), fill=255)
+    return m.resize((d, d), Image.LANCZOS)
+
+
+def glow(img, box, mask, color, radius, alpha):
+    """Soft colored light behind a shape (box: x, y of the mask)."""
+    pad = radius * 3
+    w, h = mask.size
+    layer = Image.new('L', (w + pad * 2, h + pad * 2), 0)
+    layer.paste(mask, (pad, pad))
+    layer = layer.filter(ImageFilter.GaussianBlur(radius)).point(lambda v: int(v * alpha))
+    img.paste(Image.new('RGB', layer.size, color), (box[0] - pad, box[1] - pad), layer)
+
+
+def text(img, xy, s, px, color, style='Bold', anchor='ms', shadow=True):
+    """Text with a soft shadow. anchor: PIL anchors (ms = middle/baseline)."""
+    f = font(px, style)
+    if shadow:
+        l, t, r, b = ImageDraw.Draw(img).textbbox(xy, s, font=f, anchor=anchor)
+        pad = max(4, px // 2)
+        box = (int(l - pad), int(t - pad), int(r + pad), int(b + pad + px // 14))
+        sh = Image.new('L', (box[2] - box[0], box[3] - box[1]), 0)
+        ImageDraw.Draw(sh).text((xy[0] - box[0], xy[1] - box[1] + max(1, px // 14)), s, font=f,
+                                fill=150, anchor=anchor)
+        sh = sh.filter(ImageFilter.GaussianBlur(max(2, px // 6)))
+        img.paste(Image.new('RGB', sh.size, (0, 0, 0)), box[:2], sh)
+    ImageDraw.Draw(img).text(xy, s, font=f, fill=color, anchor=anchor)
+
+
+def now_playing():
+    try:
+        out = subprocess.run(['playerctl', 'metadata', '--format', '{{status}}\t{{artist}}\t{{title}}'],
+                             capture_output=True, text=True, timeout=2).stdout.strip()
+    except Exception:
+        return ''
+    status, _, rest = out.partition('\t')
+    artist, _, title = rest.partition('\t')
+    if status != 'Playing' or not title:
+        return ''
+    line = f'{title} — {artist}' if artist else title
+    return line if len(line) <= 60 else line[:57] + '…'
+
+
+def display_name(conf):
+    user = os.environ.get('USER') or os.path.basename(HOME)
+    return conf['BL_NAME'].strip() or user.capitalize()
+
+
+# ═══════════════════════════════════════════════════════════ layout
+def layout(conf, mon, s):
+    """Every position of the lock, relative to a monitor. Offsets are px
+    at scale s; i3lock gets the same numbers as expressions (x, y, w, h)."""
+    x, y, w, h = mon
+    fx = {'left': 0.27, 'right': 0.73}.get(conf['BL_POS'], 0.5)
+    L = {'fx': fx, 's': s, 'cy_off': 34 * s}
+    L['cx'] = x + w * fx
+    L['cy'] = y + h * 0.5 + L['cy_off']      # card center
+    L['card_w'], L['card_h'] = 460 * s, 480 * s
+    L['avatar_dy'] = -112 * s               # avatar center
+    L['avatar_r'] = 74 * s
+    L['ring_r'] = 86 * s
+    L['ring_w'] = 7 * s
+    L['name_dy'] = 30 * s
+    L['host_dy'] = 62 * s
+    L['pill_dy'] = 116 * s                  # field center
+    L['pill_w'], L['pill_h'] = 340 * s, 48 * s
+    L['verif_dy'] = 176 * s
+    L['layout_dy'] = 206 * s
+    L['modif_dy'] = 228 * s
+    L['time_dy'] = -L['card_h'] / 2 - 92 * s
+    L['date_dy'] = -L['card_h'] / 2 - 42 * s
+    L['time_px'], L['date_px'] = 96 * s, 21 * s
+    return L
+
+
+def expr(L, dy, dx=0):
+    """i3lock position expression for a point of the layout."""
+    # i3lock's evaluator only takes integers: w*27/100, not w*0.27
+    return f'x+w*{round(L["fx"] * 100)}/100{dx:+.0f}:y+h/2{L["cy_off"] + dy:+.0f}'
+
+
+# ═══════════════════════════════════════════════════════════ render
+def render(conf, media=True, preview=False):
+    W, H, mons = screen()
+    s = scale_of(mons)
+    img = base_image(conf, W, H).copy()
+    accent, accent2, fg = rgb(conf['BL_ACCENT']), rgb(conf['BL_ACCENT2']), rgb(conf['BL_FG'])
+    bg = rgb(conf['bg'])
+    card = on(conf, 'BL_CARD')
+    alpha = num(conf, 'BL_CARD_ALPHA', 0, 95) / 100
+    radius = int(num(conf, 'BL_RADIUS', 0, 80) * s)
+    user = os.environ.get('USER') or os.path.basename(HOME)
+    host = socket.gethostname()
+    song = now_playing() if media and on(conf, 'BL_MEDIA') else ''
+    av = None
+    if on(conf, 'BL_AVATAR') and avatar:
+        try:
+            path = avatar.current_path()
+            av = Image.open(path).convert('RGBA') if path and os.path.exists(path) else None
+        except Exception:
+            av = None
+
+    for mon in mons:
+        L = layout(conf, mon, s)
+        cx, cy = L['cx'], L['cy']
+        cw, ch = int(L['card_w']), int(L['card_h'])
+        x0, y0 = int(cx - cw / 2), int(cy - ch / 2)
+
+        # ── glass card
+        if card:
+            m = rrect_mask(cw, ch, radius)
+            # drop shadow
+            sh = Image.new('L', (cw + 160, ch + 160), 0)
+            sh.paste(m, (80, 80))
+            sh = sh.filter(ImageFilter.GaussianBlur(28 * s)).point(lambda v: int(v * 0.55))
+            img.paste(Image.new('RGB', sh.size, (0, 0, 0)), (x0 - 80, y0 - 80 + int(14 * s)), sh)
+            # frosted glass: the wallpaper under it, very blurred + tinted
+            region = img.crop((x0, y0, x0 + cw, y0 + ch))
+            small = region.resize((max(1, cw // 4), max(1, ch // 4)), Image.BILINEAR)
+            frost = small.filter(ImageFilter.GaussianBlur(6)).resize((cw, ch), Image.BICUBIC)
+            frost = Image.blend(frost, Image.new('RGB', (cw, ch), bg), alpha)
+            # top light: a faint vertical sheen
+            sheen = Image.linear_gradient('L').resize((cw, ch)).point(lambda v: int((255 - v) * 0.10))
+            frost.paste(Image.new('RGB', (cw, ch), (255, 255, 255)), (0, 0), sheen)
+            img.paste(frost, (x0, y0), m)
+            # border (accent → accent2 gradient)
+            b = Image.new('L', (cw * SS, ch * SS), 0)
+            ImageDraw.Draw(b).rounded_rectangle((0, 0, cw * SS - 1, ch * SS - 1), radius * SS,
+                                                outline=255, width=max(2, int(1.6 * s * SS)))
+            b = b.resize((cw, ch), Image.LANCZOS).point(lambda v: int(v * 0.75))
+            grad = Image.linear_gradient('L').rotate(90, expand=True).resize((cw, ch))
+            border = Image.composite(Image.new('RGB', (cw, ch), accent2), Image.new('RGB', (cw, ch), accent), grad)
+            img.paste(border, (x0, y0), b)
+            # neon tabs at the top / bottom edge
+            tab = int(cw / 5)
+            d = ImageDraw.Draw(img)
+            d.rounded_rectangle((cx - tab / 2, y0 - 2 * s, cx + tab / 2, y0 + 2 * s), 3 * s, fill=accent)
+            d.rounded_rectangle((cx - tab / 4, y0 + ch - 2 * s, cx + tab / 4, y0 + ch + 2 * s), 3 * s, fill=accent2)
+
+        # ── avatar (+ halo). The i3lock ring is drawn around it.
+        ay = cy + L['avatar_dy']
+        ar = int(L['avatar_r'])
+        d = int(ar * 2)
+        mask = shape_mask(d, conf['BL_SHAPE'])
+        ring_box = (int(cx - ar), int(ay - ar))
+        glow(img, ring_box, mask, accent, int(18 * s), 0.55)
+        # dark base ring (i3lock's own ring is drawn over it)
+        rr = int(L['ring_r'] + L['ring_w'] / 2 + 3 * s)
+        base = shape_mask(rr * 2, 'circle')
+        img.paste(Image.new('RGB', base.size, rgb(conf['black'])), (int(cx - rr), int(ay - rr)),
+                  base.point(lambda v: int(v * 0.65)))
+        if av:
+            face = ImageOps.fit(av, (d, d), Image.LANCZOS)
+            plate = Image.new('RGB', (d, d), bg)
+            plate.paste(face.convert('RGB'), (0, 0), face.getchannel('A'))
+            img.paste(plate, ring_box, mask)
+        else:
+            img.paste(Image.new('RGB', (d, d), bg), ring_box, mask)
+            text(img, (cx, ay), '󰀄', int(ar * 1.1), accent, anchor='mm', shadow=False)
+        if conf['BL_INDICATOR'] == 'bar' or preview:
+            # static ring (bar mode) / what i3lock draws (preview)
+            rw = max(2, int(L['ring_w']))
+            rm = Image.new('L', (rr * 2 * SS, rr * 2 * SS), 0)
+            q = (rr - L['ring_r']) * SS
+            ImageDraw.Draw(rm).ellipse((q - rw * SS / 2, q - rw * SS / 2, rr * 2 * SS - q + rw * SS / 2,
+                                        rr * 2 * SS - q + rw * SS / 2), outline=255, width=rw * SS)
+            rm = rm.resize((rr * 2, rr * 2), Image.LANCZOS)
+            img.paste(Image.new('RGB', rm.size, accent), (int(cx - rr), int(ay - rr)),
+                      rm.point(lambda v: int(v * 0.45)))
+            if preview and conf['BL_INDICATOR'] != 'bar':
+                arc = Image.new('L', (rr * 2 * SS, rr * 2 * SS), 0)
+                ImageDraw.Draw(arc).arc((q - rw * SS / 2, q - rw * SS / 2, rr * 2 * SS - q + rw * SS / 2,
+                                         rr * 2 * SS - q + rw * SS / 2), -60, 20, fill=255, width=rw * SS)
+                arc = arc.resize((rr * 2, rr * 2), Image.LANCZOS)
+                img.paste(Image.new('RGB', arc.size, accent), (int(cx - rr), int(ay - rr)), arc)
+
+        # ── name · user@host
+        text(img, (cx, cy + L['name_dy']), display_name(conf), int(30 * s), fg)
+        text(img, (cx, cy + L['host_dy']), f'󰀄  {user}@{host}', int(14 * s), accent, style='Regular')
+
+        # ── password field
+        pw, ph = int(L['pill_w']), int(L['pill_h'])
+        px, py = int(cx - pw / 2), int(cy + L['pill_dy'] - ph / 2)
+        pm = rrect_mask(pw, ph, ph // 2)
+        img.paste(Image.new('RGB', (pw, ph), rgb(conf['black'])), (px, py), pm.point(lambda v: int(v * 0.6)))
+        po = Image.new('L', (pw * SS, ph * SS), 0)
+        ImageDraw.Draw(po).rounded_rectangle((0, 0, pw * SS - 1, ph * SS - 1), ph * SS // 2,
+                                             outline=255, width=max(2, int(1.3 * s * SS)))
+        po = po.resize((pw, ph), Image.LANCZOS).point(lambda v: int(v * 0.5))
+        img.paste(Image.new('RGB', (pw, ph), accent), (px, py), po)
+        mid = cy + L['pill_dy']
+        text(img, (px + ph * 0.62, mid), '󰌾', int(18 * s), accent, anchor='mm', shadow=False)
+        text(img, (cx + ph * 0.25, mid), conf['BL_GREETER'], int(15 * s), fg, style='Regular',
+             anchor='mm', shadow=False)
+        text(img, (px + pw - ph * 0.62, mid), '󰁔', int(16 * s), accent2, anchor='mm', shadow=False)
+
+        # ── clock + date: i3lock draws them live; the preview fakes them
+        if preview:
+            now = datetime.now()
+            text(img, (cx, cy + L['time_dy']), now.strftime(conf['BL_CLOCK']), int(L['time_px']), fg,
+                 style='ExtraBold')
+            text(img, (cx, cy + L['date_dy']), now.strftime(conf['BL_DATE']), int(L['date_px']), accent,
+                 style='Regular')
+            if on(conf, 'BL_LAYOUT'):
+                text(img, (cx, cy + L['layout_dy']), '󰌌  us', int(12 * s), fg, style='Regular')
+
+        # ── bottom line: now playing · message · rice
+        mx, my, mw, mh = mon
+        bottom = my + mh - 34 * s
+        text(img, (mx + 34 * s, bottom), f'󰣇  {host}  ·  {rice()}', int(13 * s), fg, style='Regular', anchor='ls')
+        if conf['BL_MESSAGE'].strip():
+            text(img, (mx + mw / 2, bottom), conf['BL_MESSAGE'].strip(), int(14 * s), fg, style='Regular')
+        if song:
+            text(img, (mx + mw - 34 * s, bottom), f'󰎈  {song}', int(13 * s), accent2, style='Regular', anchor='rs')
+        elif preview and on(conf, 'BL_MEDIA'):
+            text(img, (mx + mw - 34 * s, bottom), '󰎈  now playing shows here', int(13 * s), accent2,
+                 style='Regular', anchor='rs')
+    return img
+
+
+def save(img, path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + '.tmp.png'
+    img.save(tmp, compress_level=1)
+    os.replace(tmp, path)
+    return path
+
+
+# ═══════════════════════════════════════════════════════════ i3lock
+def hx(color, alpha='ff'):
+    return color.lstrip('#') + alpha
+
+
+def i3lock_args(conf, image=None):
+    """Layout + colors of i3lock-color, appended after betterlockscreen's."""
+    _W, _H, mons = screen()
+    s = scale_of(mons)
+    L = layout(conf, mons[0], s)
+    acc, fg = hx(conf['BL_ACCENT']), hx(conf['BL_FG'])
+    ok, bad = hx(conf['BL_VERIFY']), hx(conf['BL_WRONG'])
+    args = []
+    if image:
+        args += ['-i', image]
+    args += [
+        '--force-clock', '--time-str', conf['BL_CLOCK'], '--date-str', conf['BL_DATE'],
+        '--time-pos', expr(L, L['time_dy']), '--date-pos', expr(L, L['date_dy']),
+        '--time-align', '0', '--date-align', '0',
+        f'--time-font={FONT}:style=ExtraBold', f'--date-font={FONT}',
+        f'--time-size={L["time_px"]:.0f}', f'--date-size={L["date_px"]:.0f}',
+        f'--time-color={fg}', f'--date-color={acc}',
+        '--greeter-text', '', '--noinput-text', '', '--lock-text', 'Locking…',
+        '--verif-text', '󰦖  Verifying…', '--wrong-text', '󰀦  Wrong password',
+        '--verif-pos', expr(L, L['verif_dy']), '--wrong-pos', expr(L, L['verif_dy']),
+        '--verif-align', '0', '--wrong-align', '0',
+        f'--verif-font={FONT}:style=Bold', f'--wrong-font={FONT}:style=Bold',
+        f'--verif-size={15 * s:.0f}', f'--wrong-size={15 * s:.0f}',
+        f'--verif-color={ok}', f'--wrong-color={bad}',
+        '--modif-pos', expr(L, L['modif_dy']), f'--modif-size={12 * s:.0f}', f'--modif-color={bad}',
+        '--modif-align', '0',
+        '--pass-media-keys', '--pass-volume-keys', '--pass-screen-keys',
+    ]
+    if on(conf, 'BL_LAYOUT'):
+        args += ['--keylayout', '1', '--layout-pos', expr(L, L['layout_dy']), '--layout-align', '0',
+                 f'--layout-font={FONT}', f'--layout-size={12 * s:.0f}', f'--layout-color={fg}']
+    if conf['BL_INDICATOR'] == 'bar':
+        pw = L['pill_w']
+        args += ['--bar-indicator', '--bar-pos', expr(L, L['pill_dy'] + L['pill_h'] / 2 + 8 * s, -pw / 2),
+                 '--bar-total-width', f'{pw:.0f}', '--bar-max-height', f'{14 * s:.0f}',
+                 '--bar-base-width', f'{3 * s:.0f}', '--bar-count', '24', '--bar-step', '4',
+                 '--bar-direction', '1', f'--bar-color={hx(conf["BL_ACCENT"], "40")}',
+                 f'--keyhl-color={acc}', f'--bshl-color={bad}',
+                 f'--ringver-color={ok}', f'--ringwrong-color={bad}', f'--ring-color={hx(conf["BL_ACCENT2"], "88")}']
+    else:
+        args += ['--indicator', '--ind-pos', expr(L, L['avatar_dy']),
+                 f'--radius={L["ring_r"]:.0f}', f'--ring-width={L["ring_w"]:.0f}',
+                 f'--ring-color={hx(conf["BL_ACCENT"], "55")}', f'--inside-color={hx(conf["bg"], "00")}',
+                 f'--insidever-color={hx(conf["BL_VERIFY"], "33")}', f'--insidewrong-color={hx(conf["BL_WRONG"], "44")}',
+                 f'--ringver-color={ok}', f'--ringwrong-color={bad}',
+                 f'--keyhl-color={acc}', f'--bshl-color={bad}',
+                 '--separator-color=00000000', f'--line-color={hx(conf["bg"], "00")}']
+    return args
+
+
+def shq(v):
+    return "'" + str(v).replace("'", "'\\''") + "'"
+
+
+def write_rc(conf):
+    """betterlockscreenrc: theme + our layout, even for `betterlockscreen -l`."""
+    bg, fg = hx(conf['bg']), hx(conf['BL_FG'])
+    lines = [
+        f'# Generated for the {rice()} theme by ~/.config/bspwm/bin/BetterLock',
+        '# Edit it from RiceEditor -> Login Lock (BL_* in theme-config.bash)',
+        '',
+        f'fx_list=({conf["BL_FX"] if conf["BL_FX"] != "none" else "dim"})',
+        f'dim_level={num(conf, "BL_DIM", 0, 90)}',
+        f'blur_level=1',
+        f'pixel_scale=10,1000',
+        f'solid_color={conf["bg"].lstrip("#")}',
+        f'lock_timeout={num(conf, "BL_OFF", 5, 3600)}',
+        'quiet=true',
+        'span_image=false',
+        'wallpaper_cmd="feh --bg-fill"',
+        '',
+        f'loginbox={hx(conf["bg"], "99")}',
+        'loginshadow=00000000',
+        f'locktext={shq(conf["BL_GREETER"])}',
+        f'font={shq(FONT)}',
+        f'ringcolor={hx(conf["BL_ACCENT"])}',
+        f'insidecolor={hx(conf["bg"], "00")}',
+        'separatorcolor=00000000',
+        f'ringvercolor={hx(conf["BL_VERIFY"])}',
+        f'insidevercolor={hx(conf["BL_VERIFY"], "33")}',
+        f'ringwrongcolor={hx(conf["BL_WRONG"])}',
+        f'insidewrongcolor={hx(conf["BL_WRONG"], "44")}',
+        f'timecolor={fg}',
+        f'time_format={shq(conf["BL_CLOCK"])}',
+        f'greetercolor={fg}',
+        f'layoutcolor={fg}',
+        f'keyhlcolor={hx(conf["BL_ACCENT"])}',
+        f'bshlcolor={hx(conf["BL_WRONG"])}',
+        f'verifcolor={hx(conf["BL_VERIFY"])}',
+        f'wrongcolor={hx(conf["BL_WRONG"])}',
+        f'modifcolor={hx(conf["BL_WRONG"])}',
+        f'bgcolor={bg}',
+        '',
+        '# ── rice layout: login card with the avatar (appended to i3lock) ──',
+        f'if [ -f {shq(LOCK_IMG)} ]; then',
+        '    lockargs+=(',
+    ]
+    for a in i3lock_args(conf, LOCK_IMG):
+        lines.append(f'        {shq(a)}')
+    lines += ['    )', 'fi', '']
+    os.makedirs(os.path.dirname(RC), exist_ok=True)
+    tmp = RC + '.tmp'
+    with open(tmp, 'w') as f:
+        f.write('\n'.join(lines))
+    os.replace(tmp, RC)
+
+
+# ═══════════════════════════════════════════════════════════ actions
+def prepare(conf):
+    save(render(conf, media=False), LOCK_IMG)
+    write_rc(conf)
+
+
+def lock(conf, test=False):
+    if subprocess.run(['pgrep', '-u', str(os.getuid()), '-x', 'i3lock'], capture_output=True).returncode == 0:
+        return 0
+    if conf['BL_WALL'] == 'random':
+        pick_wall(conf, fresh=True)
+    try:
+        image = save(render(conf, media=True), NOW_IMG)
+    except Exception as e:  # never stay unlocked because of a render bug
+        print(f'BetterLock: {e}', file=sys.stderr)
+        image = LOCK_IMG if os.path.exists(LOCK_IMG) else None
+    write_rc(conf)
+    cmd = ['betterlockscreen', '-l', 'none', '--off', str(num(conf, 'BL_OFF', 5, 3600))]
+    if shutil.which('betterlockscreen') is None:
+        cmd = ['i3lock', '-n']
+    cmd += (['--'] if cmd[0] == 'betterlockscreen' else []) + i3lock_args(conf, image)
+    if test:
+        # demo: unlocks by itself after a few seconds
+        subprocess.Popen(['sh', '-c', 'sleep 8; pkill -u "$(id -u)" -x i3lock'], start_new_session=True)
+    with open(os.path.join(CACHE, 'last-lock.log'), 'w') as log:   # to debug a lock that fails
+        return subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT).returncode
+
+
+def idle(conf):
+    """Auto-lock: xss-lock locks on the X screensaver timeout and before
+    suspend. BL_IDLE minutes (0 = never), BL_SUSPEND true|false."""
+    subprocess.run(['pkill', '-u', str(os.getuid()), '-x', 'xss-lock'], capture_output=True)
+    minutes = num(conf, 'BL_IDLE', 0, 240)
+    if minutes:
+        subprocess.run(['xset', 's', str(minutes * 60), str(minutes * 60)], capture_output=True)
+    elif on(conf, 'BL_SUSPEND'):
+        subprocess.run(['xset', 's', 'off'], capture_output=True)
+    if (minutes or on(conf, 'BL_SUSPEND')) and shutil.which('xss-lock'):
+        subprocess.Popen(['xss-lock', '--', os.path.abspath(__file__), '--lock'], start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def main():
+    args = sys.argv[1:] or ['--lock']
+    conf = settings()
+    op = args[0]
+    if op in ('-l', '--lock'):
+        sys.exit(lock(conf))
+    elif op in ('-t', '--test'):
+        sys.exit(lock(conf, test=True))
+    elif op in ('-p', '--prepare'):
+        prepare(conf)
+    elif op in ('-c', '--config'):
+        write_rc(conf)
+    elif op == '--preview' and len(args) > 1:
+        save(render(conf, media=False, preview=True), args[1])
+    elif op in ('-i', '--idle'):
+        idle(conf)
+    elif op == '--json':
+        print(json.dumps(conf, indent=2))
+    else:
+        print(__doc__ or '', 'BetterLock [--lock | --test | --prepare | --config | --preview FILE | --idle]\n'
+              '  --lock     Lock now (default)\n'
+              '  --test     Lock and unlock by itself after 8 s (try the look)\n'
+              '  --prepare  Render the lock image + write betterlockscreenrc\n'
+              '  --config   Only write betterlockscreenrc\n'
+              '  --preview  Render a preview (clock and ring included) to FILE\n'
+              '  --idle     (Re)start the auto-lock (xss-lock) with BL_IDLE / BL_SUSPEND', sep='')
+
+
+if __name__ == '__main__':
+    main()

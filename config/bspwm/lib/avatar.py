@@ -26,7 +26,6 @@ HOME = os.path.expanduser('~')
 BSPWM = os.path.join(HOME, '.config/bspwm')
 CONF = os.path.join(BSPWM, 'config/avatar.json')
 OUT = os.path.join(BSPWM, 'config/assets/avatar.png')
-FALLBACK = os.path.join(BSPWM, 'config/assets/profile.png')
 SIZE = 512
 
 CHARSETS = {
@@ -90,9 +89,24 @@ def save(conf):
     os.replace(tmp, CONF)
 
 
+def fallback():
+    """The raw logo of the rice (user_logo.png, else any .png there)."""
+    logo = os.path.join(icons_dir(), DEFAULT['source'])
+    if os.path.isfile(logo):
+        return logo
+    icons = list_icons()
+    return icons[0] if icons else None
+
+
 def current_path():
-    """What the widgets should show right now."""
-    return OUT if os.path.exists(OUT) else FALLBACK
+    """What the widgets should show right now: the AvatarForge render,
+    made on the fly the first time."""
+    if not os.path.exists(OUT):
+        try:
+            render()
+        except Exception:
+            return fallback() or OUT
+    return OUT
 
 
 def palette():
@@ -125,8 +139,9 @@ def _font(px):
 def _source(conf):
     path = os.path.join(icons_dir(), conf.get('source') or '')
     if not os.path.isfile(path):
-        icons = list_icons()
-        path = icons[0] if icons else FALLBACK
+        path = fallback()
+    if not path:
+        return Image.new('RGBA', (SIZE, SIZE), (0, 0, 0, 0))
     return Image.open(path).convert('RGBA')
 
 

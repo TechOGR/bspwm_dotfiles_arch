@@ -352,9 +352,12 @@ combobox button { background-image: none; background-color: alpha(@bg, 0.8); bor
         def apply(self, *_):
             avatar.save(self.conf)
             avatar.render(self.conf)
-            self.toast.set_text('AVATAR APPLIED — USERCARD AND RICEEDITOR ARE UPDATED')
+            self.toast.set_text('AVATAR APPLIED — USERCARD, RICEEDITOR AND THE LOCK ARE UPDATED')
             subprocess.Popen(['dunstify', '-r', '4455', '-i', avatar.OUT, 'Avatar', 'New profile picture applied'],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # the login lock (BetterLock) shows the avatar as well
+            subprocess.Popen(['nice', '-n', '19', os.path.join(avatar.BSPWM, 'bin/BetterLock'), '--prepare'],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
         def copy_text(self, *_):
             txt = avatar.ascii_text(self.conf)

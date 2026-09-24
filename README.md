@@ -24,7 +24,7 @@ Configuración personal de escritorio para **BSPWM** sobre **Arch Linux** y deri
 | Multimedia | `mpd`, `ncmpcpp`, `mpv`, control de volumen/brillo/reproducción |
 | Archivos / documentos | `yazi`, `zathura` |
 | Portapapeles | `clipcat` |
-| Bloqueo de pantalla | `betterlockscreen` (o `i3lock` como respaldo) |
+| Bloqueo de pantalla | `ScreenLocker` (rápido) y `betterlockscreen` con tarjeta de login + avatar (`BetterLock`, editable en RiceEditor → Login Lock), auto-bloqueo con `xss-lock` |
 | Navegador | `Brave` (predeterminado del sistema tras la instalación) |
 | Fuentes / iconos | JetBrainsMono Nerd Font, Font Awesome, Papirus |
 
@@ -83,7 +83,8 @@ La tecla principal (**Mod**) es **Super** (tecla Windows).
 | `Super + Alt + ← ↓ ↑ →` | Mover el foco entre ventanas |
 | `Super + Alt + R` | Recargar BSPWM |
 | `Ctrl + Super + Alt + Q` | Cerrar sesión |
-| `Ctrl + Super + Alt + L` | Bloquear pantalla |
+| `Ctrl + Super + Alt + L` / `Super + Shift + S` | Bloquear pantalla (ScreenLocker) |
+| `Super + Shift + L` | Pantalla de login (betterlockscreen · BetterLock) |
 | `Click derecho en el escritorio` | Menú de aplicaciones (JGmenu) |
 
 Atajos completos y personalizables en [`config/bspwm/config/sxhkdrc`](config/bspwm/config/sxhkdrc).

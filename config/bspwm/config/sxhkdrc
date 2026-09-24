@@ -267,6 +267,10 @@ super + n ; {1-9}
 super + shift + s
 	ScreenLocker
 
+# Login lock: betterlockscreen with the avatar card (BetterLock)
+super + shift + l
+	BetterLock
+
 #####################
 # Tamaño de ventana #
 #####################

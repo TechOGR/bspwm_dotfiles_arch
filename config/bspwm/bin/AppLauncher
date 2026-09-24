@@ -27,6 +27,7 @@ from urllib.parse import quote_plus
 
 sys.path.insert(0, os.path.expanduser('~/.config/bspwm/lib'))
 import riceui as ui  # noqa: E402
+import avatar as avatar_lib  # noqa: E402  (profile picture made by AvatarForge)
 from riceui import Gtk, Gdk, GLib, GdkPixbuf, Pango, cairo  # noqa: E402
 from gi.repository import Gio  # noqa: E402
 
@@ -259,9 +260,10 @@ class Launcher(Gtk.Window):
         side.set_size_request(230, -1)
         avatar = Gtk.DrawingArea()
         avatar.set_size_request(-1, 96)
-        path = os.path.join(ui.BSPWM, 'config/assets/profile.png')
+        # same avatar as RiceEditor / UserCard (AvatarForge)
+        path = avatar_lib.current_path()
         self.avatar = None
-        if os.path.exists(path):
+        if path and os.path.exists(path):
             try:
                 pix = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, 72, 72, True)
                 self.avatar = Gdk.cairo_surface_create_from_pixbuf(pix, 1, None)

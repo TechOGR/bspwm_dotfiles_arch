@@ -49,6 +49,9 @@ handle_animated() {
 # Pre-render the lockscreen for the new wallpaper (so it locks instantly)
 prepare_lock() {
     command -v ScreenLocker >/dev/null 2>&1 && (ScreenLocker --prepare >/dev/null 2>&1 &)
+    # the login lock (betterlockscreen) follows the wallpaper too
+    [ -x "$HOME/.config/bspwm/bin/BetterLock" ] &&
+        (nice -n 19 "$HOME/.config/bspwm/bin/BetterLock" --prepare >/dev/null 2>&1 &)
 }
 
 if [ "$1" = "--animated" ]; then
