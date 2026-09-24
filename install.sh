@@ -458,7 +458,7 @@ install_packages() {
         brightnessctl pamixer playerctl alsa-utils
         dbus polkit-gnome lxsession
         mpd mpc ncmpcpp mpv
-        zsh zsh-autosuggestions zsh-syntax-highlighting fzf
+        zsh zsh-autosuggestions zsh-syntax-highlighting zsh-history-substring-search fzf
         yazi zathura zathura-pdf-mupdf
         clipcat
         ttf-jetbrains-mono-nerd ttf-font-awesome noto-fonts-emoji
@@ -754,7 +754,22 @@ user-session=bspwm
 greeter-session=lightdm-gtk-greeter
 EOF_DM
 
-        # Give LightDM the exact same default wallpaper as the TechOGR rice.
+        # TechOGR login screen: lightdm-webkit2-greeter + theme "techogr",
+        # the BetterLock card (user, password, session, power buttons).
+        if sudo bash "$SCRIPT_DIR/misc/lightdm/install-login.sh" "$USER" >>"$LOG_FILE" 2>&1; then
+            # wallpaper, avatar and colors of the rice -> the theme's data/
+            "$HOME/.config/bspwm/bin/BetterLock" --greeter >>"$LOG_FILE" 2>&1 || true
+            success "Pantalla de login TechOGR (lightdm-webkit2-greeter) instalada."
+        else
+            warn "No se pudo instalar el login TechOGR; LightDM usará lightdm-gtk-greeter."
+            sudo tee /etc/lightdm/lightdm.conf.d/50-bspwm.conf >/dev/null <<'EOF_DM'
+[Seat:*]
+user-session=bspwm
+greeter-session=lightdm-gtk-greeter
+EOF_DM
+        fi
+
+        # Fallback greeter (lightdm-gtk-greeter): same default wallpaper.
         local wallpaper="$HOME/Imágenes/Wallpapers/noche_car_man.jpg"
         if [[ -f "$wallpaper" ]]; then
             sudo install -d -m755 /etc/lightdm/lightdm-gtk-greeter.conf.d
@@ -818,6 +833,29 @@ configure_shell() {
     if [[ "$(getent passwd "$USER" | cut -d: -f7)" != "$zsh_path" ]]; then
         sudo chsh -s "$zsh_path" "$USER" >>"$LOG_FILE" 2>&1 || warn "No se pudo cambiar la shell predeterminada a Zsh."
     fi
+    configure_root_shell "$zsh_path"
+}
+
+configure_root_shell() {
+    # root gets the same zsh (prompt, plugins, aliases, colorscript).
+    local zsh_path="$1"
+    [[ -f "$SCRIPT_DIR/home/.zshrc" ]] || return 0
+    sudo install -Dm644 "$SCRIPT_DIR/home/.zshrc" /root/.zshrc >>"$LOG_FILE" 2>&1 || {
+        warn "No se pudo copiar .zshrc a /root."; return 0; }
+    sudo install -d -m700 /root/.config/zsh
+    # colorscript + its scripts, system-wide (root has no ~/.local copy)
+    if [[ -f "$SCRIPT_DIR/misc/bin/colorscript" ]]; then
+        sudo install -Dm755 "$SCRIPT_DIR/misc/bin/colorscript" /usr/local/bin/colorscript
+    fi
+    if [[ -d "$SCRIPT_DIR/misc/asciiart" ]]; then
+        sudo install -d -m755 /usr/local/share/asciiart
+        sudo rsync -a --delete --chown=root:root --chmod=D755,F755 \
+            "$SCRIPT_DIR/misc/asciiart/" /usr/local/share/asciiart/ >>"$LOG_FILE" 2>&1 || true
+    fi
+    if [[ "$(getent passwd root | cut -d: -f7)" != "$zsh_path" ]]; then
+        sudo chsh -s "$zsh_path" root >>"$LOG_FILE" 2>&1 || warn "No se pudo cambiar la shell de root a Zsh."
+    fi
+    success "Zsh de root configurada con el mismo estilo."
 }
 
 # --------------------------- Integrity checks ---------------------------------

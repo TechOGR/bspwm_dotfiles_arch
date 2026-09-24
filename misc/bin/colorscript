@@ -13,6 +13,8 @@
 # ----------------------------------------------------------------------------
 
 DIR_COLORSCRIPTS="$HOME/.local/share/asciiart"
+# root has no copy of its own: install.sh puts one in /usr/local/share
+[ -d "$DIR_COLORSCRIPTS" ] || DIR_COLORSCRIPTS="/usr/local/share/asciiart"
 
 # Load scripts into an array
 color_scripts=$(ls "$DIR_COLORSCRIPTS" 2>/dev/null)

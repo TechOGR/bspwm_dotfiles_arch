@@ -1,0 +1,6 @@
+[theme]
+name=TechOGR
+description=The BetterLock login card of the TechOGR bspwm rice
+engine=lightdm-webkit-greeter
+url=index.html
+session=bspwm

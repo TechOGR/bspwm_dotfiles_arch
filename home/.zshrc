@@ -24,6 +24,7 @@ fi
 #  ┬  ┌─┐┌─┐┌┬┐  ┌─┐┌┐┌┌─┐┬┌┐┌┌─┐
 #  │  │ │├─┤ ││  ├┤ ││││ ┬││││├┤
 #  ┴─┘└─┘┴ ┴─┴┘  └─┘┘└┘└─┘┴┘└┘└─┘
+[[ -d ~/.config/zsh ]] || mkdir -p ~/.config/zsh   # zcompdump + history (root too)
 autoload -Uz compinit
 
 local zcompdump="$HOME/.config/zsh/zcompdump"
@@ -161,7 +162,11 @@ alias ll='eza --icons=always --color=always -la'
 #  ┌─┐┬ ┬┌┬┐┌─┐  ┌─┐┌┬┐┌─┐┬─┐┌┬┐
 #  ├─┤│ │ │ │ │  └─┐ │ ├─┤├┬┘ │
 #  ┴ ┴└─┘ ┴ └─┘  └─┘ ┴ ┴ ┴┴└─ ┴
-$HOME/.local/bin/colorscript -r
+# root (sudo -i / su) uses the system-wide copy made by install.sh
+for _cs in "$HOME/.local/bin/colorscript" /usr/local/bin/colorscript; do
+	[[ -x "$_cs" ]] && { "$_cs" -r; break; }
+done
+unset _cs
 #disable-fzf-tab
 
 ############################

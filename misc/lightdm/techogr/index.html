@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<!--
+  TechOGR login - lightdm-webkit2-greeter theme
+  The BetterLock login card (super+shift+l) as the LightDM login screen:
+  avatar + password ring, user, password, session and power.
+  Wallpaper, avatar and colors come from data/, written by
+  ~/.config/bspwm/bin/BetterLock --prepare (on every wallpaper / avatar /
+  Login Lock change). https://github.com/TechOGR/bspwm_dotfiles_arch
+-->
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>TechOGR Login</title>
+	<link rel="stylesheet" href="style.css">
+	<script src="data/config.js"></script>
+</head>
+<body class="loading">
+	<div id="bg"></div>
+
+	<div id="clock">
+		<div id="time">--:--</div>
+		<div id="date"></div>
+	</div>
+
+	<div id="cardwrap">
+		<div id="card"></div>
+		<div class="tab top"></div>
+		<div class="tab bottom"></div>
+
+		<div id="content">
+			<div id="avatar-wrap">
+				<div id="avatar-base"></div>
+				<svg id="ring" viewBox="0 0 200 200">
+					<circle id="ring-base" cx="100" cy="100" r="86"></circle>
+					<circle id="ring-hl" cx="100" cy="100" r="86"></circle>
+				</svg>
+				<div id="avatar"><img id="avatar-img" alt=""><span id="avatar-icon">󰀄</span></div>
+			</div>
+
+			<div id="user-row">
+				<button id="user-prev" class="nav" type="button" title="Previous user">󰅁</button>
+				<div id="name"></div>
+				<input id="name-input" type="text" placeholder="Username" autocomplete="off" spellcheck="false">
+				<button id="user-next" class="nav" type="button" title="Next user">󰅂</button>
+			</div>
+			<div id="host"></div>
+
+			<form id="pill" autocomplete="off">
+				<span class="ico">󰌾</span>
+				<input id="pass" type="password" spellcheck="false">
+				<button id="go" type="submit" title="Log in">󰁔</button>
+			</form>
+			<div id="status"></div>
+
+			<div id="session">
+				<button id="session-btn" type="button"><span class="ico">󰍹</span><span id="session-name"></span><span class="caret">󰅀</span></button>
+				<ul id="session-list"></ul>
+			</div>
+		</div>
+	</div>
+
+	<div id="foot-left"></div>
+	<div id="foot-mid"></div>
+	<div id="power">
+		<button id="pw-suspend" type="button" title="Suspend">󰒲</button>
+		<button id="pw-restart" type="button" title="Restart">󰜉</button>
+		<button id="pw-shutdown" type="button" title="Shut down">󰐥</button>
+	</div>
+
+	<script src="greeter.js"></script>
+</body>
+</html>
