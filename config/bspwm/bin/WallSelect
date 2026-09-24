@@ -779,7 +779,7 @@ def set_wallpaper(path):
     except OSError as e:
         print(f'WallSelect: cannot update {THEME_CFG}: {e}', file=sys.stderr)
     subprocess.Popen(['sh', '-c', '''
-        pkill -x xwinwrap 2>/dev/null
+        VideoWall --stop 2>/dev/null
         [ -f /tmp/wall_refresh.pid ] && kill "$(cat /tmp/wall_refresh.pid)" 2>/dev/null
         rm -f /tmp/wall_refresh.pid
         feh --bg-fill "$1" && WallSync

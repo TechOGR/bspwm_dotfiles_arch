@@ -7,7 +7,8 @@
 #   ✔ The AvatarForge avatar in the middle, the password ring around it
 #   ✔ Frosted glass login card: name, user@host, password field
 #   ✔ Big clock + date, keyboard layout, Caps Lock warning
-#   ✔ Wallpaper: the one on screen · random of the rice · any picture
+#   ✔ Wallpaper: the one on screen · random of the rice · any picture ·
+#     a VIDEO playing behind the lock (VideoWall + a transparent i3lock)
 #   ✔ Effects: none · dim · blur · dimblur · pixel · dimpixel · color
 #   ✔ Now playing + a custom message baked at lock time
 #   ✔ Writes ~/.config/betterlockscreen/betterlockscreenrc, so even a
@@ -43,6 +44,10 @@ try:
     import avatar  # noqa: E402  (profile picture made by AvatarForge)
 except Exception:
     avatar = None
+try:
+    import videowall  # noqa: E402  (video wallpapers: frames, filters)
+except Exception:
+    videowall = None
 
 CACHE = os.path.join(os.environ.get('XDG_CACHE_HOME', os.path.join(HOME, '.cache')), 'betterlockscreen/rice')
 LOCK_IMG = os.path.join(CACHE, 'lock.png')        # used by a plain `betterlockscreen -l`
@@ -51,8 +56,9 @@ RC = os.path.join(HOME, '.config/betterlockscreen/betterlockscreenrc')
 FONT = 'JetBrainsMono NF'
 
 DEFAULTS = {
-    'BL_WALL': 'current',          # current | random | custom
+    'BL_WALL': 'current',          # current | random | custom | video
     'BL_WALL_PATH': '',            # picture for BL_WALL=custom
+    'BL_VIDEO': '',                # video for BL_WALL=video (empty = the video wallpaper)
     'BL_FX': 'dimblur',            # none | dim | blur | dimblur | pixel | dimpixel | color
     'BL_DIM': '35',                # 0-90 %
     'BL_BLUR': '10',               # 1-40
@@ -196,6 +202,10 @@ def current_wall(conf):
 def pick_wall(conf, fresh=False):
     """fresh: a new random pick (at lock time); otherwise the last one."""
     mode = conf['BL_WALL']
+    if mode == 'video':
+        still = videowall.frame(lock_video(conf)) if videowall else None
+        if still:
+            return still
     if mode == 'custom' and os.path.isfile(conf['BL_WALL_PATH']):
         return conf['BL_WALL_PATH']
     if mode == 'random':
@@ -214,6 +224,14 @@ def pick_wall(conf, fresh=False):
         if last in walls:
             return last
     return current_wall(conf)
+
+
+def lock_video(conf):
+    """BL_VIDEO, else the video wallpaper, else the first of walls/videos."""
+    if not videowall:
+        return ''
+    v = conf.get('BL_VIDEO', '')
+    return v if os.path.isfile(v) and videowall.is_video(v) else videowall.current_video()
 
 
 def base_image(conf, W, H):
@@ -370,10 +388,11 @@ def expr(L, dy, dx=0):
 
 
 # ═══════════════════════════════════════════════════════════ render
-def render(conf, media=True, preview=False):
+def render(conf, media=True, preview=False, transparent=False):
+    """transparent: only the overlay (RGBA), for the video mode."""
     W, H, mons = screen()
     s = scale_of(mons)
-    img = base_image(conf, W, H).copy()
+    img = Image.new('RGBA', (W, H), (0, 0, 0, 0)) if transparent else base_image(conf, W, H).copy()
     accent, accent2, fg = rgb(conf['BL_ACCENT']), rgb(conf['BL_ACCENT2']), rgb(conf['BL_FG'])
     bg = rgb(conf['bg'])
     card = on(conf, 'BL_CARD')
@@ -404,15 +423,23 @@ def render(conf, media=True, preview=False):
             sh.paste(m, (80, 80))
             sh = sh.filter(ImageFilter.GaussianBlur(28 * s)).point(lambda v: int(v * 0.55))
             img.paste(Image.new('RGB', sh.size, (0, 0, 0)), (x0 - 80, y0 - 80 + int(14 * s)), sh)
-            # frosted glass: the wallpaper under it, very blurred + tinted
-            region = img.crop((x0, y0, x0 + cw, y0 + ch))
-            small = region.resize((max(1, cw // 4), max(1, ch // 4)), Image.BILINEAR)
-            frost = small.filter(ImageFilter.GaussianBlur(6)).resize((cw, ch), Image.BICUBIC)
-            frost = Image.blend(frost, Image.new('RGB', (cw, ch), bg), alpha)
-            # top light: a faint vertical sheen
             sheen = Image.linear_gradient('L').resize((cw, ch)).point(lambda v: int((255 - v) * 0.10))
-            frost.paste(Image.new('RGB', (cw, ch), (255, 255, 255)), (0, 0), sheen)
-            img.paste(frost, (x0, y0), m)
+            if transparent:
+                # over a video: a tinted see-through panel (no frost possible)
+                glass = Image.new('RGBA', (cw, ch), (*bg, int(255 * (0.40 + 0.55 * alpha))))
+                glass.paste(Image.new('RGBA', (cw, ch), (255, 255, 255, 40)), (0, 0), sheen)
+                layer = Image.new('RGBA', (cw, ch), (0, 0, 0, 0))
+                layer.paste(glass, (0, 0), m)
+                img.alpha_composite(layer, (x0, y0))
+            else:
+                # frosted glass: the wallpaper under it, very blurred + tinted
+                region = img.crop((x0, y0, x0 + cw, y0 + ch))
+                small = region.resize((max(1, cw // 4), max(1, ch // 4)), Image.BILINEAR)
+                frost = small.filter(ImageFilter.GaussianBlur(6)).resize((cw, ch), Image.BICUBIC)
+                frost = Image.blend(frost, Image.new('RGB', (cw, ch), bg), alpha)
+                # top light: a faint vertical sheen
+                frost.paste(Image.new('RGB', (cw, ch), (255, 255, 255)), (0, 0), sheen)
+                img.paste(frost, (x0, y0), m)
             # border (accent → accent2 gradient)
             b = Image.new('L', (cw * SS, ch * SS), 0)
             ImageDraw.Draw(b).rounded_rectangle((0, 0, cw * SS - 1, ch * SS - 1), radius * SS,
@@ -521,7 +548,7 @@ def hx(color, alpha='ff'):
     return color.lstrip('#') + alpha
 
 
-def i3lock_args(conf, image=None):
+def i3lock_args(conf, image=None, transparent=False):
     """Layout + colors of i3lock-color, appended after betterlockscreen's."""
     _W, _H, mons = screen()
     s = scale_of(mons)
@@ -531,6 +558,8 @@ def i3lock_args(conf, image=None):
     args = []
     if image:
         args += ['-i', image]
+    if transparent:
+        args += ['--color=00000000']     # the video (VideoWall --lock) shows through
     args += [
         '--force-clock', '--time-str', conf['BL_CLOCK'], '--date-str', conf['BL_DATE'],
         '--time-pos', expr(L, L['time_dy']), '--date-pos', expr(L, L['date_dy']),
@@ -639,21 +668,60 @@ def lock(conf, test=False):
         return 0
     if conf['BL_WALL'] == 'random':
         pick_wall(conf, fresh=True)
+    helper = start_video(conf) if conf['BL_WALL'] == 'video' else None
     try:
-        image = save(render(conf, media=True), NOW_IMG)
+        image = save(render(conf, media=True, transparent=bool(helper)), NOW_IMG)
     except Exception as e:  # never stay unlocked because of a render bug
         print(f'BetterLock: {e}', file=sys.stderr)
         image = LOCK_IMG if os.path.exists(LOCK_IMG) else None
+        helper = stop_video(helper)
     write_rc(conf)
     cmd = ['betterlockscreen', '-l', 'none', '--off', str(num(conf, 'BL_OFF', 5, 3600))]
     if shutil.which('betterlockscreen') is None:
         cmd = ['i3lock', '-n']
-    cmd += (['--'] if cmd[0] == 'betterlockscreen' else []) + i3lock_args(conf, image)
+    cmd += (['--'] if cmd[0] == 'betterlockscreen' else []) + i3lock_args(conf, image, transparent=bool(helper))
     if test:
         # demo: unlocks by itself after a few seconds
         subprocess.Popen(['sh', '-c', 'sleep 8; pkill -u "$(id -u)" -x i3lock'], start_new_session=True)
-    with open(os.path.join(CACHE, 'last-lock.log'), 'w') as log:   # to debug a lock that fails
-        return subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT).returncode
+    try:
+        with open(os.path.join(CACHE, 'last-lock.log'), 'w') as log:   # to debug a lock that fails
+            return subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT).returncode
+    finally:
+        stop_video(helper)
+
+
+def start_video(conf):
+    """The video above everything (VideoWall --lock); the lock is then drawn
+    transparent on top. None (-> the still picture) if it cannot play."""
+    video = lock_video(conf)
+    if not (videowall and video and videowall.compositor()):
+        return None
+    ready = os.path.join(videowall.RUNTIME, 'videowall-lock.ready')
+    try:
+        os.remove(ready)
+    except OSError:
+        pass
+    vf = videowall.lock_filter(conf['BL_FX'], num(conf, 'BL_DIM', 0, 90), num(conf, 'BL_BLUR', 1, 40),
+                               num(conf, 'BL_PIXEL', 4, 60))
+    cmd = [os.path.join(BSPWM, 'bin/VideoWall'), '--lock', video] + (['--vf', vf] if vf else [])
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    for _ in range(80):                    # up to 8 s for mpv to show a frame
+        if os.path.exists(ready):
+            return proc
+        if proc.poll() is not None:
+            return None
+        subprocess.run(['sleep', '0.1'])
+    return stop_video(proc)
+
+
+def stop_video(proc):
+    if proc and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    return None
 
 
 def idle(conf):

@@ -5,6 +5,7 @@ pick_random_wall() {
 }
 
 set_wall() {
+    VideoWall --stop    # a picture replaces the video wallpaper
     feh --bg-fill "$1"
     WallSync &
 }
@@ -20,8 +21,9 @@ set_wall() {
             set_wall "$DEFAULT_WALL"
             ;;
         "Animated")
-            AnimatedWall --start "$ANIMATED_WALL"
-            WallSync --animated &
+            # video of walls/videos (VideoWall sets a still of it as the
+            # picture wallpaper + WallSync by itself)
+            VideoWall --start "$ANIMATED_WALL"
             ;;
         "Slideshow")
             (

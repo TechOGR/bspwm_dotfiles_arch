@@ -33,6 +33,7 @@ import time
 import shutil
 import random
 import hashlib
+import json
 import platform
 import threading
 import subprocess
@@ -57,6 +58,10 @@ try:
     import avatar  # noqa: E402  (profile picture made by AvatarForge)
 except Exception:
     avatar = None
+try:
+    import videowall  # noqa: E402  (video wallpapers: walls/videos, thumbnails)
+except Exception:
+    videowall = None
 
 
 def avatar_path():
@@ -348,6 +353,9 @@ def list_walls():
 
 
 def pretty_wall(path):
+    if videowall and '/videowall/frame-' in (path or ''):
+        # a still of the video wallpaper (VideoWall): name the video
+        return '󰕧 VIDEO · ' + videowall.pretty(videowall.current_video()).upper()
     name = os.path.splitext(os.path.basename(path))[0]
     name = re.split(r'-(4k-)?wallpaper-uhdpaper\.com', name)[0]
     return name.replace('-', ' ').replace('_', ' ').upper()
@@ -2092,13 +2100,16 @@ class RiceEditor(Gtk.Window):
         c.pack_start(hb, False, False, 4)
         p.pack_start(c, False, False, 0)
 
+        if videowall:
+            p.pack_start(self.video_card(), False, False, 0)
+
         c = self.card('󰔟', 'Engine', 'how the wallpaper is chosen at login')
         self.engine_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         engine = self.cfg.raw('ENGINE', 'Default')
         c.pack_start(self.row('Wallpaper engine', '',
                               self.combo([('Default', 'Default · fixed image'), ('Random', 'Random · rice walls'),
                                           ('CustomDir', 'Random · custom folder'), ('Slideshow', 'Slideshow · 15 min'),
-                                          ('Animated', 'Animated · video/gif')],
+                                          ('Animated', 'Video · walls/videos')],
                                          engine, self.show_engine_opts)), False, False, 0)
         c.pack_start(self.engine_box, False, False, 0)
         self.show_engine_opts(engine)
@@ -2131,6 +2142,167 @@ class RiceEditor(Gtk.Window):
         c.pack_start(flow, False, False, 4)
         p.pack_start(c, False, False, 0)
         return p
+
+    # ── video wallpapers (VideoWall · rices/<rice>/walls/videos)
+    def video_card(self):
+        cfg = self.cfg
+        folder = videowall.videos_dir()
+        c = self.card('󰕧', 'Video wallpapers', folder.replace(HOME, '~') + ' · click to play')
+        self.video_status = Gtk.Label(xalign=0)
+        self.video_status.get_style_context().add_class('mono-note')
+        c.pack_start(self.video_status, False, False, 2)
+        self.video_flow = Gtk.FlowBox()
+        self.video_flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.video_flow.set_max_children_per_line(5)
+        self.video_flow.set_min_children_per_line(3)
+        self.video_flow.set_column_spacing(8)
+        self.video_flow.set_row_spacing(8)
+        c.pack_start(self.video_flow, False, False, 4)
+
+        hb = Gtk.Box(spacing=8)
+        hb.pack_start(self.button('󰐎  Play / pause', 'neon', lambda *_: self.video_toggle()), False, False, 0)
+        hb.pack_start(self.button('󰓛  Stop · back to picture', 'ghost', lambda *_: self.video_stop()), False, False, 0)
+        hb.pack_start(self.button('󰐕  Add video…', 'ghost', lambda *_: self.video_add()), False, False, 0)
+        hb.pack_start(self.button('󰉋  Folder', 'ghost',
+                                  lambda *_: (os.makedirs(folder, exist_ok=True), spawn(['xdg-open', folder]))),
+                      False, False, 0)
+        c.pack_start(hb, False, False, 6)
+
+        c.pack_start(self.row('Pause automatically', 'Saves CPU/GPU: the video only plays when you can see it',
+                              self.combo([('windows', 'When windows cover the desktop'),
+                                          ('fullscreen', 'Only with a fullscreen window'), ('never', 'Never')],
+                                         cfg.raw('VIDEO_PAUSE', 'windows'),
+                                         lambda v: self.set_video('VIDEO_PAUSE', v, 'Pause'))), False, False, 0)
+        c.pack_start(self.row('Fit', '',
+                              self.combo([('fill', 'Fill (crop the edges)'), ('fit', 'Fit (black bars)'),
+                                          ('stretch', 'Stretch')], cfg.raw('VIDEO_FIT', 'fill'),
+                                         lambda v: self.set_video('VIDEO_FIT', v, 'Fit'))), False, False, 0)
+        sc, lab = self.scale(0.25, 2.0, 0.05, cfg.raw('VIDEO_SPEED', '1.0'), 2,
+                             lambda v: self.set_video('VIDEO_SPEED', v, 'Speed'), fmt=lambda v: f'{v:.2f}×')
+        c.pack_start(self.row('Speed', '', sc, lab), False, False, 0)
+        c.pack_start(self.row('Login lock', 'Play this video behind the betterlockscreen login card',
+                              self.button('󰍁  Use on the login lock', 'ghost', lambda *_: self.video_to_lock())),
+                     False, False, 0)
+        self.refresh_videos()
+        return c
+
+    def video_state(self):
+        try:
+            out = subprocess.run([os.path.join(BIN, 'VideoWall'), '--status'], capture_output=True, text=True,
+                                 timeout=5).stdout
+            return json.loads(out or '{}')
+        except Exception:
+            return {}
+
+    def refresh_videos(self):
+        def done(st):
+            st = st or {}
+            playing = st.get('video') if st.get('running') else None
+            for ch in self.video_flow.get_children():
+                self.video_flow.remove(ch)
+            vids = videowall.list_videos()
+            if not vids:
+                lb = Gtk.Label(label=f'No videos yet: put .mp4 · .mkv · .webm · .gif files in\n'
+                                     f'{videowall.videos_dir().replace(HOME, "~")} (or use "Add video…").', xalign=0)
+                lb.get_style_context().add_class('dim')
+                self.video_flow.add(lb)
+            for path in vids:
+                b = Gtk.Button()
+                b.get_style_context().add_class('wall')
+                if path == playing:
+                    b.get_style_context().add_class('current')
+                box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+                img = Gtk.Image()
+                img.set_size_request(160, 90)
+                box.pack_start(img, False, False, 0)
+                name = Gtk.Label(label=('󰐊 ' if path == playing else '󰕧 ') + videowall.pretty(path))
+                name.set_max_width_chars(20)
+                name.set_ellipsize(Pango.EllipsizeMode.END)
+                name.get_style_context().add_class('dim')
+                box.pack_start(name, False, False, 0)
+                b.add(box)
+                b.set_tooltip_text(os.path.basename(path))
+                b.connect('clicked', lambda _b, pth=path: self.video_play(pth))
+                self.video_flow.add(b)
+                run_bg(lambda pth=path: videowall.thumb(pth),
+                       lambda t, im=img: t and im.set_from_pixbuf(
+                           GdkPixbuf.Pixbuf.new_from_file_at_scale(t, 160, 90, False)))
+            self.video_flow.show_all()
+            if not st.get('running'):
+                txt = '■ No video playing' + (' — the engine is "Video", it starts at login'
+                                              if self.cfg.raw('ENGINE') == 'Animated' else '')
+            else:
+                paused = [pl for pl in st.get('players', []) if pl.get('paused')]
+                why = ('paused by you' if st.get('manual_pause') else
+                       'paused: windows cover it' if paused else 'playing')
+                txt = f'▶ {videowall.pretty(st.get("video"))} · {why}'
+            self.video_status.set_text(txt)
+        run_bg(self.video_state, done)
+        return False
+
+    def video_play(self, path):
+        self.cfg.set('ENGINE', 'Animated')
+        self.cfg.set('ANIMATED_WALL', path)
+        spawn('[ -f /tmp/wall_refresh.pid ] && kill "$(cat /tmp/wall_refresh.pid)" 2>/dev/null; '
+              f'rm -f /tmp/wall_refresh.pid; VideoWall --start "{clean_value(path)}"', shell=True)
+        self.toast(f'Video wallpaper → {videowall.pretty(path)}')
+        GLib.timeout_add(1500, self.refresh_videos)
+        GLib.timeout_add(2500, self.refresh_wall_views)
+
+    def video_stop(self):
+        wall = self.cfg.resolve(['DEFAULT_WALL']).get('DEFAULT_WALL') or current_wallpaper()
+        if wall and os.path.isfile(wall) and not wall.startswith(os.path.join(HOME, '.cache')):
+            self.set_wallpaper(wall)         # ENGINE=Default + VideoWall --stop + feh
+        else:
+            self.cfg.set('ENGINE', 'Default')
+            spawn([os.path.join(BIN, 'VideoWall'), '--stop'])
+        self.toast('Video stopped · back to the picture wallpaper')
+        GLib.timeout_add(1200, self.refresh_videos)
+
+    def video_toggle(self):
+        def work():
+            return subprocess.run([os.path.join(BIN, 'VideoWall'), '--toggle'], capture_output=True, text=True,
+                                  timeout=5).stdout.strip()
+        run_bg(work, lambda r: (self.toast(f'Video wallpaper {r}'), self.refresh_videos()))
+
+    def set_video(self, var, value, title):
+        self.cfg.set(var, value)
+        spawn([os.path.join(BIN, 'VideoWall'), '--reload'])
+        self.toast(f'Video · {title} → {value}')
+        GLib.timeout_add(600, self.refresh_videos)
+
+    def video_add(self):
+        dlg = Gtk.FileChooserDialog(title='Add videos', parent=self, action=Gtk.FileChooserAction.OPEN)
+        dlg.add_buttons('Cancel', Gtk.ResponseType.CANCEL, 'Add', Gtk.ResponseType.OK)
+        dlg.set_select_multiple(True)
+        flt = Gtk.FileFilter()
+        flt.set_name('Videos')
+        for ext in videowall.VIDEO_EXT:
+            flt.add_pattern(f'*{ext}')
+            flt.add_pattern(f'*{ext.upper()}')
+        dlg.add_filter(flt)
+        files = dlg.get_filenames() if dlg.run() == Gtk.ResponseType.OK else []
+        dlg.destroy()
+        if not files:
+            return
+
+        def work():
+            os.makedirs(videowall.videos_dir(), exist_ok=True)
+            for f in files:
+                dst = os.path.join(videowall.videos_dir(), os.path.basename(f))
+                if os.path.abspath(f) != dst:
+                    shutil.copy2(f, dst)
+            return len(files)
+        self.toast('Copying videos…')
+        run_bg(work, lambda n: (self.toast(f'{n or 0} video(s) added'), self.refresh_videos()))
+
+    def video_to_lock(self):
+        self.cfg.set('BL_VIDEO', '')
+        if hasattr(self, 'bl_src') and self.bl_src.get_active_id() != 'video':
+            self.bl_src.set_active_id('video')      # saves BL_WALL + re-renders
+        else:
+            self.set_bl('BL_WALL', 'video')
+        self.toast('Login lock → the video wallpaper plays behind it')
 
     def show_engine_opts(self, engine):
         for ch in self.engine_box.get_children():
@@ -2173,7 +2345,7 @@ class RiceEditor(Gtk.Window):
         var = {'CustomDir': 'CUSTOM_DIR', 'Default': 'DEFAULT_WALL', 'Animated': 'ANIMATED_WALL'}.get(engine)
         if var and value:
             self.cfg.set(var, value)
-        stop = ('pkill -x xwinwrap; [ -f /tmp/wall_refresh.pid ] && kill "$(cat /tmp/wall_refresh.pid)" '
+        stop = ('VideoWall --stop; [ -f /tmp/wall_refresh.pid ] && kill "$(cat /tmp/wall_refresh.pid)" '
                 '2>/dev/null; rm -f /tmp/wall_refresh.pid; ')
         find = "find \"$1\" -type f \\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \\) | shuf -n 1"
         walls = WALL_DIR
@@ -2181,7 +2353,7 @@ class RiceEditor(Gtk.Window):
             'Default': 'feh --bg-fill "$1" && WallSync',
             'Random': f'feh --bg-fill "$({find})" && WallSync',
             'CustomDir': f'feh --bg-fill "$({find})" && WallSync',
-            'Animated': 'AnimatedWall --start "$1"; WallSync --animated',
+            'Animated': 'VideoWall --start "$1"',
             'Slideshow': f'(while :; do feh --bg-fill "$({find})"; WallSync; sleep 900; done) & '
                          'echo $! > /tmp/wall_refresh.pid',
         }
@@ -2194,7 +2366,7 @@ class RiceEditor(Gtk.Window):
     def set_wallpaper(self, path):
         self.cfg.set('ENGINE', 'Default')
         self.cfg.set('DEFAULT_WALL', path)
-        spawn('pkill -x xwinwrap; [ -f /tmp/wall_refresh.pid ] && kill "$(cat /tmp/wall_refresh.pid)" 2>/dev/null; '
+        spawn('VideoWall --stop; [ -f /tmp/wall_refresh.pid ] && kill "$(cat /tmp/wall_refresh.pid)" 2>/dev/null; '
               f'rm -f /tmp/wall_refresh.pid; feh --bg-fill "{path}" && WallSync', shell=True)
         self.toast(f'Wallpaper → {pretty_wall(path)}')
         GLib.timeout_add(900, self.refresh_wall_views)
@@ -2863,10 +3035,20 @@ class RiceEditor(Gtk.Window):
         self.bl_file.get_child().set_max_width_chars(26)
         self.bl_file.get_child().set_ellipsize(Pango.EllipsizeMode.MIDDLE)
         self.bl_src = self.combo([('current', 'Wallpaper on screen'), ('random', 'Random of the rice (each lock)'),
-                                  ('custom', 'A picture of mine')],
+                                  ('custom', 'A picture of mine'), ('video', 'A video (plays behind the lock)')],
                                  cfg.raw('BL_WALL', 'current'), lambda v: self.set_bl('BL_WALL', v))
         c.pack_start(self.row('Source', 'What is behind the login card', self.bl_src), False, False, 0)
         c.pack_start(self.row('Picture', 'Used with "A picture of mine"', self.bl_file), False, False, 0)
+        if videowall:
+            vids = [('wallpaper', 'Same as the video wallpaper')] + [(v, videowall.pretty(v))
+                                                                      for v in videowall.list_videos()]
+            cur = cfg.raw('BL_VIDEO') or 'wallpaper'
+            if cur != 'wallpaper' and cur not in dict(vids):
+                vids.append((cur, videowall.pretty(cur)))
+            c.pack_start(self.row('Video', 'Used with "A video": the effect below is applied live '
+                                  '(needs picom running, else a still of it)',
+                                  self.combo(vids, cur, lambda v: self.set_bl('BL_VIDEO', '' if v == 'wallpaper' else v))),
+                         False, False, 0)
         c.pack_start(self.row('Effect', '',
                               self.combo([('dimblur', 'Dim + blur'), ('blur', 'Blur'), ('dim', 'Dim'),
                                           ('pixel', 'Pixelate'), ('dimpixel', 'Dim + pixelate'),

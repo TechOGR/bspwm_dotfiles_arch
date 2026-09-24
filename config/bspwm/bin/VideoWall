@@ -1,0 +1,382 @@
+#!/usr/bin/env python3
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# VideoWall - video wallpaper of the rice (no xwinwrap needed)
+#   ✔ One borderless desktop window per monitor, mpv embedded in it
+#   ✔ Videos of rices/<rice>/walls/videos (mp4 · mkv · webm · mov · gif)
+#   ✔ Pauses by itself when windows cover the desktop / fullscreen
+#     (VIDEO_PAUSE) and while the screen is locked: no CPU wasted
+#   ✔ Fill · fit · stretch, speed; live changes (--reload)
+#   ✔ Sets a still of the video as the real wallpaper, so rofi, the
+#     lockscreens and the previews keep working
+#   ✔ --lock: the video above everything for BetterLock (the login lock
+#     is drawn transparent on top of it)
+#
+# Usage: VideoWall --start [FILE] | --stop | --toggle | --pause | --play
+#                  --reload | --status | --frame FILE | --lock FILE [--vf F]
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+import os
+import sys
+import json
+import time
+import signal
+import socket
+import subprocess
+import threading
+
+sys.path.insert(0, os.path.join(os.path.expanduser('~'), '.config/bspwm/lib'))
+import videowall as vw  # noqa: E402
+
+os.makedirs(vw.RUNTIME, exist_ok=True)
+PID_WALL = os.path.join(vw.RUNTIME, 'videowall.pid')
+PID_LOCK = os.path.join(vw.RUNTIME, 'videowall-lock.pid')
+READY = os.path.join(vw.RUNTIME, 'videowall-lock.ready')
+PAUSED = os.path.join(vw.RUNTIME, 'videowall.paused')     # manual pause
+STATE = os.path.join(vw.RUNTIME, 'videowall.json')
+
+
+# ═══════════════════════════════════════════════════════════ process
+def read_pid(path):
+    try:
+        with open(path) as f:
+            pid = int(f.read().strip())
+        os.kill(pid, 0)
+        return pid
+    except (OSError, ValueError):
+        return None
+
+
+def stop(path, wait=4.0):
+    pid = read_pid(path)
+    if not pid:
+        return False
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return False
+    end = time.monotonic() + wait
+    while time.monotonic() < end and read_pid(path) == pid:
+        time.sleep(0.05)
+    if read_pid(path) == pid:
+        os.kill(pid, signal.SIGKILL)
+    return True
+
+
+def signal_daemon(sig):
+    pid = read_pid(PID_WALL)
+    if pid:
+        os.kill(pid, sig)
+    return bool(pid)
+
+
+def locked():
+    return subprocess.run(['pgrep', '-u', str(os.getuid()), '-x', 'i3lock'], capture_output=True).returncode == 0
+
+
+def video_output():
+    """mpv output. VMs (vmwgfx) are safer without OpenGL."""
+    forced = os.environ.get('VIDEOWALL_VO')
+    if forced:
+        return forced
+    try:
+        virt = subprocess.run(['systemd-detect-virt', '--vm'], capture_output=True, text=True, timeout=3).stdout.strip()
+    except Exception:
+        virt = 'none'
+    return 'x11' if virt and virt != 'none' else 'gpu'
+
+
+def fit_args(fit):
+    return {'fit': ['--panscan=0', '--keepaspect=yes'],
+            'stretch': ['--keepaspect=no']}.get(fit, ['--panscan=1.0', '--keepaspect=yes'])
+
+
+# ═══════════════════════════════════════════════════════════ players
+def gui(video, lock=False, vf=''):
+    import gi
+    gi.require_version('Gtk', '3.0')
+    gi.require_version('GdkX11', '3.0')
+    from gi.repository import Gtk, Gdk, GLib, GdkX11  # noqa: F401  (GdkX11: get_xid)
+
+    conf = vw.settings()
+    vo = video_output()
+
+    class Player:
+        def __init__(self, idx, geo):
+            self.idx, self.geo = idx, geo
+            self.sock = os.path.join(vw.RUNTIME, f'videowall{"-lock" if lock else ""}-{idx}.sock')
+            win = Gtk.Window(type=Gtk.WindowType.POPUP if lock else Gtk.WindowType.TOPLEVEL)
+            win.set_title('VideoWall')
+            win.set_wmclass('videowall', 'VideoWall')
+            win.set_decorated(False)
+            win.set_app_paintable(True)
+            win.connect('draw', lambda w, cr: (cr.set_source_rgb(0, 0, 0), cr.paint()) and False)
+            if not lock:
+                win.set_type_hint(Gdk.WindowTypeHint.DESKTOP)
+                win.set_keep_below(True)
+                win.set_skip_taskbar_hint(True)
+                win.set_skip_pager_hint(True)
+                win.set_accept_focus(False)
+                win.stick()
+            win.move(geo.x, geo.y)
+            win.set_default_size(geo.width, geo.height)
+            win.resize(geo.width, geo.height)
+            win.realize()
+            win.show_all()
+            if lock:
+                win.get_window().raise_()
+            self.win = win
+            xid = win.get_window().get_xid()
+            try:
+                os.remove(self.sock)
+            except OSError:
+                pass
+            cmd = ['mpv', f'--wid={xid}', '--no-config', '--profile=fast', f'--vo={vo}', '--hwdec=auto-safe',
+                   '--loop-file=inf', '--no-audio', '--mute=yes', '--no-osc', '--osd-level=0', '--no-osd-bar',
+                   '--no-input-default-bindings', '--input-vo-keyboard=no', '--no-input-cursor',
+                   '--cursor-autohide=no', '--no-sub', '--really-quiet', f'--input-ipc-server={self.sock}',
+                   f'--speed={speed(conf)}', *fit_args(conf.get('VIDEO_FIT'))]
+            if vf:
+                cmd.append(f'--vf={vf}')
+            if lock:
+                cmd.append('--fullscreen=no')
+            self.proc = subprocess.Popen([*cmd, video], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.paused = False
+
+        def send(self, *command):
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                    s.settimeout(0.5)
+                    s.connect(self.sock)
+                    s.sendall((json.dumps({'command': list(command)}) + '\n').encode())
+                    return json.loads(s.recv(4096).decode().splitlines()[0])
+            except Exception:
+                return None
+
+        def pause(self, on):
+            if on != self.paused and self.send('set_property', 'pause', on) is not None:
+                self.paused = on
+
+        def playing(self):
+            r = self.send('get_property', 'playback-time')
+            return bool(r and isinstance(r.get('data'), (int, float)))
+
+        def close(self):
+            if self.proc.poll() is None:
+                self.proc.terminate()
+                try:
+                    self.proc.wait(2)
+                except subprocess.TimeoutExpired:
+                    self.proc.kill()
+            try:
+                os.remove(self.sock)
+            except OSError:
+                pass
+
+    display = Gdk.Display.get_default()
+    players = [Player(i, display.get_monitor(i).get_geometry()) for i in range(display.get_n_monitors())]
+    started = time.monotonic()
+
+    def quit_all(*_):
+        for p in players:
+            p.close()
+        Gtk.main_quit()
+        return False
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        GLib.unix_signal_add(GLib.PRIORITY_HIGH, sig, quit_all)
+
+    # ── lock mode: tell BetterLock when the video is on screen; never
+    # stay above everything without a locker (a crash must not trap you)
+    if lock:
+        def lock_tick():
+            if not os.path.exists(READY) and (all(p.playing() for p in players) or time.monotonic() - started > 4):
+                open(READY, 'w').close()
+            if time.monotonic() - started > 10 and not locked():
+                return quit_all()
+            return True
+        GLib.timeout_add(100, lock_tick)
+        Gtk.main()
+        return
+
+    # ── wallpaper mode: pause policy
+    state = {'conf': conf}
+
+    def bspwm_monitors():
+        mons = {}
+        try:
+            names = subprocess.run(['bspc', 'query', '-M', '--names'], capture_output=True, text=True,
+                                   timeout=2).stdout.split()
+            for n in names:
+                t = json.loads(subprocess.run(['bspc', 'query', '-T', '-m', n], capture_output=True, text=True,
+                                              timeout=2).stdout)
+                r = t['rectangle']
+                mons[(r['x'], r['y'])] = n
+        except Exception:
+            pass
+        return mons
+
+    def covered(mon, what):
+        sel = '.window.!hidden.fullscreen' if what == 'fullscreen' else '.window.!hidden'
+        return subprocess.run(['bspc', 'query', '-N', '-n', sel, '-d', f'{mon}:focused'],
+                              capture_output=True).returncode == 0
+
+    def evaluate(*_):
+        state.pop('timer', None)
+        policy = state['conf'].get('VIDEO_PAUSE', 'windows')
+        manual = os.path.exists(PAUSED)
+        is_locked = locked()
+        mons = bspwm_monitors()
+        info = []
+        for p in players:
+            mon = mons.get((p.geo.x, p.geo.y))
+            pause = manual or is_locked or bool(mon and policy in ('windows', 'fullscreen') and covered(mon, policy))
+            p.pause(pause)
+            info.append({'monitor': mon, 'paused': p.paused})
+        try:
+            with open(STATE, 'w') as f:
+                json.dump({'video': video, 'manual_pause': manual, 'policy': policy, 'players': info}, f)
+        except OSError:
+            pass
+        return False
+
+    def schedule(*_):
+        if 'timer' not in state:
+            state['timer'] = GLib.timeout_add(120, evaluate)
+        return True
+
+    def reload(*_):
+        state['conf'] = c = vw.settings()
+        for p in players:
+            p.send('set_property', 'speed', float(speed(c)))
+            fit = c.get('VIDEO_FIT')
+            p.send('set_property', 'keepaspect', fit != 'stretch')
+            p.send('set_property', 'panscan', 1.0 if fit not in ('fit', 'stretch') else 0.0)
+        schedule()
+        return True
+
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR1, schedule)
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGHUP, reload)
+
+    def watch():
+        try:
+            proc = subprocess.Popen(['bspc', 'subscribe', 'node_add', 'node_remove', 'node_state', 'node_flag',
+                                     'node_transfer', 'desktop_focus', 'monitor_focus'],
+                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+            for _line in proc.stdout:
+                GLib.idle_add(schedule)
+        except Exception:
+            pass
+    threading.Thread(target=watch, daemon=True).start()
+    GLib.timeout_add_seconds(3, schedule)      # lock state, players that died
+    GLib.timeout_add(900, schedule)
+
+    # a still of the video as the real wallpaper (rofi, lockscreens, previews)
+    def still():
+        f = vw.frame(video)
+        if f:
+            subprocess.run(['sh', '-c', 'feh --bg-fill "$1" && WallSync', '_', f],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    threading.Thread(target=still, daemon=True).start()
+    Gtk.main()
+    try:
+        os.remove(STATE)
+    except OSError:
+        pass
+
+
+def speed(conf):
+    try:
+        return f'{max(0.25, min(2.0, float(conf.get("VIDEO_SPEED", 1)))):.2f}'
+    except ValueError:
+        return '1.00'
+
+
+def own_pid(path):
+    with open(path, 'w') as f:
+        f.write(str(os.getpid()))
+
+
+# ═══════════════════════════════════════════════════════════ cli
+def main():
+    args = sys.argv[1:]
+    op = args[0] if args else '--help'
+    arg = args[1] if len(args) > 1 and not args[1].startswith('--') else ''
+
+    if op == '--start':
+        video = arg or vw.current_video()
+        if not os.path.isfile(video):
+            print(f'VideoWall: no video ({video or "walls/videos is empty"})', file=sys.stderr)
+            sys.exit(1)
+        stop(PID_WALL)
+        if '--fg' not in args:
+            subprocess.Popen([os.path.abspath(__file__), '--start', video, '--fg'], start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return
+        own_pid(PID_WALL)
+        try:
+            gui(video)
+        finally:
+            if read_pid(PID_WALL) in (None, os.getpid()):
+                try:
+                    os.remove(PID_WALL)
+                except OSError:
+                    pass
+    elif op == '--stop':
+        stop(PID_WALL)
+    elif op in ('--toggle', '--pause', '--play'):
+        paused = os.path.exists(PAUSED)
+        want = {'--pause': True, '--play': False}.get(op, not paused)
+        if want:
+            open(PAUSED, 'w').close()
+        elif paused:
+            os.remove(PAUSED)
+        signal_daemon(signal.SIGUSR1)
+        print('paused' if want else 'playing')
+    elif op == '--reload':
+        signal_daemon(signal.SIGHUP)
+    elif op == '--status':
+        running = bool(read_pid(PID_WALL))
+        try:
+            with open(STATE) as f:
+                st = json.load(f)
+        except (OSError, ValueError):
+            st = {}
+        print(json.dumps({'running': running, 'manual_pause': os.path.exists(PAUSED), **st}))
+        sys.exit(0 if running else 1)
+    elif op == '--frame':
+        f = vw.frame(arg or vw.current_video())
+        print(f or '')
+        sys.exit(0 if f else 1)
+    elif op == '--lock':
+        video = arg or vw.current_video()
+        vf = args[args.index('--vf') + 1] if '--vf' in args[:-1] else ''
+        stop(PID_LOCK)
+        try:
+            os.remove(READY)
+        except OSError:
+            pass
+        own_pid(PID_LOCK)
+        try:
+            gui(video, lock=True, vf=vf)
+        finally:
+            for f in (PID_LOCK, READY):
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
+    elif op == '--list':
+        print('\n'.join(vw.list_videos()))
+    else:
+        print('VideoWall --start [FILE] | --stop | --toggle | --pause | --play | --reload | --status\n'
+              '          --frame FILE | --lock FILE [--vf FILTER] | --list\n'
+              f'Videos: {vw.videos_dir()}')
+
+
+if __name__ == '__main__':
+    main()

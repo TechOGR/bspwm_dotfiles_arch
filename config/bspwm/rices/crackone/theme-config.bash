@@ -92,8 +92,9 @@ LOCK_CLOCK="%H:%M"		# Clock format (strftime)
 LOCK_GREETER="Type the password to Unlock"
 
 # Login lock (betterlockscreen + BetterLock, RiceEditor -> Login Lock)
-BL_WALL="current"		# current | random | custom
+BL_WALL="current"		# current | random | custom | video
 BL_WALL_PATH=""			# Picture used when BL_WALL=custom
+BL_VIDEO=""				# Video for BL_WALL=video (empty = the video wallpaper)
 BL_FX="dimblur"			# none | dim | blur | dimblur | pixel | dimpixel | color
 BL_DIM="35"				# Darkening in % (0-90)
 BL_BLUR="10"			# Blur strength (1-40)
@@ -132,10 +133,13 @@ geany_theme="z0mbi3-TokyoNight"
 # - Random  (Set a random wallpaper from Walls rice directory)
 # - CustomDir   (Set a random wallpaper from the directory you specified)
 # - Default (Sets a specific image as wallpaper) *Default
-# - Animated (Set an animated wallpaper. "mp4, mkv, gif")
+# - Animated (Video wallpaper with VideoWall: mp4, mkv, webm, mov, gif of walls/videos)
 # - Slideshow (Change randomly every 15 minutes your wallpaper from Walls rice directory)
 ENGINE="Default"
 
 CUSTOM_DIR="$HOME/Imágenes/Wallpapers"
 DEFAULT_WALL="/home/t3ch0gr/.config/bspwm/rices/crackone/walls/pirate-ship-island-digital-art-4k-wallpaper-uhdpaper.com-659@2@b.jpg"
-ANIMATED_WALL="$HOME/.config/bspwm/config/assets/animated_wall.mp4"
+ANIMATED_WALL="$HOME/.config/bspwm/rices/crackone/walls/videos/animated_wall-1.mp4"
+VIDEO_PAUSE="windows"	# Pause the video: never | windows (covered desktop) | fullscreen
+VIDEO_FIT="fill"		# fill (crop) | fit (bars) | stretch
+VIDEO_SPEED="1.0"		# Playback speed 0.25 - 2.0

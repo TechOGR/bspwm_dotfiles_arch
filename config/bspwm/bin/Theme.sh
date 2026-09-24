@@ -46,7 +46,7 @@ if pkill -fx "bspc subscribe node_state" >/dev/null 2>&1; then
     wait_for_termination "bspc subscribe node_state"
 fi
 
-# Kill animated wallpaper if is active
+# Kill animated wallpaper if is active (02-wallpaper.sh starts it again)
 if pkill xwinwrap >/dev/null 2>&1; then
     wait_for_termination xwinwrap
 fi

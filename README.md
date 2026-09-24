@@ -17,6 +17,7 @@ Configuración personal de escritorio para **BSPWM** sobre **Arch Linux** y deri
 | Gestor de ventanas | `bspwm` + `sxhkd` |
 | Barra / widgets | `polybar`, `eww` (perfil, módulos animados) |
 | Compositor | `picom` con animaciones |
+| Fondos de video | `VideoWall` (mpv): videos de `rices/<rice>/walls/videos`, pausa automática bajo ventanas, también de fondo en el login lock — RiceEditor → Wallpaper |
 | Lanzador / menús | `rofi`, `jgmenu` |
 | Notificaciones | `dunst` |
 | Terminales | `alacritty` (por defecto), `kitty`, `st`, `ghostty` — selector con `Super+Alt+T` |
