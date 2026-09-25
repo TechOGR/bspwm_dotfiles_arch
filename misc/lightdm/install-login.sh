@@ -34,7 +34,10 @@ fi
 
 USER_NAME="${1:-${SUDO_USER:-}}"
 
-pacman -S --needed --noconfirm lightdm lightdm-webkit2-greeter
+# -Syu only when something is missing: an outdated sync db gives 404s on
+# download (and Arch forbids partial upgrades)
+pacman -Q lightdm lightdm-webkit2-greeter >/dev/null 2>&1 ||
+    pacman -Syu --needed --noconfirm lightdm lightdm-webkit2-greeter
 
 install -d -m755 "$THEME"
 install -m644 "$HERE/techogr/index.html" "$HERE/techogr/style.css" \
