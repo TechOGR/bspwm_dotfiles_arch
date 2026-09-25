@@ -64,7 +64,8 @@ is_active() {
     id="$1"
     kind="$2"
     if [ "$kind" = "service" ]; then
-        [ -f "$WS_PREVIEW_FLAG" ]
+        # enabled AND really running (a dead daemon shows as inactive)
+        [ -f "$WS_PREVIEW_FLAG" ] && "$CONFIG_DIR/bin/WorkspacePreview" status
     else
         printf '%s\n' "$active" | grep -qx "$id"
     fi
@@ -84,17 +85,10 @@ toggle_service() {
     mod="$1"
     case "$mod" in
         workspace_preview)
-            if [ -f "$WS_PREVIEW_FLAG" ]; then
-                rm -f "$WS_PREVIEW_FLAG"
-                pkill -f "WorkspaceThumbDaemon" 2>/dev/null
-                pkill -f "WorkspaceHoverWatcher" 2>/dev/null
-                eww -c "$CONFIG_DIR/eww" close wspreview >/dev/null 2>&1 &
-                action="desactivado"
-            else
-                touch "$WS_PREVIEW_FLAG"
-                "$CONFIG_DIR/bin/WorkspaceThumbDaemon" >/dev/null 2>&1 &
-                "$CONFIG_DIR/bin/WorkspaceHoverWatcher" >/dev/null 2>&1 &
+            if [ "$("$CONFIG_DIR/bin/WorkspacePreview" toggle)" = "on" ]; then
                 action="activado"
+            else
+                action="desactivado"
             fi
             ;;
         *)
@@ -107,7 +101,6 @@ toggle_service() {
 build_menu() {
     printf '%s\n' "$_catalog" | while IFS='|' read -r id icon name desc fixed kind; do
         [ -z "$id" ] && continue
-        get_lines
         if is_active "$id" "$kind"; then
             status="<span foreground='#9ece6a'>● Activo</span>"
         else

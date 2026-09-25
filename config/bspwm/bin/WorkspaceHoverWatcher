@@ -83,8 +83,16 @@ fi
 trap 'rm -f "$SLICE_PNG"' EXIT
 
 # Finds the on-screen pixel range (relative to the bar's own left edge)
-# of whichever "island" of non-background pixels sits closest to the
-# bar's horizontal middle. Prints "x1 x2" or nothing on failure.
+# of the workspace switcher, which always sits on the bar's middle
+# (module-center). Prints "x1 x2" or nothing on failure.
+#   1) Styles with a pill behind each module: the solid island that
+#      contains the middle column is the whole switcher.
+#   2) Flat styles (icons straight on the bar background): the icons are
+#      separate little fragments, so merge fragments closer than
+#      GAP_MERGE px and take the group containing (or nearest to) the
+#      middle. Before, only step 1 existed and on a flat bar it picked
+#      some other module (e.g. the RAM bar), so the preview never opened.
+GAP_MERGE=28
 detect_ws_island() {
     sample_y=$((BAR_H / 2))
     maim -g "${BAR_W}x1+${BAR_X}+$((BAR_Y + sample_y))" "$SLICE_PNG" 2>/dev/null || return 1
@@ -104,21 +112,30 @@ detect_ws_island() {
             d = (r-tr)^2 + (g-tg)^2 + (b-tb)^2
             cur = (d < 30) ? 0 : 1
             if (cur != prevstate) {
-                if (prevstate == 1 && (x - 1 - rstart) >= 15) print rstart, x - 1
+                if (prevstate == 1) print rstart, x - 1
                 if (cur == 1) rstart = x
             }
             prevstate = cur
             lastx = x
         }
-        END { if (prevstate == 1 && (lastx - rstart) >= 15) print rstart, lastx }
-    ' | awk -v c="$((BAR_W / 2))" '
-        {
-            mid = ($1 + $2) / 2
-            d = mid - c
-            if (d < 0) d = -d
-            if (best == "" || d < bestd) { best = $1" "$2; bestd = d }
+        END { if (prevstate == 1) print rstart, lastx }
+    ' | awk -v c="$((BAR_W / 2))" -v gap="$GAP_MERGE" '
+        { n++; s[n] = $1; e[n] = $2 }
+        END {
+            if (!n) exit
+            for (i = 1; i <= n; i++)
+                if (s[i] <= c && e[i] >= c && e[i] - s[i] >= 40) { print s[i], e[i]; exit }
+            gs = s[1]; ge = e[1]; best = ""
+            for (i = 2; i <= n + 1; i++) {
+                if (i <= n && s[i] - ge <= gap) { ge = e[i]; continue }
+                if (ge - gs >= 15) {
+                    d = (c < gs) ? gs - c : (c > ge ? c - ge : 0)
+                    if (best == "" || d < bestd) { best = gs " " ge; bestd = d }
+                }
+                if (i <= n) { gs = s[i]; ge = e[i] }
+            }
+            if (best != "") print best
         }
-        END { if (best != "") print best }
     '
 }
 

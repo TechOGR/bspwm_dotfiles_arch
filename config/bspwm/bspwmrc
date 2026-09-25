@@ -85,10 +85,7 @@ eww -c "${HOME}"/.config/bspwm/eww ping >/dev/null 2>&1 || {
 
 # Launch workspace thumbnail capture + hover-preview watcher
 # (toggleable module: super + alt + m -> ModulesList -> "Preview de workspaces")
-[ -f "${HOME}/.config/bspwm/config/.ws_preview_enabled" ] && {
-    run WorkspaceThumbDaemon
-    run WorkspaceHoverWatcher
-}
+"${HOME}"/.config/bspwm/bin/WorkspacePreview boot
 
 # Launch the dock (exits by itself if disabled in RiceEditor -> Dock or already running)
 "${HOME}"/.config/bspwm/bin/Dock &

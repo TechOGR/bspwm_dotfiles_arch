@@ -1,0 +1,100 @@
+#!/bin/sh
+# =============================================================
+# WorkspacePreview - start / stop the workspace hover preview
+# (WorkspaceThumbDaemon + WorkspaceHoverWatcher + eww "wspreview").
+#
+#   WorkspacePreview start    enable it (flag file) and launch both daemons
+#   WorkspacePreview stop     disable it, kill both daemons, close the popup
+#   WorkspacePreview toggle   prints "on" or "off" (the new state)
+#   WorkspacePreview status   exit 0 if both daemons are running
+#   WorkspacePreview boot     bspwmrc: start only if the flag file exists
+#
+# Both daemons hold a flock on fd 9, and their children (sleep, maim,
+# xdotool...) inherit it. Killing only the parent shell left those
+# children holding the lock for a moment, so a quick off -> on made the
+# new daemons see "already running" and exit: the preview silently did
+# nothing. stop now kills the children too and waits for the locks.
+# =============================================================
+
+CONFIG_DIR="$HOME/.config/bspwm"
+FLAG="$CONFIG_DIR/config/.ws_preview_enabled"
+THUMB_LOCK="$HOME/.cache/$USER/ws_thumbs/.daemon.lock"
+HOVER_LOCK="$HOME/.cache/$USER/.workspace_hover.lock"
+DAEMONS="WorkspaceThumbDaemon WorkspaceHoverWatcher"
+
+pids_of() {
+    pgrep -f "^/bin/sh $CONFIG_DIR/bin/$1\$"
+}
+
+running() {
+    for d in $DAEMONS; do
+        [ -n "$(pids_of "$d")" ] || return 1
+    done
+}
+
+lock_free() {
+    [ -e "$1" ] || return 0
+    flock -n "$1" true 2>/dev/null
+}
+
+kill_daemons() {
+    for d in $DAEMONS; do
+        for pid in $(pids_of "$d"); do
+            kids=$(pgrep -P "$pid")
+            kill "$pid" 2>/dev/null
+            [ -n "$kids" ] && kill $kids 2>/dev/null
+        done
+    done
+    # Wait (max ~2s) until nothing holds the locks anymore
+    i=0
+    while [ "$i" -lt 20 ]; do
+        lock_free "$THUMB_LOCK" && lock_free "$HOVER_LOCK" && break
+        sleep 0.1
+        i=$((i + 1))
+    done
+}
+
+close_popup() {
+    timeout 2 eww -c "$CONFIG_DIR/eww" close wspreview >/dev/null 2>&1 || true
+}
+
+ensure_eww() {
+    # The popup needs the eww daemon; "eww open" under the watcher's 2s
+    # timeout can't reliably bring up a dead one by itself.
+    eww -c "$CONFIG_DIR/eww" ping >/dev/null 2>&1 && return 0
+    pkill -f "^eww -c $CONFIG_DIR/eww"
+    setsid -f eww -c "$CONFIG_DIR/eww" daemon >/dev/null 2>&1
+}
+
+start() {
+    touch "$FLAG"
+    ensure_eww
+    # Restart from scratch: also clears a half-dead pair (one daemon gone)
+    running || kill_daemons
+    running && return 0
+    # setsid: don't die with whoever launched us (rofi menu, polybar click)
+    for d in $DAEMONS; do
+        [ -n "$(pids_of "$d")" ] || setsid -f "$CONFIG_DIR/bin/$d" >/dev/null 2>&1
+    done
+}
+
+stop() {
+    rm -f "$FLAG"
+    kill_daemons
+    close_popup
+}
+
+case "$1" in
+    start) start ;;
+    stop) stop ;;
+    toggle)
+        if [ -f "$FLAG" ] && running; then
+            stop; echo off
+        else
+            start; echo on
+        fi
+        ;;
+    status) running ;;
+    boot) [ -f "$FLAG" ] && start ;;
+    *) echo "usage: ${0##*/} start|stop|toggle|status|boot" >&2; exit 2 ;;
+esac
