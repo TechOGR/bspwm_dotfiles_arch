@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # TechOGR BSPWM Dotfiles Installer
-# Version 8.0.0
+# Version 8.2.0
 # Arch Linux / CachyOS / EndeavourOS / Garuda / BlackArch / Manjaro / derivatives
 #
 # IMPORTANT:
@@ -16,7 +16,7 @@
 
 set -Eeuo pipefail
 
-SCRIPT_VERSION="8.1.0"
+SCRIPT_VERSION="8.2.0"
 REPO_URL="https://github.com/TechOGR/bspwm_dotfiles_arch.git"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 HOME="${HOME:?HOME is not set}"
@@ -76,7 +76,7 @@ printf '=== TechOGR BSPWM Installer %s - %s ===\n' "$SCRIPT_VERSION" "$(date)" >
 
 # ------------------------------- Logging -------------------------------------
 CURRENT_STEP=0
-TOTAL_STEPS=14
+TOTAL_STEPS=16
 STEP_OPEN=false
 STEP_START=0
 RAIL="$MAGENTA│$RESET "
@@ -569,6 +569,262 @@ install_lockscreen() {
 }
 
 # ----------------------------- Backup / Deploy -------------------------------
+# ------------------------- Hardware / drivers --------------------------------
+# Filled by detect_hardware(); used by install_drivers(), setup_display_manager()
+# and tune_for_hardware().
+VIRT="none"; CPU_VENDOR=""; GPU_VENDORS=""; NVIDIA_IDS=()
+HAS_BATTERY=false; HAS_BLUETOOTH=false; HAS_WIFI=false; HAS_TOUCHPAD=false
+
+# pacman first, the AUR helper as a fallback (for packages that only some
+# Arch derivatives ship, e.g. nvidia-580xx-* is in CachyOS but AUR on Arch).
+install_any() {
+    local pkg="$1" required="${2:-no}"
+    is_pkg_installed "$pkg" && return 0
+    sudo pacman -S --needed --noconfirm "$pkg" >>"$LOG_FILE" 2>&1 && return 0
+    if [[ -n "$AUR_HELPER" ]] && "$AUR_HELPER" -S --needed --noconfirm "$pkg" >>"$LOG_FILE" 2>&1; then
+        return 0
+    fi
+    if [[ "$required" == yes ]]; then FAILED_REQUIRED+=("$pkg"); else FAILED_OPTIONAL+=("$pkg"); fi
+    return 1
+}
+
+pkg_status() {   # pkg_status <pkg> [required] -> prints a ✔/✖ row
+    if install_any "$1" "${2:-no}"; then
+        printf '  %-30s %s✔%s\n' "$1" "$GREEN" "$RESET"
+    else
+        printf '  %-30s %s✖%s\n' "$1" "$RED" "$RESET"
+    fi
+}
+
+enable_service() {   # enable_service <unit>: only when it exists
+    systemctl cat "$1" >/dev/null 2>&1 || return 0
+    sudo systemctl enable --now "$1" >>"$LOG_FILE" 2>&1 && log INFO "enabled $1" ||
+        warn "No se pudo habilitar $1."
+}
+
+detect_hardware() {
+    step "Detección de hardware"
+    install_pkg pciutils yes || true
+    install_pkg usbutils no || true
+
+    VIRT="$(systemd-detect-virt --vm 2>/dev/null || true)"
+    [[ -n "$VIRT" ]] || VIRT="none"
+
+    case "$(grep -m1 '^vendor_id' /proc/cpuinfo 2>/dev/null | awk '{print $3}')" in
+        GenuineIntel) CPU_VENDOR=intel ;;
+        AuthenticAMD) CPU_VENDOR=amd ;;
+    esac
+
+    # Display controllers: class 03xx (VGA 0300, 3D 0302, display 0380)
+    local line id
+    while read -r line; do
+        case "${line,,}" in
+            *'[10de:'*) GPU_VENDORS+=" nvidia"
+                        id="$(grep -oE '\[10de:[0-9a-f]{4}\]' <<<"${line,,}" | tail -n1 | cut -c7-10)"
+                        [[ -n "$id" ]] && NVIDIA_IDS+=("$id") ;;
+            *'[1002:'*) GPU_VENDORS+=" amd" ;;
+            *'[8086:'*) GPU_VENDORS+=" intel" ;;
+            *'[15ad:'*) GPU_VENDORS+=" vmware" ;;
+            *'[80ee:'*) GPU_VENDORS+=" vbox" ;;
+            *'[1af4:'*|*'[1b36:'*|*'[1234:'*) GPU_VENDORS+=" qemu" ;;
+        esac
+    done < <(lspci -nn 2>/dev/null | grep -E '\[03[0-9a-f]{2}\]')
+
+    compgen -G '/sys/class/power_supply/BAT*' >/dev/null && HAS_BATTERY=true
+    compgen -G '/sys/class/bluetooth/*' >/dev/null && HAS_BLUETOOTH=true
+    compgen -G '/sys/class/net/*/wireless' >/dev/null && HAS_WIFI=true
+    grep -qiE 'touchpad|trackpad|synaptics|elan' /proc/bus/input/devices 2>/dev/null && HAS_TOUCHPAD=true
+
+    info "Virtualización: $VIRT"
+    info "CPU: ${CPU_VENDOR:-desconocida} · GPU:${GPU_VENDORS:- desconocida}${NVIDIA_IDS[*]:+ (nvidia ${NVIDIA_IDS[*]})}"
+    info "Batería: $HAS_BATTERY · Wi-Fi: $HAS_WIFI · Bluetooth: $HAS_BLUETOOTH · Touchpad: $HAS_TOUCHPAD"
+    log INFO "lspci: $(lspci -nn 2>/dev/null | grep -E '\[03[0-9a-f]{2}\]' | tr '\n' '|')"
+    success "Hardware detectado."
+}
+
+# NVIDIA driver branch from the PCI device id:
+#   >= 0x1e00 Turing and newer  -> open kernel modules (current driver)
+#   >= 0x1340 Maxwell / Pascal / Volta -> 580xx legacy branch (last one with them)
+#   older (Kepler, Fermi...)    -> nouveau (mesa); the blobs no longer build
+nvidia_branch() {
+    local id=$((16#$1))
+    if (( id >= 0x1e00 )); then echo open
+    elif (( id >= 0x1340 )); then echo 580xx
+    else echo nouveau
+    fi
+}
+
+# One headers package per installed kernel, needed by every *-dkms driver.
+install_kernel_headers() {
+    local base
+    for base in /usr/lib/modules/*/pkgbase; do
+        [[ -f "$base" ]] || continue
+        pkg_status "$(cat "$base")-headers"
+    done
+}
+
+install_nvidia() {
+    local branch="open" id b
+    # the oldest card decides (a hybrid laptop has only one NVIDIA anyway)
+    for id in "${NVIDIA_IDS[@]}"; do
+        b="$(nvidia_branch "$id")"
+        [[ "$b" == nouveau ]] && branch=nouveau && break
+        [[ "$b" == 580xx ]] && branch=580xx
+    done
+    info "NVIDIA: rama de driver '$branch'"
+
+    # CachyOS: its hardware tool picks the right driver + kernel module package
+    if command_exists chwd && [[ "$branch" != nouveau ]]; then
+        if run_with_live_progress "chwd → NVIDIA" sudo chwd -a; then
+            is_pkg_installed nvidia-utils || is_pkg_installed nvidia-580xx-utils &&
+                { success "Driver NVIDIA instalado con chwd."; return 0; }
+        fi
+        warn "chwd no instaló el driver NVIDIA; se usa la instalación genérica."
+    fi
+
+    case "$branch" in
+        open)
+            install_kernel_headers
+            pkg_status nvidia-open-dkms
+            pkg_status nvidia-utils
+            pkg_status nvidia-settings
+            pkg_status libva-nvidia-driver ;;
+        580xx)
+            install_kernel_headers
+            pkg_status nvidia-580xx-dkms
+            pkg_status nvidia-580xx-utils
+            pkg_status nvidia-580xx-settings ;;
+        nouveau)
+            warn "GPU NVIDIA antigua: se usa nouveau (mesa)."
+            return 0 ;;
+    esac
+
+    # DRM KMS (needed for a smooth X/picom and suspend). Recent drivers
+    # default to it, this makes it explicit for older ones.
+    printf 'options nvidia_drm modeset=1 fbdev=1\n' |
+        sudo tee /etc/modprobe.d/nvidia-techogr.conf >/dev/null
+    local svc
+    for svc in nvidia-suspend.service nvidia-hibernate.service nvidia-resume.service; do
+        enable_service "$svc"
+    done
+    command_exists mkinitcpio && run_with_live_progress "mkinitcpio -P" sudo mkinitcpio -P || true
+}
+
+install_drivers() {
+    step "Drivers y firmware"
+    local gpu
+
+    # Microcode (the bootloader/mkinitcpio pick it up on the next kernel update)
+    if [[ "$VIRT" == none ]]; then
+        case "$CPU_VENDOR" in
+            intel) pkg_status intel-ucode ;;
+            amd)   pkg_status amd-ucode ;;
+        esac
+        pkg_status linux-firmware
+        pkg_status sof-firmware          # modern Intel/AMD laptop audio
+        pkg_status alsa-firmware
+    fi
+
+    # Graphics: mesa is the base of every open driver (and of the VMs)
+    pkg_status mesa yes
+    pkg_status mesa-utils
+    pkg_status vulkan-icd-loader
+    pkg_status xf86-input-libinput yes
+    for gpu in $GPU_VENDORS; do
+        case "$gpu" in
+            intel)  pkg_status vulkan-intel
+                    pkg_status intel-media-driver ;;
+            amd)    pkg_status vulkan-radeon
+                    pkg_status xf86-video-amdgpu ;;
+            nvidia) install_nvidia ;;
+        esac
+    done
+
+    # Virtual machines: guest tools (clipboard, resize, time sync)
+    case "$VIRT" in
+        vmware)
+            pkg_status open-vm-tools
+            pkg_status xf86-input-vmmouse
+            pkg_status gtkmm3                # vmware-user (copy/paste, drag & drop)
+            enable_service vmtoolsd.service
+            enable_service vmware-vmblock-fuse.service ;;
+        oracle)
+            pkg_status virtualbox-guest-utils
+            enable_service vboxservice.service ;;
+        kvm|qemu)
+            pkg_status qemu-guest-agent
+            pkg_status spice-vdagent
+            enable_service qemu-guest-agent.service ;;
+        microsoft)
+            pkg_status hyperv
+            enable_service hv_kvp_daemon.service
+            enable_service hv_vss_daemon.service ;;
+    esac
+
+    # Audio: PipeWire (pamixer/paplay/playerctl talk to it through pipewire-pulse).
+    # A system that already runs PulseAudio keeps it (both provide libpulse).
+    if is_pkg_installed pulseaudio && ! is_pkg_installed pipewire-pulse; then
+        info "PulseAudio ya instalado; se conserva."
+    else
+        local p
+        for p in pipewire pipewire-pulse pipewire-alsa wireplumber; do pkg_status "$p"; done
+        systemctl --user enable pipewire.socket pipewire-pulse.socket wireplumber.service >>"$LOG_FILE" 2>&1 || true
+    fi
+
+    # Network: NetworkManager, unless another manager already owns the links
+    local other=""
+    for svc in systemd-networkd.service iwd.service dhcpcd.service connman.service; do
+        systemctl is-enabled --quiet "$svc" 2>/dev/null && other="$svc"
+    done
+    if [[ -n "$other" ]] && ! systemctl is-enabled --quiet NetworkManager.service 2>/dev/null; then
+        warn "Red gestionada por $other; no se habilita NetworkManager."
+    elif is_pkg_installed networkmanager; then
+        enable_service NetworkManager.service
+    fi
+
+    # Bluetooth
+    if [[ "$HAS_BLUETOOTH" == true ]] && is_pkg_installed bluez; then
+        enable_service bluetooth.service
+    fi
+
+    # Laptop: power profiles + touchpad tap-to-click / natural scroll
+    if [[ "$HAS_BATTERY" == true ]]; then
+        if ! is_pkg_installed tlp && ! is_pkg_installed auto-cpufreq; then
+            pkg_status power-profiles-daemon && enable_service power-profiles-daemon.service
+        fi
+        pkg_status acpi
+    fi
+    if [[ "$HAS_TOUCHPAD" == true && ! -e /etc/X11/xorg.conf.d/30-touchpad.conf ]]; then
+        sudo install -Dm644 /dev/stdin /etc/X11/xorg.conf.d/30-touchpad.conf <<'EOF_TP'
+Section "InputClass"
+    Identifier "TechOGR touchpad"
+    MatchIsTouchpad "on"
+    Driver "libinput"
+    Option "Tapping" "on"
+    Option "NaturalScrolling" "true"
+    Option "DisableWhileTyping" "on"
+EndSection
+EOF_TP
+        success "Touchpad: tap-to-click y scroll natural."
+    fi
+
+    success "Drivers y servicios del hardware listos."
+}
+
+# Per-machine defaults for the deployed config (runs after config/ is copied).
+tune_for_hardware() {
+    local picom="$HOME/.config/bspwm/config/picom/picom.conf"
+    # vmwgfx oopses with picom's GLX backend (NULL deref in
+    # vmw_bo_dirty_transfer_to_res); xrender is stable in every VM.
+    if [[ "$VIRT" != none && -f "$picom" ]]; then
+        sed -i -E 's/^backend\s*=.*/backend = "xrender";/' "$picom"
+        info "Máquina virtual: picom usa el backend xrender."
+    fi
+    # SetSysVars re-detects battery/backlight/network on the next login
+    rm -f -- "$HOME/.config/bspwm/config/.sys"
+}
+
+# ------------------------------ Deploy ---------------------------------------
 backup_path() {
     local src="$1"
     local rel="$2"
@@ -640,8 +896,20 @@ copy_repository_content() {
     prepare_wallpaper_dir
     mkdir -p -- "$HOME/.config" "$HOME/.local/bin" "$HOME/.local/share/fonts" "$HOME/.local/share/applications"
 
-    # 1. config/ is the canonical source for ~/.config.
-    sync_tree "$SCRIPT_DIR/config" "$HOME/.config" "config/ → ~/.config"
+    # 1. config/ is the canonical source for ~/.config: each managed folder is
+    #    mirrored exactly, the rest of ~/.config (browsers, other apps) is kept.
+    #    systemd/ is merged (the user may have units of their own).
+    local dir name
+    for dir in "$SCRIPT_DIR"/config/*/; do
+        name="$(basename -- "$dir")"
+        if [[ "$name" == systemd ]]; then
+            mkdir -p -- "$HOME/.config/systemd"
+            rsync -a -- "$dir" "$HOME/.config/systemd/" >>"$LOG_FILE" 2>&1 || fatal "No se pudo desplegar config/systemd."
+        else
+            sync_tree "${dir%/}" "$HOME/.config/$name" "config/$name → ~/.config/$name" >/dev/null
+        fi
+    done
+    success "config/ → ~/.config desplegado (${HOME}/.config conserva lo ajeno al rice)."
 
     # 2. Never deploy the repository's home/ directory into $HOME.
     #    The user's home and standard folders are managed by the OS.
@@ -650,19 +918,19 @@ copy_repository_content() {
     #    theme-config: ~/Imágenes/Wallpapers/noche_car_man.jpg.
     if [[ -d "$SCRIPT_DIR/Wallpapers" ]]; then
         mkdir -p -- "$HOME/Imágenes/Wallpapers"
-        rsync -a --delete "$SCRIPT_DIR/Wallpapers/" "$HOME/Imágenes/Wallpapers/" >>"$LOG_FILE" 2>&1 || fatal "No se pudo desplegar Wallpapers/."
+        rsync -a "$SCRIPT_DIR/Wallpapers/" "$HOME/Imágenes/Wallpapers/" >>"$LOG_FILE" 2>&1 || fatal "No se pudo desplegar Wallpapers/."
         success "Wallpapers/ desplegado únicamente en ~/Imágenes/Wallpapers."
     fi
 
     # 4. misc/ gets mapped according to the role of each directory in THIS repo.
     if [[ -d "$SCRIPT_DIR/misc/bin" ]]; then
-        rsync -a --delete "$SCRIPT_DIR/misc/bin/" "$HOME/.local/bin/" >>"$LOG_FILE" 2>&1 || fatal "No se pudo desplegar misc/bin."
+        rsync -a "$SCRIPT_DIR/misc/bin/" "$HOME/.local/bin/" >>"$LOG_FILE" 2>&1 || fatal "No se pudo desplegar misc/bin."
     fi
     if [[ -d "$SCRIPT_DIR/misc/fonts" ]]; then
-        rsync -a --delete "$SCRIPT_DIR/misc/fonts/" "$HOME/.local/share/fonts/" >>"$LOG_FILE" 2>&1 || fatal "No se pudo desplegar misc/fonts."
+        rsync -a "$SCRIPT_DIR/misc/fonts/" "$HOME/.local/share/fonts/" >>"$LOG_FILE" 2>&1 || fatal "No se pudo desplegar misc/fonts."
     fi
     if [[ -d "$SCRIPT_DIR/misc/applications" ]]; then
-        rsync -a --delete "$SCRIPT_DIR/misc/applications/" "$HOME/.local/share/applications/" >>"$LOG_FILE" 2>&1 || fatal "No se pudo desplegar misc/applications."
+        rsync -a "$SCRIPT_DIR/misc/applications/" "$HOME/.local/share/applications/" >>"$LOG_FILE" 2>&1 || fatal "No se pudo desplegar misc/applications."
     fi
     if [[ -d "$SCRIPT_DIR/misc/asciiart" ]]; then
         rsync -a --delete "$SCRIPT_DIR/misc/asciiart/" "$HOME/.local/share/asciiart/" >>"$LOG_FILE" 2>&1 || fatal "No se pudo desplegar misc/asciiart."
@@ -716,22 +984,27 @@ install_pacman_hook() {
 
 # -------------------------- Sessions / Services ------------------------------
 setup_display_manager() {
-    step "Display Manager / sesión BSPWM"
+    step "Display Manager / login TechOGR"
 
     local active=""
-    if systemctl is-active --quiet display-manager.service; then
-        active="$(systemctl show -p Id --value display-manager.service 2>/dev/null || true)"
-    fi
+    active="$(systemctl show -p Id --value display-manager.service 2>/dev/null || true)"
+    [[ "$active" == display-manager.service ]] && active=""
 
-    if [[ -n "$active" ]]; then
-        success "Display Manager existente conservado: $active"
-    else
-        info "No hay Display Manager activo; instalando LightDM + GTK greeter."
-        install_pkg lightdm yes || true
-        install_pkg lightdm-gtk-greeter yes || true
-        ((${#FAILED_REQUIRED[@]} == 0)) || fatal "No se pudo instalar LightDM."
-        sudo systemctl enable lightdm.service >>"$LOG_FILE" 2>&1 || fatal "No se pudo habilitar LightDM."
-        success "LightDM habilitado."
+    # The TechOGR login lives in LightDM. Another DM (sddm, gdm, ly...) is
+    # replaced only with the user's consent; default yes, non-interactive = keep.
+    local use_lightdm=true
+    if [[ -n "$active" && "$active" != lightdm.service ]]; then
+        use_lightdm=false
+        if [[ -t 0 ]]; then
+            local answer
+            read -r -p "  Display Manager actual: $active. ¿Reemplazarlo por el login TechOGR (LightDM)? [S/n]: " answer
+            [[ "$answer" =~ ^[nN]$ ]] || use_lightdm=true
+        fi
+        if [[ "$use_lightdm" == true ]]; then
+            sudo systemctl disable "$active" >>"$LOG_FILE" 2>&1 || warn "No se pudo deshabilitar $active."
+        else
+            success "Display Manager existente conservado: $active"
+        fi
     fi
 
     sudo install -Dm644 /dev/stdin /usr/share/xsessions/bspwm.desktop <<EOF_BSPWM
@@ -743,46 +1016,49 @@ TryExec=bspwm
 Type=Application
 DesktopNames=BSPWM
 EOF_BSPWM
+    success "Sesión BSPWM registrada en /usr/share/xsessions/bspwm.desktop."
+    [[ "$use_lightdm" == true ]] || return 0
 
-    # Do not overwrite an existing DM configuration when one is active.
-    # For a fresh LightDM install, select BSPWM as default session.
-    if systemctl is-enabled --quiet lightdm.service 2>/dev/null; then
-        sudo install -d -m755 /etc/lightdm/lightdm.conf.d
-        sudo tee /etc/lightdm/lightdm.conf.d/50-bspwm.conf >/dev/null <<'EOF_DM'
-[Seat:*]
-user-session=bspwm
-greeter-session=lightdm-gtk-greeter
-EOF_DM
+    install_pkg lightdm yes || true
+    install_pkg lightdm-gtk-greeter yes || true
+    ((${#FAILED_REQUIRED[@]} == 0)) || fatal "No se pudo instalar LightDM."
+    install_any lightdm-webkit2-greeter no || true
+    sudo systemctl enable -f lightdm.service >>"$LOG_FILE" 2>&1 || fatal "No se pudo habilitar LightDM."
 
-        # TechOGR login screen: lightdm-webkit2-greeter + theme "techogr",
-        # the BetterLock card (user, password, session, power buttons).
-        if sudo bash "$SCRIPT_DIR/misc/lightdm/install-login.sh" "$USER" >>"$LOG_FILE" 2>&1; then
-            # wallpaper, avatar and colors of the rice -> the theme's data/
-            "$HOME/.config/bspwm/bin/BetterLock" --greeter >>"$LOG_FILE" 2>&1 || true
-            success "Pantalla de login TechOGR (lightdm-webkit2-greeter) instalada."
-        else
-            warn "No se pudo instalar el login TechOGR; LightDM usará lightdm-gtk-greeter."
-            sudo tee /etc/lightdm/lightdm.conf.d/50-bspwm.conf >/dev/null <<'EOF_DM'
-[Seat:*]
-user-session=bspwm
-greeter-session=lightdm-gtk-greeter
-EOF_DM
-        fi
+    local seat=/etc/lightdm/lightdm.conf.d/50-bspwm.conf
+    sudo install -d -m755 /etc/lightdm/lightdm.conf.d
+    printf '[Seat:*]\nuser-session=bspwm\ngreeter-session=lightdm-gtk-greeter\n' | sudo tee "$seat" >/dev/null
 
-        # Fallback greeter (lightdm-gtk-greeter): same default wallpaper.
-        local wallpaper="$HOME/Imágenes/Wallpapers/noche_car_man.jpg"
+    # TechOGR login screen: lightdm-webkit2-greeter + theme "techogr",
+    # the BetterLock card (user, password, session, power buttons).
+    if is_pkg_installed lightdm-webkit2-greeter &&
+       sudo bash "$SCRIPT_DIR/misc/lightdm/install-login.sh" "$USER" >>"$LOG_FILE" 2>&1; then
+        # wallpaper, avatar and colors of the rice -> the theme's data/
+        "$HOME/.config/bspwm/bin/BetterLock" --greeter >>"$LOG_FILE" 2>&1 ||
+            warn "BetterLock --greeter falló; el login usará sus colores por defecto."
+        success "Pantalla de login TechOGR (lightdm-webkit2-greeter) instalada."
+    else
+        warn "No se pudo instalar el login TechOGR; LightDM usará lightdm-gtk-greeter."
+        printf '[Seat:*]\nuser-session=bspwm\ngreeter-session=lightdm-gtk-greeter\n' | sudo tee "$seat" >/dev/null
+    fi
+
+    # Fallback greeter (lightdm-gtk-greeter): the rice wallpaper, from a
+    # place the lightdm user can read (not ~, which is usually 0700).
+    local wallpaper=/usr/share/lightdm-webkit/themes/techogr/data/background.jpg
+    if [[ ! -f "$wallpaper" ]]; then
+        wallpaper="$(find "$HOME/.config/bspwm/rices/crackone/walls" -maxdepth 1 -type f \
+                     \( -iname '*.jpg' -o -iname '*.png' \) 2>/dev/null | sort | head -n1)"
         if [[ -f "$wallpaper" ]]; then
-            sudo install -d -m755 /etc/lightdm/lightdm-gtk-greeter.conf.d
-            {
-                printf '%s\n' '[greeter]'
-                printf 'background=%s\n' "$wallpaper"
-            } | sudo tee /etc/lightdm/lightdm-gtk-greeter.conf.d/50-techogr-background.conf >/dev/null
-            success "Fondo de LightDM sincronizado con noche_car_man.jpg."
-        else
-            warn "El wallpaper predeterminado aún no existe; LightDM conservará su fondo actual."
+            sudo install -Dm644 "$wallpaper" /usr/share/backgrounds/techogr-login.${wallpaper##*.}
+            wallpaper=/usr/share/backgrounds/techogr-login.${wallpaper##*.}
         fi
     fi
-    success "Sesión BSPWM registrada en /usr/share/xsessions/bspwm.desktop."
+    if [[ -f "$wallpaper" ]]; then
+        sudo install -d -m755 /etc/lightdm/lightdm-gtk-greeter.conf.d
+        printf '[greeter]\nbackground=%s\n' "$wallpaper" |
+            sudo tee /etc/lightdm/lightdm-gtk-greeter.conf.d/50-techogr-background.conf >/dev/null
+    fi
+    success "LightDM habilitado con la sesión BSPWM por defecto."
 }
 
 configure_services() {
@@ -912,11 +1188,14 @@ main() {
     sync_system
     install_base_deps
     install_aur_helper
+    detect_hardware
+    install_drivers
     install_eww
     install_packages
     install_lockscreen
     create_backup
     copy_repository_content
+    tune_for_hardware
     deploy_repository_home
     install_pacman_hook
     setup_display_manager
