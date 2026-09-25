@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+# =============================================================
+# EdgeResize - Ctrl + left-drag near a window border resizes it.
+#
+# sxhkd runs this on `ctrl + ~button1` (the click is replayed, so
+# Ctrl + click keeps working inside apps). If the press was within
+# EDGE px of a border of the window under the pointer, that border
+# (or corner, near two borders) follows the mouse until the button
+# is released. Anywhere else it exits and does nothing.
+# Works with floating and tiled windows (tiled: moves the split).
+# =============================================================
+
+import ctypes
+import fcntl
+import json
+import os
+import subprocess
+import sys
+import time
+
+EDGE = 30          # px from a border that count as "on the border"
+POLL = 0.012       # s between pointer reads while dragging
+BUTTON1_MASK = 1 << 8
+
+# single instance: a second press while dragging does nothing
+lock = open(os.path.join(os.environ.get('XDG_RUNTIME_DIR', '/tmp'), '.edgeresize.lock'), 'w')
+try:
+    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError:
+    sys.exit(0)
+
+x11 = ctypes.CDLL('libX11.so.6')
+x11.XOpenDisplay.restype = ctypes.c_void_p
+x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+x11.XDefaultRootWindow.restype = ctypes.c_ulong
+x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+x11.XQueryPointer.argtypes = [ctypes.c_void_p, ctypes.c_ulong] + [ctypes.c_void_p] * 7
+
+dpy = x11.XOpenDisplay(None)
+if not dpy:
+    sys.exit(1)
+root = x11.XDefaultRootWindow(dpy)
+
+
+def pointer():
+    r, c = ctypes.c_ulong(), ctypes.c_ulong()
+    rx, ry, wx, wy = (ctypes.c_int() for _ in range(4))
+    mask = ctypes.c_uint()
+    x11.XQueryPointer(dpy, root, ctypes.byref(r), ctypes.byref(c), ctypes.byref(rx), ctypes.byref(ry),
+                      ctypes.byref(wx), ctypes.byref(wy), ctypes.byref(mask))
+    return rx.value, ry.value, mask.value
+
+
+def bspc(*args):
+    return subprocess.run(['bspc', *args], capture_output=True, text=True).stdout.strip()
+
+
+node = bspc('query', '-N', '-n', 'pointed.window')
+if not node:
+    sys.exit(0)
+try:
+    tree = json.loads(bspc('query', '-T', '-n', node))
+except ValueError:
+    sys.exit(0)
+state = tree.get('client', {}).get('state')
+if state == 'fullscreen':
+    sys.exit(0)
+# a floating window's real geometry is floatingRectangle ("rectangle" is its tiling slot)
+rect = tree['client']['floatingRectangle'] if state == 'floating' else tree['rectangle']
+px, py, _ = pointer()
+
+left = px - rect['x'] < EDGE
+right = rect['x'] + rect['width'] - px < EDGE
+top = py - rect['y'] < EDGE
+bottom = rect['y'] + rect['height'] - py < EDGE
+vert = 'top' if top else 'bottom' if bottom else ''
+horiz = 'left' if left else 'right' if right else ''
+if not (vert or horiz):
+    sys.exit(0)
+handle = f'{vert}_{horiz}' if vert and horiz else vert or horiz
+
+bspc('node', node, '-f')
+lx, ly = px, py
+while True:
+    x, y, mask = pointer()
+    if not mask & BUTTON1_MASK:
+        break
+    dx = x - lx if horiz else 0
+    dy = y - ly if vert else 0
+    if dx or dy:
+        subprocess.run(['bspc', 'node', node, '-z', handle, str(dx), str(dy)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        lx, ly = x, y
+    time.sleep(POLL)

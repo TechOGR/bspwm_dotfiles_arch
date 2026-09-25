@@ -77,6 +77,7 @@ La tecla principal (**Mod**) es **Super** (tecla Windows).
 | `Super + Alt + C` | Historial del portapapeles |
 | `Super + Alt + H` / `U` | Ocultar / mostrar la barra |
 | `Super + X` / `Super + Shift + X` | Cerrar / matar la ventana enfocada |
+| `Ctrl + arrastrar desde un borde` | Redimensionar la ventana (flotante o en mosaico) |
 | `Alt + Tab` | Cambiar entre ventanas |
 | `Super + ← / →` | Cambiar de escritorio |
 | `Super + [1-9,0]` | Ir al escritorio N |
@@ -84,7 +85,7 @@ La tecla principal (**Mod**) es **Super** (tecla Windows).
 | `Super + Alt + ← ↓ ↑ →` | Mover el foco entre ventanas |
 | `Super + Alt + R` | Recargar BSPWM |
 | `Ctrl + Super + Alt + Q` | Cerrar sesión |
-| `Ctrl + Super + Alt + L` / `Super + Shift + S` | Bloquear pantalla (ScreenLocker) |
+| `Super + Shift + S` | Bloquear pantalla (ScreenLocker) |
 | `Super + Shift + L` | Pantalla de login (betterlockscreen · BetterLock) |
 | `Click derecho en el escritorio` | Menú de aplicaciones (JGmenu) |
 

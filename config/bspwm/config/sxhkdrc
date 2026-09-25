@@ -101,9 +101,10 @@ super + alt + o
     case "$type" in *DESKTOP*) \
         jgmenu_run ;; esac
 
-# Power off, Reboot, Log out, Lockscreen, kill an app
-ctrl + super + alt + {p,r,q,l,k,s}
-    {systemctl poweroff, systemctl reboot,bspc quit,ScreenLocker,xkill,SoftReload}
+# Power off, Reboot, Log out, kill an app, soft reload
+# (lock screen is super + shift + s)
+ctrl + super + alt + {p,r,q,k,s}
+    {systemctl poweroff, systemctl reboot,bspc quit,xkill,SoftReload}
 
 # Hide/Show Bar (Polybar and/or eww)
 super + alt + {h,u}
@@ -222,6 +223,10 @@ super + ctrl + {plus,minus}
 	xdotool getactivewindow windowmove --relative -- -50 -25 ; xdo resize -w +100 -h +50; \
 	, xdotool getactivewindow windowmove --relative -- +50 +25 ; xdo resize -w -100 -h -50; \
     }
+
+# Resize a window: Ctrl + drag from its border or corner
+ctrl + ~button1
+    EdgeResize
 
 # Move floating window
 super + shift + {Left,Down,Up,Right}
