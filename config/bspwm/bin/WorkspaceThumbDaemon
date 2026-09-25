@@ -6,18 +6,29 @@
 # bspwm (like most tiling WMs) only ever renders the ACTUALLY
 # focused desktop - other desktops have no live pixels to grab.
 # So instead of trying to capture desktops that aren't on screen
-# (impossible without a real off-screen compositor), this polls
-# the desktop that IS visible on a short interval and refreshes
-# its thumbnail. Hovering a workspace icon in the bar then shows
-# the most recent frame captured while you were last there.
+# (impossible without a real off-screen compositor), this grabs
+# the desktop that IS visible and refreshes its thumbnail.
+# Hovering a workspace icon in the bar then shows the most recent
+# frame captured while you were last there.
+#
+# Event driven: a grab follows bspwm events (desktop switch, windows
+# opened/closed/moved) plus a slow refresh for content that changes
+# inside windows. Grabbing the whole screen every 1.5s kept Xorg busy
+# reading pixels back (very slow on vmwgfx).
 #
 # Output: ~/.cache/$USER/ws_thumbs/<desktop-name>.png
 # =============================================================
 
 CACHE_DIR="$HOME/.cache/$USER/ws_thumbs"
-INTERVAL=1.5
 THUMB_W=304
 THUMB_H=171
+SETTLE=0.35      # let a new/moved window finish drawing before the grab
+MIN_GAP_MS=800   # events closer than this to the last grab are skipped
+if [ "$("$HOME"/.config/bspwm/bin/PerfProfile)" = lite ]; then
+    REFRESH=10
+else
+    REFRESH=4
+fi
 
 mkdir -p "$CACHE_DIR"
 
@@ -30,15 +41,14 @@ is_locked() {
     pgrep -x i3lock >/dev/null 2>&1 || pgrep -x betterlockscreen >/dev/null 2>&1
 }
 
-while true; do
-    if ! is_locked; then
-        desktop=$(bspc query -D -d focused --names 2>/dev/null)
-        tree=$(bspc query -T -m focused 2>/dev/null)
+capture() {
+    desktop=$(bspc query -D -d focused --names 2>/dev/null)
+    tree=$(bspc query -T -m focused 2>/dev/null)
+    [ -n "$desktop" ] && [ -n "$tree" ] || return
 
-        if [ -n "$desktop" ] && [ -n "$tree" ]; then
-            # bspwm already knows exactly where the usable (non-padded)
-            # work area is - use that instead of guessing bar height.
-            read -r cap_x cap_y cap_w cap_h <<EOF
+    # bspwm already knows exactly where the usable (non-padded)
+    # work area is - use that instead of guessing bar height.
+    read -r cap_x cap_y cap_w cap_h <<EOF
 $(printf '%s' "$tree" | jq -r '
     (.rectangle.x + .padding.left) as $x |
     (.rectangle.y + .padding.top) as $y |
@@ -47,17 +57,29 @@ $(printf '%s' "$tree" | jq -r '
     "\($x) \($y) \($w) \($h)"
 ')
 EOF
+    [ -n "$cap_h" ] && [ "$cap_h" -gt 10 ] 2>/dev/null || return
 
-            if [ -n "$cap_h" ] && [ "$cap_h" -gt 10 ] 2>/dev/null; then
-                tmp="$CACHE_DIR/.${desktop}.tmp.png"
-                if maim -g "${cap_w}x${cap_h}+${cap_x}+${cap_y}" "$tmp" 2>/dev/null; then
-                    magick "$tmp" -resize "${THUMB_W}x${THUMB_H}" -gravity center \
-                        -background "#1a1b26" -extent "${THUMB_W}x${THUMB_H}" \
-                        "$CACHE_DIR/${desktop}.png" 2>/dev/null
-                    rm -f "$tmp"
-                fi
-            fi
-        fi
-    fi
-    sleep "$INTERVAL"
+    # bmp through a pipe: no temp screenshot and no PNG encode of the full frame
+    tmp="$CACHE_DIR/.${desktop}.tmp.png"
+    maim -f bmp -g "${cap_w}x${cap_h}+${cap_x}+${cap_y}" 2>/dev/null |
+        magick bmp:- -thumbnail "${THUMB_W}x${THUMB_H}" -gravity center \
+            -background "#1a1b26" -extent "${THUMB_W}x${THUMB_H}" "$tmp" 2>/dev/null &&
+        mv -f "$tmp" "$CACHE_DIR/${desktop}.png"
+    rm -f "$tmp"
+}
+
+# One line per bspwm event, plus a "tick" every REFRESH seconds. The
+# producers must not keep the lock fd (9>&-): WorkspacePreview stop only
+# kills this shell and its direct children, and they die of SIGPIPE.
+last=0
+{
+    bspc subscribe desktop_focus node_add node_remove node_transfer node_swap node_state node_geometry &
+    while :; do sleep "$REFRESH"; echo tick; done
+} 9>&- | while read -r ev _; do
+    is_locked && continue
+    [ "$ev" != tick ] && sleep "$SETTLE"
+    now=$(date +%s%3N)
+    [ $((now - last)) -lt "$MIN_GAP_MS" ] && continue
+    capture
+    last=$(date +%s%3N)
 done

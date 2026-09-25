@@ -1,0 +1,76 @@
+#!/bin/sh
+# =============================================================
+# PerfProfile - decides how heavy the desktop effects can be.
+#
+#   PerfProfile              prints "full" or "lite"
+#   PerfProfile set MODE     MODE = auto | full | lite (saved per machine)
+#   PerfProfile mode         prints the saved mode (auto by default)
+#   PerfProfile info         what was detected, for humans
+#
+# auto -> "lite" when OpenGL is not hardware accelerated (a VM without
+# 3D acceleration, llvmpipe/softpipe) or, without glxinfo, in any VM.
+#
+# Measured in a VMware guest (vmwgfx, "Accelerated: no"), idle Xorg+picom:
+#   glx + blur ........... ~40% CPU
+#   xrender + blur ....... ~97% CPU  (every repaint blurs on the CPU)
+#   xrender, lite ........ ~19% CPU  (no blur/animations, 10px shadows)
+#
+# lite means: picom on xrender with smaller shadows (PicomStart), no blur
+# and no animations (modules/00-picom.sh), a dock that sleeps when idle
+# and workspace thumbnails captured less often.
+#
+# The detection runs once per boot (cached in $XDG_RUNTIME_DIR).
+# =============================================================
+
+MODE_FILE="$HOME/.config/bspwm/config/.perf_mode"
+CACHE="${XDG_RUNTIME_DIR:-/tmp}/bspwm-perf-$(id -u)"
+
+saved_mode() {
+    m=$(cat "$MODE_FILE" 2>/dev/null)
+    case "$m" in full|lite) echo "$m" ;; *) echo auto ;; esac
+}
+
+detect() {
+    virt=$(systemd-detect-virt --vm 2>/dev/null) || virt=none
+    renderer="" accel=""
+    if command -v glxinfo >/dev/null 2>&1; then
+        info=$(timeout 5 glxinfo -B 2>/dev/null)
+        renderer=$(printf '%s\n' "$info" | sed -n 's/^OpenGL renderer string: //p')
+        accel=$(printf '%s\n' "$info" | sed -n 's/^ *Accelerated: //p')
+    fi
+    profile=full
+    case "$accel" in no) profile=lite ;; esac
+    case "$renderer" in *llvmpipe*|*softpipe*|*"Software Rasterizer"*) profile=lite ;; esac
+    [ -z "$renderer" ] && [ "$virt" != none ] && profile=lite
+    printf '%s\n%s\n%s\n%s\n' "$profile" "$virt" "${renderer:-?}" "${accel:-?}" > "$CACHE"
+}
+
+auto_profile() {
+    [ -s "$CACHE" ] || detect
+    head -n1 "$CACHE"
+}
+
+case "$1" in
+    "")
+        m=$(saved_mode)
+        [ "$m" = auto ] && auto_profile || echo "$m"
+        ;;
+    set)
+        case "$2" in
+            auto) rm -f "$MODE_FILE" ;;
+            full|lite) echo "$2" > "$MODE_FILE" ;;
+            *) echo "usage: ${0##*/} set auto|full|lite" >&2; exit 2 ;;
+        esac
+        ;;
+    mode) saved_mode ;;
+    info)
+        rm -f "$CACHE"; detect
+        { read -r p; read -r v; read -r r; read -r a; } < "$CACHE"
+        echo "mode:        $(saved_mode)"
+        echo "auto guess:  $p"
+        echo "virtual:     $v"
+        echo "GL renderer: $r"
+        echo "GL accel:    $a"
+        ;;
+    *) echo "usage: ${0##*/} [set auto|full|lite | mode | info]" >&2; exit 2 ;;
+esac

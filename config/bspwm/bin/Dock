@@ -38,6 +38,9 @@ MAGNIFY = 1.55
 MARGIN_BOTTOM = 10
 SWEEP_EVERY = 7.0     # seconds between light sweeps along the panel edge
 SWEEP_DUR = 1.6
+TICK_FAST = 33        # ms per frame while something animates
+TICK_IDLE = 250       # ms while idle (only polls the pointer for auto-hide)
+TICK_IDLE_AUTOHIDE = 120  # auto-hide must notice the pointer at the screen edge quickly
 
 
 def app_keys(info):
@@ -112,8 +115,12 @@ class Dock(Gtk.Window):
         self.reload(force=True)
         self.connect('realize', lambda *_: self.update_input())
         self.connect('destroy', self.on_destroy)
+        self.lite = ui.perf_profile() == 'lite'
+        self.padding_checked = 0.0
+        self.tick_id = None
+        self.tick_ms = 0
         GLib.timeout_add(1000, self.watch)
-        GLib.timeout_add(33, self.tick)
+        self.schedule_tick(TICK_FAST)
         threading.Thread(target=self.spy_windows, daemon=True).start()
         threading.Thread(target=self.spy_bspwm, daemon=True).start()
 
@@ -200,8 +207,8 @@ class Dock(Gtk.Window):
     def base_width(self):
         return sum(self.slot_w(it) for it in self.items) - 14 + 36
 
-    def layout_window(self):
-        geo = ui.monitor_geometry()
+    def layout_window(self, geo=None):
+        geo = geo or ui.monitor_geometry()
         self.mon = geo
         self.panel_h = self.S + 26
         self.head = int(self.S * (MAGNIFY - 1) + 46)
@@ -313,6 +320,7 @@ class Dock(Gtk.Window):
 
     def set_fullscreen(self, fs):
         self.fullscreen = fs
+        self.kick()
         return False
 
     # ─────────────────────────────────────────────────────── actions
@@ -380,6 +388,7 @@ class Dock(Gtk.Window):
     # ─────────────────────────────────────────────────────── events
     def on_motion(self, _w, ev):
         self.pointer = ev.x
+        self.kick()
         return False
 
     def on_leave(self, _w, ev):
@@ -414,8 +423,32 @@ class Dock(Gtk.Window):
     # ───────────────────────────────────────────────────── animation
     def watch(self):
         self.reload()
-        self.apply_padding()
+        self.lite = ui.perf_profile() == 'lite'
+        # resolution changed (VM window resized, xrandr): re-center on it
+        mon = Gdk.Display.get_default().get_monitor_at_point(self.mon.x + self.mon.width // 2,
+                                                             self.mon.y + self.mon.height // 2)
+        geo = mon.get_geometry() if mon else None
+        if geo and (geo.x, geo.y, geo.width, geo.height) != (self.mon.x, self.mon.y, self.mon.width, self.mon.height):
+            self.layout_window(geo)
+        # bspc is a fork: only every 5s (the padding rarely changes behind our back)
+        now = time.monotonic()
+        if now - self.padding_checked >= 5:
+            self.padding_checked = now
+            self.apply_padding()
         return True
+
+    def schedule_tick(self, ms):
+        """Frame timer: fast while animating, slow when idle, so an idle
+        dock is not 30 Python wake-ups per second."""
+        if ms == self.tick_ms and self.tick_id:
+            return
+        if self.tick_id:
+            GLib.source_remove(self.tick_id)
+        self.tick_ms = ms
+        self.tick_id = GLib.timeout_add(ms, self.tick)
+
+    def kick(self):
+        self.schedule_tick(TICK_FAST)
 
     def tick(self):
         now = time.monotonic()
@@ -468,10 +501,18 @@ class Dock(Gtk.Window):
         self.update_input()
         # redraw only while something moves: an idle dock costs nothing to
         # the compositor (picom on vmwgfx does not like constant damage)
-        sweeping = (now % SWEEP_EVERY) < SWEEP_DUR
-        if moving or 0 < self.shown < 1 or sweeping or self.sweeping:
+        # the light sweep is pure eye candy: off in the lite profile (VMs)
+        sweeping = not self.lite and (now % SWEEP_EVERY) < SWEEP_DUR
+        busy = moving or 0 < self.shown < 1 or self.shown != want_shown
+        if busy or sweeping or self.sweeping:
             self.area.queue_draw()
         self.sweeping = sweeping
+        # idle: slow down until the pointer / bspwm wakes us up (kick)
+        want_ms = (TICK_FAST if (busy or sweeping or self.pointer is not None)
+                   else TICK_IDLE_AUTOHIDE if self.conf.get('autohide') else TICK_IDLE)
+        if want_ms != self.tick_ms:
+            self.schedule_tick(want_ms)
+            return False
         return True
 
     # ─────────────────────────────────────────────────────── drawing

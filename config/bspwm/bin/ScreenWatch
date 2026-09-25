@@ -1,0 +1,40 @@
+#!/bin/sh
+# =============================================================
+# ScreenWatch - follows resolution changes while the session runs
+#
+# A VM window resized with VMware / VirtualBox / QEMU guest tools, or
+# `xrandr --mode ...`, changes the screen size under a running session:
+# bspwm re-tiles by itself, but polybar keeps its old width and the
+# wallpaper its old scale. This listens to bspwm's monitor_geometry
+# event (no polling, zero CPU while nothing changes) and, once the size
+# settles, restarts polybar and redraws the wallpaper. The dock and the
+# workspace preview re-measure the screen by themselves.
+# =============================================================
+
+CONFIG_DIR="$HOME/.config/bspwm"
+STATE="${XDG_RUNTIME_DIR:-/tmp}/bspwm-screenwatch-$(id -u)"
+SETTLE=1.2   # dragging a VM window emits a burst of sizes: act on the last
+
+exec 9>"$STATE.lock"
+flock -n 9 || exit 0
+
+apply() {
+    if pgrep -x polybar >/dev/null; then
+        polybar-msg cmd restart >/dev/null 2>&1
+    fi
+    if "$CONFIG_DIR"/bin/VideoWall --status 2>/dev/null | grep -q '"running": true'; then
+        "$CONFIG_DIR"/bin/VideoWall --start   # new windows at the new size
+    elif [ -x "$HOME/.fehbg" ]; then
+        "$HOME/.fehbg"
+    fi
+}
+
+seq=0
+bspc subscribe monitor_geometry 9>&- | while read -r _ _ geo; do
+    seq=$((seq + 1))
+    echo "$seq" > "$STATE"
+    (
+        sleep "$SETTLE"
+        [ "$(cat "$STATE" 2>/dev/null)" = "$seq" ] && apply
+    ) 9>&- &
+done

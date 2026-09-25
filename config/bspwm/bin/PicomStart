@@ -1,0 +1,14 @@
+#!/bin/sh
+# =============================================================
+# PicomStart - the one place picom is launched from (bspwmrc,
+# RiceEditor, GameMode). Adds the "lite" overrides of PerfProfile
+# on the command line, so picom.conf keeps the user's own choices.
+# Command-line options win over the config file, and a SIGUSR1
+# reload keeps them.
+# =============================================================
+
+set -- --config "$HOME/.config/bspwm/config/picom/picom.conf" "$@"
+if [ "$(PerfProfile)" = lite ]; then
+    set -- "$@" --backend xrender --shadow-radius 10
+fi
+exec picom "$@"

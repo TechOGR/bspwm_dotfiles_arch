@@ -273,7 +273,28 @@ def run_modules(*mods, reload_picom=False):
 
 
 # picom v13 occasionally dies on a SIGUSR1 reload: bring it back if so
-PICOM_RUN = f'picom --config "{PICOM_CONF}" >/dev/null 2>&1 &'
+# (PicomStart adds the PerfProfile "lite" overrides)
+PICOM_RUN = f'"{BSPWM}/bin/PicomStart" >/dev/null 2>&1 &'
+
+
+PERF_PROFILE = os.path.join(BSPWM, 'bin/PerfProfile')
+
+
+def perf_mode():
+    try:
+        return subprocess.run([PERF_PROFILE, 'mode'], capture_output=True, text=True, timeout=5).stdout.strip()
+    except Exception:
+        return 'auto'
+
+
+def perf_detect():
+    """What auto picks on this machine (PerfProfile caches it per boot)."""
+    try:
+        out = subprocess.run([PERF_PROFILE, 'info'], capture_output=True, text=True, timeout=10).stdout
+        m = re.search(r'^auto guess:\s*(\w+)', out, re.M)
+        return m.group(1) if m else 'full'
+    except Exception:
+        return 'full'
 
 
 def reload_picom():
@@ -1900,6 +1921,13 @@ class RiceEditor(Gtk.Window):
         p = self.page()
         cfg = self.cfg
 
+        auto = perf_detect()
+        c = self.card('󰓅', 'Performance', f'auto detected here: {auto}')
+        c.pack_start(self.row('Profile', 'lite: xrender, no blur/animations, smaller shadows (VMs without 3D)',
+                              self.combo([('auto', f'Auto ({auto})'), ('full', 'Full effects'), ('lite', 'Lite')],
+                                         perf_mode(), self.set_perf)), False, False, 0)
+        p.pack_start(c, False, False, 0)
+
         c = self.card('󰍹', 'Engine', 'needs a picom restart')
         c.pack_start(self.row('Backend', 'glx is the fastest; xrender works everywhere',
                               self.combo([('glx', 'glx'), ('egl', 'egl'), ('xrender', 'xrender')],
@@ -1955,6 +1983,13 @@ class RiceEditor(Gtk.Window):
                               self.switch(cfg.raw('P_ANIMATIONS') == '@', self.set_animations)), False, False, 0)
         p.pack_start(c, False, False, 0)
         return p
+
+    def set_perf(self, v):
+        def work():
+            subprocess.run([PERF_PROFILE, 'set', v], timeout=10)
+            run_modules('00-picom.sh')
+            restart_picom()
+        run_bg(work, lambda _r: self.toast(f'Performance → {v} (picom restarted)'))
 
     def set_backend(self, v):
         picom_set('backend', v, quoted=True)

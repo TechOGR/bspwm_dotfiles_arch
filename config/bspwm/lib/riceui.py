@@ -194,6 +194,29 @@ def backdrop(W, H, pal, darken=0.62):
     return surf
 
 
+def perf_profile():
+    """'full' or 'lite' (see bin/PerfProfile), read without forking when
+    PerfProfile already cached its guess for this boot."""
+    try:
+        with open(os.path.join(BSPWM, 'config/.perf_mode')) as f:
+            mode = f.read().strip()
+    except OSError:
+        mode = 'auto'
+    if mode in ('full', 'lite'):
+        return mode
+    cache = os.path.join(os.environ.get('XDG_RUNTIME_DIR', '/tmp'), f'bspwm-perf-{os.getuid()}')
+    try:
+        with open(cache) as f:
+            return f.readline().strip() or 'full'
+    except OSError:
+        pass
+    try:
+        return subprocess.run([os.path.join(BSPWM, 'bin/PerfProfile')], capture_output=True,
+                              text=True, timeout=10).stdout.strip() or 'full'
+    except Exception:
+        return 'full'
+
+
 def monitor_geometry():
     display = Gdk.Display.get_default()
     seat = display.get_default_seat()

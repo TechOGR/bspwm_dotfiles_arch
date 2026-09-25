@@ -26,7 +26,13 @@
 EWW_CONFIG="$HOME/.config/bspwm/eww"
 DWELL_MS=220
 CLOSE_DELAY_MS=250
-POLL_MS=120
+POLL_S=0.12          # pointer poll period (seconds)
+# The pill is re-measured (screenshot slice + magick) every N idle polls
+if [ "$("$HOME"/.config/bspwm/bin/PerfProfile)" = lite ]; then
+    REMEASURE_POLLS=40   # ~5s
+else
+    REMEASURE_POLLS=16   # ~2s
+fi
 ZONE_MARGIN=6
 BG_HEX="1a1b26"
 COLORS_INI="$HOME/.config/bspwm/rices/$(cat "$HOME/.config/bspwm/.rice")/colors.ini"
@@ -171,15 +177,11 @@ in_rect() {
     [ "$x" -ge "$x1" ] && [ "$x" -le "$x2" ] && [ "$y" -ge "$y1" ] && [ "$y" -le "$y2" ]
 }
 
-sleep_ms() {
-    sleep "$(awk -v ms="$1" 'BEGIN{printf "%.3f", ms/1000}')"
-}
-
 poll_count=0
 while true; do
     poll_count=$((poll_count + 1))
-    if [ "$poll_count" -ge 16 ] && [ "$open" = false ] && [ -z "$in_zone_since" ]; then
-        # Re-measure every ~16 polls (~2s) while idle: cheap (~50ms) and
+    if [ "$poll_count" -ge "$REMEASURE_POLLS" ] && [ "$open" = false ] && [ -z "$in_zone_since" ]; then
+        # Re-measure every REMEASURE_POLLS polls while idle: cheap (~50ms) and
         # keeps the zone glued to the pill as live content on either side
         # of it changes width, or after a bar restart/rice switch. Never
         # re-measured mid-hover/while open, so it can't flicker under you.
@@ -210,5 +212,5 @@ while true; do
             fi
         fi
     fi
-    sleep_ms "$POLL_MS"
+    sleep "$POLL_S"
 done

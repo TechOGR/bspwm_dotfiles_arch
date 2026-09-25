@@ -813,12 +813,12 @@ EOF_TP
 
 # Per-machine defaults for the deployed config (runs after config/ is copied).
 tune_for_hardware() {
-    local picom="$HOME/.config/bspwm/config/picom/picom.conf"
-    # vmwgfx oopses with picom's GLX backend (NULL deref in
-    # vmw_bo_dirty_transfer_to_res); xrender is stable in every VM.
-    if [[ "$VIRT" != none && -f "$picom" ]]; then
-        sed -i -E 's/^backend\s*=.*/backend = "xrender";/' "$picom"
-        info "Máquina virtual: picom usa el backend xrender."
+    # picom.conf is left alone: at every login PerfProfile checks whether
+    # OpenGL is hardware accelerated and, when it is not (a VM without 3D),
+    # PicomStart runs picom on xrender with no blur/animations. Forcing
+    # xrender here with blur still on made Xorg repaint on the CPU (~95%).
+    if [[ "$VIRT" != none ]]; then
+        info "Máquina virtual: el perfil de rendimiento se elige solo al iniciar sesión (PerfProfile info)."
     fi
     # SetSysVars re-detects battery/backlight/network on the next login
     rm -f -- "$HOME/.config/bspwm/config/.sys"
