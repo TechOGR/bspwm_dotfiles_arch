@@ -13,11 +13,13 @@
 # Measured in a VMware guest (vmwgfx, "Accelerated: no"), idle Xorg+picom:
 #   glx + blur ........... ~40% CPU
 #   xrender + blur ....... ~97% CPU  (every repaint blurs on the CPU)
-#   xrender, lite ........ ~19% CPU  (no blur/animations, 10px shadows)
+#   xrender, lite ........ ~20% CPU  (no blur/animations; shadows,
+#                                     corners, fading and opacity kept)
 #
-# lite means: picom on xrender with smaller shadows (PicomStart), no blur
-# and no animations (modules/00-picom.sh), a dock that sleeps when idle
-# and workspace thumbnails captured less often.
+# lite means: picom on xrender (PicomStart), no blur and no animations
+# (modules/00-picom.sh), no light sweep on the dock and workspace
+# thumbnails refreshed less often. "full" is shown as "Normal" in
+# RiceEditor -> Compositor -> Performance.
 #
 # The detection runs once per boot (cached in $XDG_RUNTIME_DIR).
 # =============================================================

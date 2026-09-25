@@ -1922,10 +1922,13 @@ class RiceEditor(Gtk.Window):
         cfg = self.cfg
 
         auto = perf_detect()
-        c = self.card('󰓅', 'Performance', f'auto detected here: {auto}')
-        c.pack_start(self.row('Profile', 'lite: xrender, no blur/animations, smaller shadows (VMs without 3D)',
-                              self.combo([('auto', f'Auto ({auto})'), ('full', 'Full effects'), ('lite', 'Lite')],
-                                         perf_mode(), self.set_perf)), False, False, 0)
+        mode = perf_mode()
+        self.perf_now = auto if mode == 'auto' else mode
+        c = self.card('󰓅', 'Performance', 'suggested for this machine: ' + ('Lite' if auto == 'lite' else 'Normal'))
+        c.pack_start(self.row('Mode', 'Normal: every effect · Lite: no blur and no animations, picom on '
+                              'xrender (shadows, corners and fading stay). For VMs without 3D',
+                              self.combo([('full', 'Normal'), ('lite', 'Lite')], self.perf_now, self.set_perf)),
+                     False, False, 0)
         p.pack_start(c, False, False, 0)
 
         c = self.card('󰍹', 'Engine', 'needs a picom restart')
@@ -1963,7 +1966,8 @@ class RiceEditor(Gtk.Window):
             c.pack_start(self.row(title, '', sc, lab), False, False, 0)
         p.pack_start(c, False, False, 0)
 
-        c = self.card('󰂵', 'Blur & fading')
+        c = self.card('󰂵', 'Blur & fading', 'blur and animations are off in Lite mode'
+                      if self.perf_now == 'lite' else '')
         c.pack_start(self.row('Blur', 'Frosted background behind transparent windows',
                               self.switch(cfg.raw('P_BLUR') == 'true',
                                           lambda on: self.set_picom_flag('P_BLUR', on, 'Blur'))), False, False, 0)
@@ -1989,7 +1993,8 @@ class RiceEditor(Gtk.Window):
             subprocess.run([PERF_PROFILE, 'set', v], timeout=10)
             run_modules('00-picom.sh')
             restart_picom()
-        run_bg(work, lambda _r: self.toast(f'Performance → {v} (picom restarted)'))
+        self.perf_now = v
+        run_bg(work, lambda _r: self.toast(f'Performance → {"Lite" if v == "lite" else "Normal"} (picom restarted)'))
 
     def set_backend(self, v):
         picom_set('backend', v, quoted=True)
@@ -2470,7 +2475,7 @@ class RiceEditor(Gtk.Window):
                 ('show_launcher', 'Launcher button', 'Applications button at the left of the dock')):
             self.dock_w[key] = self.switch(conf.get(key), lambda v, k=key, t=title: self.dock_set(k, v, t))
             c.pack_start(self.row(title, sub, self.dock_w[key]), False, False, 0)
-        sc, lab = self.scale(28, 72, 2, conf.get('icon_size', 44), 0,
+        sc, lab = self.scale(28, 72, 2, conf.get('icon_size', 32), 0,
                              lambda v: self.dock_set('icon_size', int(v), 'Icon size'), fmt=lambda v: f'{int(v)} px',
                              delay=350)
         self.dock_w['icon_size'] = sc

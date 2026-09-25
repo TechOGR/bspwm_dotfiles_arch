@@ -29,7 +29,7 @@ DOCK_CONF = os.path.join(BSPWM, 'config/dock.json')
 DOCK_DEFAULT = {
     'enabled': True,
     'apps': ['brave-browser.desktop', 'thunar.desktop', 'kitty.desktop'],
-    'icon_size': 44,
+    'icon_size': 32,
     'magnify': True,
     'autohide': False,
     'show_launcher': True,

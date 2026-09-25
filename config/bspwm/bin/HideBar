@@ -30,7 +30,8 @@ get_paddings() {
 
 set_padding() {
     bspc config top_padding "$1"
-    bspc config bottom_padding "$2"
+    # the dock keeps its own reserve at the bottom (it re-applies it itself)
+    pgrep -f '^python3 .*/bin/Dock$' >/dev/null || bspc config bottom_padding "$2"
     bspc config left_padding "$3"
     bspc config right_padding "$4"
 }

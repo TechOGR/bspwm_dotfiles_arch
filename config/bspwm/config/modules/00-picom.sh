@@ -6,7 +6,7 @@
 # Without hardware OpenGL (VMs) blur and animations are repainted on the
 # CPU and make everything lag: the "lite" profile drops them here (the
 # rules file is generated, theme-config keeps the user's choice) and
-# PicomStart moves picom to xrender with smaller shadows.
+# PicomStart moves picom to xrender. Shadows stay: they cost ~1%.
 if [ "$("$HOME"/.config/bspwm/bin/PerfProfile)" = lite ]; then
     P_BLUR=false
     P_ANIMATIONS="#"

@@ -9,6 +9,6 @@
 
 set -- --config "$HOME/.config/bspwm/config/picom/picom.conf" "$@"
 if [ "$(PerfProfile)" = lite ]; then
-    set -- "$@" --backend xrender --shadow-radius 10
+    set -- "$@" --backend xrender
 fi
 exec picom "$@"

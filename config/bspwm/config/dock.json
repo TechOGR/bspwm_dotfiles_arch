@@ -5,7 +5,7 @@
     "thunar.desktop",
     "kitty.desktop"
   ],
-  "icon_size": 44,
+  "icon_size": 32,
   "magnify": true,
   "autohide": false,
   "show_launcher": true

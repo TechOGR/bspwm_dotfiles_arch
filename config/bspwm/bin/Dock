@@ -87,6 +87,7 @@ class Dock(Gtk.Window):
         self.stick()
         ui.rgba_window(self)
 
+        self.dead = False
         self.conf = {}
         self.conf_mtime = None
         self.pal_sig = None
@@ -141,7 +142,7 @@ class Dock(Gtk.Window):
         if not self.conf.get('enabled', True):
             self.destroy()  # on_destroy gives the reserved space back
             return
-        S = int(max(28, min(72, self.conf.get('icon_size', 44))))
+        S = int(max(28, min(72, self.conf.get('icon_size', 32))))
         if S != getattr(self, 'S', S):
             self.items = []  # reload the icons at the new resolution
         self.S = S
@@ -233,6 +234,8 @@ class Dock(Gtk.Window):
         return int(m.group(1)) if m else 0
 
     def apply_padding(self):
+        if self.dead:
+            return
         want = self.base_padding() + (0 if self.conf.get('autohide') else self.reserved())
         cur = subprocess.run(['bspc', 'config', 'bottom_padding'], capture_output=True, text=True).stdout.strip()
         if cur != str(want):
@@ -415,6 +418,7 @@ class Dock(Gtk.Window):
         return True
 
     def on_destroy(self, *_):
+        self.dead = True
         want = self.base_padding()
         subprocess.run(['bspc', 'config', 'bottom_padding', str(want)])
         if Gtk.main_level():
@@ -423,6 +427,10 @@ class Dock(Gtk.Window):
     # ───────────────────────────────────────────────────── animation
     def watch(self):
         self.reload()
+        if self.dead:
+            # disabled in RiceEditor: on_destroy already gave the space
+            # back; applying our padding now would reserve it again
+            return False
         self.lite = ui.perf_profile() == 'lite'
         # resolution changed (VM window resized, xrandr): re-center on it
         mon = Gdk.Display.get_default().get_monitor_at_point(self.mon.x + self.mon.width // 2,
