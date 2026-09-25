@@ -17,12 +17,16 @@ HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 THEME=/usr/share/lightdm-webkit/themes/techogr
 GREETER_CONF=/etc/lightdm/lightdm-webkit2-greeter.conf
 SEAT_CONF=/etc/lightdm/lightdm.conf.d/50-bspwm.conf
+WRAPPER=/etc/lightdm/techogr-greeter-wrapper.sh
 
 [[ $EUID -eq 0 ]] || { echo "Run it with sudo: sudo $0 ${*:-}" >&2; exit 1; }
 
 seat_conf() {
     install -d -m755 /etc/lightdm/lightdm.conf.d
     printf '[Seat:*]\nuser-session=bspwm\ngreeter-session=%s\n' "$1" > "$SEAT_CONF"
+    # the webkit greeter needs WebKit's GPU renderer off (see greeter-wrapper.sh)
+    [[ "$1" == lightdm-webkit2-greeter ]] && printf 'greeter-wrapper=%s\n' "$WRAPPER" >> "$SEAT_CONF"
+    return 0
 }
 
 if [[ "${1:-}" == "--revert" ]]; then
@@ -42,6 +46,7 @@ pacman -Q lightdm lightdm-webkit2-greeter >/dev/null 2>&1 ||
 install -d -m755 "$THEME"
 install -m644 "$HERE/techogr/index.html" "$HERE/techogr/style.css" \
     "$HERE/techogr/greeter.js" "$HERE/techogr/index.theme" "$THEME/"
+install -m755 "$HERE/greeter-wrapper.sh" "$WRAPPER"
 install -d -m755 "$THEME/data"
 if [[ -n "$USER_NAME" ]] && id "$USER_NAME" >/dev/null 2>&1; then
     chown "$USER_NAME:$(id -gn "$USER_NAME")" "$THEME/data"
