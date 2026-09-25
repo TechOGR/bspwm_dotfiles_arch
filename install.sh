@@ -464,7 +464,7 @@ install_packages() {
         ttf-jetbrains-mono-nerd ttf-font-awesome noto-fonts-emoji
         papirus-icon-theme
         xss-lock
-        rsync thunar eza bat
+        rsync thunar tumbler gvfs eza bat
         python-gobject python-cairo python-pillow ffmpeg
         # HUD tools (Dock, AppLauncher, RiceEditor, UserCard, MusicPlayer,
         # ScreenShoTer, PowerMenu, AvatarForge, BarCtl auto-hide) are GTK3

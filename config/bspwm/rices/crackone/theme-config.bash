@@ -51,7 +51,7 @@ dunst_corner_radius='6'
 dunst_font='JetBrainsMono NF Medium 9'
 dunst_border='0'
 dunst_frame_color="$accent_color"
-dunst_icon_theme="TokyoNight-SE"
+dunst_icon_theme="Papirus-Dark"
 # Dunst animations
 dunst_close_preset="fly-out"
 dunst_close_direction="up"
@@ -123,8 +123,8 @@ BL_IDLE="0"				# Auto-lock after N idle minutes (0 = never)
 BL_SUSPEND="true"		# Lock before suspend (xss-lock)
 
 # Gtk theme
-gtk_theme="$gtk_themeb"
-gtk_icons="TokyoNight-SE"
+gtk_theme="TechOGR"
+gtk_icons="Papirus-Dark"
 gtk_cursor="Bibata-Modern-Classic"
 geany_theme="z0mbi3-TokyoNight"
 
