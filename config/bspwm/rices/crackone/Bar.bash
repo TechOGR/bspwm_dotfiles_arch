@@ -4,5 +4,9 @@
 for mon in $(polybar --list-monitors | cut -d":" -f1); do
 	MONITOR=$mon polybar -q emi-bar -c "${HOME}"/.config/bspwm/rices/"${RICE}"/config.ini &
 done
+# Styled workspaces over the bar (RiceEditor -> Polybar -> Workspace style;
+# exits by itself with the classic style)
+"${HOME}"/.config/bspwm/bin/WorkspacePill --restart >/dev/null 2>&1 &
+
 # Auto-hide daemon (exits by itself when auto-hide is off or already running)
 "${HOME}"/.config/bspwm/bin/BarCtl daemon >/dev/null 2>&1 &

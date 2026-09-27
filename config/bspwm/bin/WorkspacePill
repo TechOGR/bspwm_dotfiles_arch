@@ -1,0 +1,245 @@
+#!/usr/bin/env python3
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# WorkspacePill - the bar's workspaces in the style picked in
+# RiceEditor -> Polybar -> Workspace style (lib/wspill.py draws them)
+#   ✔ Sits over the gap polybar leaves in its center (module ws-space)
+#   ✔ focused = pac-man · occupied = ghost · empty = dot · urgent = red
+#   ✔ Click a desktop to go there, scroll to move between them
+#   ✔ Redrawn only when bspwm reports a change: no timers, ~0 % CPU
+#   ✔ Hides with the bar (HideBar / auto-hide) and under fullscreen
+#
+#   WorkspacePill              run (exits when the style is "classic")
+#   WorkspacePill --restart    replace the running one
+#   WorkspacePill --stop | --hide | --show
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+import os
+import sys
+import time
+import signal
+import subprocess
+
+sys.path.insert(0, os.path.expanduser('~/.config/bspwm/lib'))
+import barconf as bc  # noqa: E402
+import wspill  # noqa: E402
+
+LOCK = os.path.join(bc.HOME, '.cache', os.environ.get('USER', 'user'), '.workspacepill.lock')
+
+
+def running_pid():
+    try:
+        with open(LOCK) as f:
+            pid = int(f.read().strip() or 0)
+        os.kill(pid, 0)
+        return pid
+    except (OSError, ValueError):
+        return None
+
+
+def cli():
+    arg = sys.argv[1] if len(sys.argv) > 1 else ''
+    pid = running_pid()
+    sig = {'--stop': signal.SIGTERM, '--restart': signal.SIGTERM,
+           '--hide': signal.SIGUSR1, '--show': signal.SIGUSR2}.get(arg)
+    if sig and pid:
+        os.kill(pid, sig)
+        if arg == '--restart':
+            for _ in range(40):          # wait for it to let go of the lock
+                if running_pid() is None:
+                    break
+                time.sleep(0.05)
+    if arg in ('--stop', '--hide', '--show'):
+        sys.exit(0)
+
+
+def polybar_windows():
+    out = subprocess.run(['xdotool', 'search', '--class', '^Polybar$'], capture_output=True, text=True).stdout
+    return out.split()
+
+
+def main():
+    cli()
+    conf = bc.load()
+    style = conf.get('ws_style', 'classic')
+    if style not in wspill.STYLE_IDS or style == 'classic':
+        return
+    import gi
+    gi.require_version('Gtk', '3.0')
+    gi.require_version('Gdk', '3.0')
+    from gi.repository import Gtk, Gdk, GLib
+    import cairo
+    import riceui as ui
+    _lock = ui.single_instance('workspacepill')  # noqa: F841  writes LOCK
+    # the bar may still be starting (login, BarCtl apply)
+    for _ in range(60):
+        if polybar_windows():
+            break
+        time.sleep(0.25)
+    else:
+        return
+
+    GLib.set_prgname('WorkspacePill')
+    display = Gdk.Display.get_default()
+    mon = display.get_primary_monitor() or display.get_monitor(0)
+    geo = mon.get_geometry()
+    mon_name = (subprocess.run(['bspc', 'query', '-M', '-m', 'primary', '--names'],
+                               capture_output=True, text=True).stdout.strip() or
+                subprocess.run(['bspc', 'query', '-M', '-m', 'focused', '--names'],
+                               capture_output=True, text=True).stdout.strip())
+    H = int(conf['height'])
+    st = {'desks': [], 'hidden_bar': False, 'fullscreen': False, 'polybar': True, 'm': None}
+
+    win = Gtk.Window(type=Gtk.WindowType.POPUP)
+    win.set_title('WorkspacePill')
+    win.set_app_paintable(True)
+    visual = win.get_screen().get_rgba_visual()
+    if visual:
+        win.set_visual(visual)
+    win.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.SCROLL_MASK)
+
+    def place():
+        m = wspill.metrics(len(st['desks']) or 6, H)
+        st['m'] = m
+        x = geo.x + (geo.width - m['win_w']) // 2
+        if conf['position'] == 'bottom':
+            y = geo.y + geo.height - int(conf['offset_y']) - H - m['ext']
+        else:
+            y = geo.y + int(conf['offset_y']) - m['ext']
+        win.set_size_request(m['win_w'], m['win_h'])
+        win.resize(m['win_w'], m['win_h'])
+        win.move(x, y)
+        gw = win.get_window()
+        if gw:   # clicks only on the pill, the rest lets them through
+            px, py, pw, ph = wspill.pill_rect(m)
+            region = cairo.Region(cairo.RectangleInt(int(px - 4), 0, int(pw + 8), m['win_h']))
+            gw.input_shape_combine_region(region, 0, 0)
+
+    def restack():
+        gw = win.get_window()
+        bars = polybar_windows()
+        if gw and bars:
+            # just above the bar: under every client, so fullscreen covers it
+            subprocess.run(['xdo', 'above', '-t', bars[0], hex(gw.get_xid())],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def update_visibility():
+        want = st['polybar'] and not st['hidden_bar'] and not st['fullscreen']
+        if want and not win.get_visible():
+            win.show()
+            place()
+            restack()
+        elif not want and win.get_visible():
+            win.hide()
+
+    def on_draw(_w, cr):
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+        if st['m'] and st['desks']:
+            wspill.paint(cr, style, st['m'], [d[1] for d in st['desks']])
+        return True
+
+    def on_press(_w, ev):
+        m = st['m']
+        if not m or ev.button != 1:
+            return False
+        centers = wspill.icon_centers(m)
+        i = min(range(len(centers)), key=lambda k: abs(centers[k][0] - ev.x))
+        if abs(centers[i][0] - ev.x) <= m['step'] / 2 + 4:
+            subprocess.Popen(['bspc', 'desktop', '-f', f'{mon_name}:^{i + 1}'])
+        return True
+
+    def on_scroll(_w, ev):
+        d = ev.direction
+        if d == Gdk.ScrollDirection.SMOOTH:
+            ok, _dx, dy = ev.get_scroll_deltas()
+            d = Gdk.ScrollDirection.DOWN if dy > 0 else Gdk.ScrollDirection.UP
+        target = 'next' if d == Gdk.ScrollDirection.DOWN else 'prev'
+        subprocess.Popen(['bspc', 'desktop', '-f', f'{target}.local'])
+        return True
+
+    def check_fullscreen():
+        out = subprocess.run(['bspc', 'query', '-N', '-n', '.fullscreen.window.!hidden',
+                              '-d', f'{mon_name}:focused'], capture_output=True, text=True).stdout
+        st['fullscreen'] = bool(out.strip())
+
+    def parse_report(line):
+        # WMVirtual-1:oI:O2:f3:LT:TT:G  (one monitor after another)
+        desks, cur = [], None
+        for item in line[1:].split(':'):
+            if not item:
+                continue
+            k, v = item[0], item[1:]
+            if k in 'Mm':
+                cur = v
+            elif cur == mon_name and k in 'OoFfUu':
+                state = {'O': 'focused', 'F': 'focused', 'U': 'focused',
+                         'o': 'occupied', 'f': 'empty', 'u': 'urgent'}[k]
+                desks.append((v, state))
+        return desks
+
+    def on_event(src, _cond):
+        line = src.readline()
+        if not line:
+            Gtk.main_quit()
+            return False
+        line = line.strip()
+        if line.startswith('W'):
+            desks = parse_report(line)
+            if len(desks) != len(st['desks']):
+                first = not st['desks']
+                st['desks'] = desks
+                place()
+                if not first:
+                    # desktop added/removed: the bar's gap must change width too
+                    subprocess.Popen([os.path.join(bc.BSPWM, 'bin/BarCtl'), 'apply'],
+                                     start_new_session=True)
+            st['desks'] = desks
+            check_fullscreen()
+            update_visibility()
+            win.queue_draw()
+        else:
+            check_fullscreen()
+            update_visibility()
+        return True
+
+    def watch_polybar():
+        alive = bool(polybar_windows())
+        if alive != st['polybar']:
+            st['polybar'] = alive
+            update_visibility()
+        return True
+
+    win.connect('draw', on_draw)
+    win.connect('button-press-event', on_press)
+    win.connect('scroll-event', on_scroll)
+    win.connect('realize', lambda *_: place())
+
+    proc = subprocess.Popen(['bspc', 'subscribe', 'report', 'node_state', 'node_remove', 'desktop_focus'],
+                            stdout=subprocess.PIPE, text=True, bufsize=1)
+    GLib.io_add_watch(proc.stdout, GLib.IO_IN | GLib.IO_HUP, on_event)
+    GLib.timeout_add_seconds(3, watch_polybar)   # rice switch / bar killed
+
+    def set_bar(hidden):
+        st['hidden_bar'] = hidden
+        update_visibility()
+        return True
+    GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGUSR1, lambda: set_bar(True))
+    GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGUSR2, lambda: set_bar(False))
+    GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGTERM, lambda: (Gtk.main_quit(), False)[1])
+    GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGINT, lambda: (Gtk.main_quit(), False)[1])
+
+    win.realize()
+    Gtk.main()
+    proc.terminate()
+
+
+if __name__ == '__main__':
+    main()

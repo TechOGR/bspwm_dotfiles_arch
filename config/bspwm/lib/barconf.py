@@ -34,6 +34,7 @@ DEFAULT = {
     'border': False,
     'separators': True,
     'autohide': False,
+    'ws_style': 'classic',     # workspaces: classic (polybar) | a lib/wspill.py style
     'modules': {
         'left': ['launcher', 'gap', 'cpu_wave', 'memory_bar', 'filesystem'],
         'center': ['bspwm'],
@@ -206,6 +207,28 @@ def expand(mods, conf, pill):
     return ' '.join(out)
 
 
+def ws_count():
+    """Desktops on the primary monitor (the pill's width depends on it)."""
+    try:
+        out = subprocess.run(['bspc', 'query', '-D', '-m', 'primary'], capture_output=True,
+                             text=True, timeout=2).stdout.split()
+        if not out:
+            out = subprocess.run(['bspc', 'query', '-D', '-m', 'focused'], capture_output=True,
+                                 text=True, timeout=2).stdout.split()
+        return len(out) or 6
+    except Exception:
+        return 6
+
+
+def ws_widget(conf):
+    """True when bin/WorkspacePill draws the workspaces instead of polybar."""
+    try:
+        import wspill
+    except Exception:
+        return False
+    return conf.get('ws_style', 'classic') in wspill.STYLE_IDS and conf.get('ws_style') != 'classic'
+
+
 def reserve(conf):
     """Space bspwm must keep free for the bar."""
     if conf['style'] == 'strip':
@@ -269,8 +292,16 @@ def render(conf=None, pal=None):
         lines += ['border-size = 1', f'border-color = {argb(accent, 85)}']
     else:
         lines += ['border-size = 0']
+    widget = ws_widget(conf)
     for k in ('left', 'center', 'right'):
-        lines.append(f'modules-{k} = {expand(conf["modules"][k], conf, pill)}')
+        mods = conf['modules'][k]
+        if widget:
+            mods = ['ws-space' if x == 'bspwm' else x for x in mods]
+        if widget and mods == ['ws-space']:
+            # alone in the center: just the gap, no pill caps behind the widget
+            lines.append(f'modules-{k} = ws-space')
+        else:
+            lines.append(f'modules-{k} = {expand(mods, conf, pill)}')
 
     cap_l, cap_r = CAPS.get(style, ('', ''))
     lines += [
@@ -283,6 +314,14 @@ def render(conf=None, pal=None):
         '',
         '[module/spacer]', 'type = custom/text', 'label = " "', 'label-padding = 1',
         '',
+    ]
+    if widget:
+        import wspill
+        gap = wspill.metrics(ws_count(), H)['win_w']
+        # the room bin/WorkspacePill is drawn on; keeps the bar continuous
+        lines += ['[module/ws-space]', 'type = custom/text', f'label = "%{{O{gap}}}"',
+                  f'format-background = {"#00000000" if pill else pod}', '']
+    lines += [
         '[module/cap-l]', 'type = custom/text', f'label = "{cap_l}"', 'label-font = 6',
         f'label-foreground = {pod}',
         '',

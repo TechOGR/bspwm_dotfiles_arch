@@ -56,6 +56,10 @@ try:
 except Exception:
     barconf = None
 try:
+    import wspill  # noqa: E402  (workspace pill styles, drawn by bin/WorkspacePill)
+except Exception:
+    wspill = None
+try:
     import avatar  # noqa: E402  (profile picture made by AvatarForge)
 except Exception:
     avatar = None
@@ -3491,6 +3495,8 @@ class RiceEditor(Gtk.Window):
         barconf.save(conf)
         if key == 'style':
             self.mark_tiles(self.bar_style_btns, value)
+        if key == 'ws_style' and getattr(self, 'ws_style_btns', None):
+            self.mark_tiles(self.ws_style_btns, value)
         self.bar_apply(f'{title} → {value}')
 
     def bar_theme(self, key):
@@ -3525,6 +3531,11 @@ class RiceEditor(Gtk.Window):
             lambda k: self.bar_set('style', k, 'Bar style'))
         c.pack_start(flow, False, False, 4)
         p.pack_start(c, False, False, 0)
+
+        if wspill:
+            c = self.card('󰮯', 'Workspace style', 'pac-man = current · ghost = has windows · dot = empty')
+            c.pack_start(self.ws_style_flow(conf.get('ws_style', 'classic')), False, False, 4)
+            p.pack_start(c, False, False, 0)
 
         c = self.card('󰏘', 'Look', 'applied live')
         self.bar_w['position'] = self.combo([('top', 'Top'), ('bottom', 'Bottom')], conf['position'],
@@ -3590,6 +3601,46 @@ class RiceEditor(Gtk.Window):
         self.bar_fill()
         return p
 
+    def ws_style_flow(self, active):
+        """Tiles with a live drawing of every workspace style (lib/wspill.py)."""
+        flow = Gtk.FlowBox()
+        flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        flow.set_homogeneous(True)
+        flow.set_min_children_per_line(2)
+        flow.set_max_children_per_line(3)
+        flow.set_column_spacing(10)
+        flow.set_row_spacing(10)
+        m = wspill.metrics(6, 30)
+        states = ['occupied', 'focused', 'empty', 'empty', 'empty', 'empty']
+        self.ws_style_btns = {}
+        for key, name, tagline in wspill.STYLES:
+            b = Gtk.Button()
+            b.get_style_context().add_class('style-tile')
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            art = Gtk.DrawingArea()
+            art.set_size_request(int(m['win_w'] * 0.82), int(m['win_h'] * 0.82) + 8)
+
+            def draw(w, cr, k=key):
+                sc = min(w.get_allocated_width() / m['win_w'], 0.82)
+                cr.translate((w.get_allocated_width() - m['win_w'] * sc) / 2, 4)
+                cr.scale(sc, sc)
+                wspill.paint(cr, k, m, states, self.rgb)
+                return True
+            art.connect('draw', draw)
+            box.pack_start(art, False, False, 0)
+            t = Gtk.Label(label=name, xalign=0)
+            t.get_style_context().add_class('row-title')
+            box.pack_start(t, False, False, 0)
+            d = Gtk.Label(label=tagline, xalign=0)
+            d.get_style_context().add_class('row-desc')
+            box.pack_start(d, False, False, 0)
+            b.add(box)
+            b.connect('clicked', lambda *_, k=key, n=name: self.bar_set('ws_style', k, f'Workspaces: {n}'))
+            flow.add(b)
+            self.ws_style_btns[key] = b
+        self.mark_tiles(self.ws_style_btns, active)
+        return flow
+
     def bar_sync(self):
         """Show what polybar.json holds now (ModulesList edits it too)."""
         if barconf is None or not getattr(self, 'bar_w', None):
@@ -3607,6 +3658,8 @@ class RiceEditor(Gtk.Window):
         finally:
             self.loading = was
         self.mark_tiles(self.bar_style_btns, conf['style'])
+        if getattr(self, 'ws_style_btns', None):
+            self.mark_tiles(self.ws_style_btns, conf.get('ws_style', 'classic'))
         self.bar_fill()
 
     def bar_fill(self):
