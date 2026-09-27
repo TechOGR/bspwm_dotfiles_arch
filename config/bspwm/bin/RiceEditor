@@ -2331,6 +2331,8 @@ class RiceEditor(Gtk.Window):
         if deco and wspill and ricekit:
             # the same style, in this palette's colors
             wspill.set_tint(deco, ricekit.palette_accent(func))
+            if 'windows' in deco:
+                self.tint_window_colors(ricekit.palette_accent(func))
         if 'colors' not in parts:
             self.refresh_decorations(deco)
             self.toast(f'{palette_title(func)} → {", ".join(deco)}')
@@ -2352,13 +2354,29 @@ class RiceEditor(Gtk.Window):
         if 'bar' in parts or 'workspaces' in parts:
             spawn([os.path.join(BIN, 'WorkspacePill'), '--restart'])
         if 'windows' in parts:
+            # borders + glow shadow in the new colors, then the frames
+            self.apply_modules('', '01-bspwm.sh', '00-picom.sh', reload_picom=True)
             spawn([os.path.join(BIN, 'RoundBorders'), '--reload'])
         if 'locks' in parts:
             spawn(f'"{BIN}/ScreenLocker" --prepare; nice -n 19 "{BIN}/BetterLock" --prepare', shell=True)
 
+    def tint_window_colors(self, target):
+        """Window border and glow colors of the theme, in the palette's
+        colors (None: the theme's own again)."""
+        kit = self.cfg.raw('WIN_SKIN', '') or self.cfg.raw('RICE_KIT', '')
+        if not (ricekit and wspill and kit in ricekit.KITS):
+            return
+        win = ricekit.KITS[kit]['win']
+        for var in ('FOCUSED_BC', 'NORMAL_BC', 'SHADOW_C'):
+            self.cfg.set(var, wspill.recolor_hex(kit, target, win[var]) if target else win[var])
+        bspc('config', 'focused_border_color', self.cfg.raw('FOCUSED_BC'))
+        bspc('config', 'normal_border_color', self.cfg.raw('NORMAL_BC'))
+
     def reset_tints(self):
         if wspill:
             wspill.set_tint(wspill.TINT_PARTS, None)
+            self.tint_window_colors(None)
+            self.apply_modules('', '01-bspwm.sh', '00-picom.sh', reload_picom=True)
             self.refresh_decorations(wspill.TINT_PARTS)
             self.toast("Back to the theme's own colors")
 

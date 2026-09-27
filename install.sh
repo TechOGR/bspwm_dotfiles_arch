@@ -820,6 +820,12 @@ tune_for_hardware() {
     if [[ "$VIRT" != none ]]; then
         info "Máquina virtual: el perfil de rendimiento se elige solo al iniciar sesión (PerfProfile info)."
     fi
+    # VMware: glamor on SVGA3D made vmwgfx crash the kernel (frozen session)
+    if [[ "$VIRT" == vmware ]]; then
+        sudo install -Dm644 "$SCRIPT_DIR/misc/vm/20-vmware-noglamor.conf" \
+            /etc/X11/xorg.conf.d/20-vmware-noglamor.conf &&
+            info "VMware: aceleración glamor desactivada (evita cuelgues de vmwgfx)."
+    fi
     # SetSysVars re-detects battery/backlight/network on the next login
     rm -f -- "$HOME/.config/bspwm/config/.sys"
 }

@@ -65,15 +65,22 @@ NATIVE = {
 
 
 def _recolor(c):
-    nh, th, ts, trgb = _TINT[0]
-    h, l, s = colorsys.rgb_to_hls(*c)
-    if s < 0.15 or nh is None:
-        # greys: a hint of the new color, stronger on light lines than on
-        # dark fills (a dark card must stay dark)
-        k = (0.45 if nh is None else 0.25) * min(1.0, l * 1.4)
-        return tuple(a + (b - a) * k for a, b in zip(c, trgb))
+    nh, th, k, trgb, grey = _TINT[0]
+    h, l, sat = colorsys.rgb_to_hls(*c)
+    if grey:
+        # a grey palette (Pencil, Minimal…): the style in monochrome, a hint
+        # of the palette's own tone, the light kept
+        y = 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]
+        return tuple(y + (t - y) * 0.12 * min(1.0, l * 1.5) for t in trgb)
+    if sat < 0.15 or nh is None:
+        # greys of the style: a touch of the new color, more on light lines
+        # than on dark fills (a dark card must stay dark)
+        kk = (0.45 if nh is None else 0.25) * min(1.0, l * 1.4)
+        return tuple(a + (b - a) * kk for a, b in zip(c, trgb))
     d = (h - nh + 0.5) % 1.0 - 0.5
-    return colorsys.hls_to_rgb((th + d * 0.4) % 1.0, l, min(1.0, s * 0.45 + ts * 0.55))
+    # the hue turns to the palette's, keeping some of the style's spread; the
+    # saturation follows how vivid the palette is next to the style's accent
+    return colorsys.hls_to_rgb((th + d * 0.35) % 1.0, l, max(0.0, min(1.0, sat * k)))
 
 
 class tinted:
@@ -82,9 +89,15 @@ class tinted:
     def __init__(self, style, target):
         self.args = None
         if target and style in NATIVE and target.lower() != NATIVE[style]:
-            nh, _l, ns = colorsys.rgb_to_hls(*_parse(NATIVE[style]))
-            th, _tl, ts = colorsys.rgb_to_hls(*_parse(target))
-            self.args = (nh if ns >= 0.15 else None, th, ts, _parse(target))
+            n = _parse(NATIVE[style])
+            t = _parse(target)
+            nh, _l, ns = colorsys.rgb_to_hls(*n)
+            th, _tl, _ts = colorsys.rgb_to_hls(*t)
+            n_sv = colorsys.rgb_to_hsv(*n)[1]
+            t_sv = colorsys.rgb_to_hsv(*t)[1]
+            grey = t_sv < 0.12
+            k = max(0.25, min(1.2, t_sv / max(0.2, n_sv)))
+            self.args = (nh if ns >= 0.15 else None, th, k, t, grey)
 
     def __enter__(self):
         self.prev = _TINT[0]
@@ -94,6 +107,13 @@ class tinted:
     def __exit__(self, *_):
         _TINT[0] = self.prev
         return False
+
+
+def recolor_hex(style, target, hexv):
+    """One '#hex' of a style in another palette (window border colors…)."""
+    with tinted(style, target):
+        r, g, b = rgb(hexv)
+    return '#%02x%02x%02x' % tuple(max(0, min(255, round(v * 255))) for v in (r, g, b))
 
 
 TINT_CONF = __import__('os').path.expanduser('~/.config/bspwm/config/tint.json')

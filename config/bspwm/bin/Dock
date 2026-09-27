@@ -33,6 +33,12 @@ sys.path.insert(0, os.path.expanduser('~/.config/bspwm/lib'))
 import riceui as ui  # noqa: E402
 from riceui import Gtk, Gdk, GLib, cairo  # noqa: E402
 from gi.repository import Gio  # noqa: E402
+try:
+    import barconf  # noqa: E402  (the bar's skin: the dock wears it too)
+    import wspill  # noqa: E402
+except Exception:
+    barconf = wspill = None
+SKIN_MARGIN = 56   # px around the panel the skin may draw on (leaves, flames…)
 
 MAGNIFY = 1.55
 MARGIN_BOTTOM = 10
@@ -126,11 +132,27 @@ class Dock(Gtk.Window):
         threading.Thread(target=self.spy_bspwm, daemon=True).start()
 
     # ─────────────────────────────────────────────────────── config
+    def skin_state(self):
+        """(style, tint) of the bar's skin, or None: the dock follows it."""
+        if not (barconf and wspill):
+            return None
+        try:
+            conf = barconf.load()
+            if barconf.skin_on(conf):
+                return conf['bar_skin'], wspill.tint_target('bar')
+        except Exception:
+            pass
+        return None
+
     def reload(self, force=False):
         try:
             mtime = os.path.getmtime(ui.DOCK_CONF)
         except OSError:
             mtime = 0
+        skin = self.skin_state()
+        if skin != getattr(self, 'skin', None):
+            self.skin, self.skin_cache = skin, None
+            self.queue_draw()
         sig = ui.palette_signature()
         if not force and mtime == self.conf_mtime and sig == self.pal_sig:
             return
@@ -539,6 +561,11 @@ class Dock(Gtk.Window):
         px, pw, ph = self.panel_x, self.panel_w, self.panel_h
         py = self.Hd - MARGIN_BOTTOM - ph
 
+        if getattr(self, 'skin', None):
+            # the bar's skin (theme style) on the panel, drawn once and cached
+            self.draw_skin(cr, px, py, pw, ph)
+            return self.draw_items(cr, c, now, S, px, py, pw, ph)
+
         # glow + glass panel
         for grow, a in ((10, 0.05), (5, 0.08)):
             ui.rounded(cr, px - grow, py - grow, pw + 2 * grow, ph + 2 * grow, 20 + grow)
@@ -583,6 +610,57 @@ class Dock(Gtk.Window):
         cr.fill()
         cr.restore()
 
+        return self.draw_items(cr, c, now, S, px, py, pw, ph)
+
+    def draw_skin(self, cr, px, py, pw, ph):
+        """The skin rendered at the panel's base width, drawn in three parts:
+        the ends as they are, the middle stretched with the magnification."""
+        M = SKIN_MARGIN
+        base_w = int(self.base_width())
+        if not self.skin_cache or self.skin_cache[0] != (base_w, int(ph)):
+            style, tint = self.skin
+            surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, base_w + 2 * M, int(ph) + 2 * M)
+            sc = cairo.Context(surf)
+            with wspill.tinted(style, tint):
+                wspill.paint_bar(sc, style, base_w + 2 * M, (M, M, base_w, ph))
+            self.skin_cache = ((base_w, int(ph)), surf)
+        surf = self.skin_cache[1]
+        sw, sh = surf.get_width(), surf.get_height()
+        cap = int(min(sw / 2, M + ph * 1.2))
+        x0, y0 = round(px - M), round(py - M)
+        dw = round(pw + 2 * M)
+        self._skin_mid(cr, surf, x0, y0, cap, dw, sw, sh)
+        cr.save()   # left end
+        cr.rectangle(x0, y0, cap, sh)
+        cr.clip()
+        cr.set_source_surface(surf, x0, y0)
+        cr.paint()
+        cr.restore()
+        cr.save()   # right end
+        cr.rectangle(x0 + dw - cap, y0, cap, sh)
+        cr.clip()
+        cr.set_source_surface(surf, x0 + dw - sw, y0)
+        cr.paint()
+        cr.restore()
+
+    @staticmethod
+    def _skin_mid(cr, surf, x0, y0, cap, dw, sw, sh):
+        mid_src, mid_dst = sw - 2 * cap, dw - 2 * cap
+        if mid_src > 0 and mid_dst > 0:   # middle, stretched
+            cr.save()
+            # exact edges (an overlap drew the halo twice) + PAD: no seam
+            cr.rectangle(x0 + cap, y0, mid_dst, sh)
+            cr.clip()
+            cr.translate(x0 + cap, y0)
+            cr.scale(mid_dst / mid_src, 1)
+            cr.set_source_surface(surf, -cap, 0)
+            pat = cr.get_source()
+            pat.set_filter(cairo.FILTER_GOOD)
+            pat.set_extend(cairo.EXTEND_PAD)
+            cr.paint()
+            cr.restore()
+
+    def draw_items(self, cr, c, now, S, px, py, pw, ph):
         base = py + ph - 13      # icon baseline
         hovered = None
         for it in self.items:

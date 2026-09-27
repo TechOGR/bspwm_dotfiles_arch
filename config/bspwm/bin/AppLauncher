@@ -30,6 +30,27 @@ import riceui as ui  # noqa: E402
 import avatar as avatar_lib  # noqa: E402  (profile picture made by AvatarForge)
 from riceui import Gtk, Gdk, GLib, GdkPixbuf, Pango, cairo  # noqa: E402
 from gi.repository import Gio  # noqa: E402
+try:
+    import wscard  # noqa: E402  (the theme's style: card frame + scene)
+    import wsback  # noqa: E402
+except Exception:
+    wscard = wsback = None
+
+
+def theme_style():
+    """The style the launcher wears: the window frames' (WIN_SKIN), else the
+    theme's; None = the plain glass panel."""
+    if not wscard:
+        return None
+    try:
+        import re as _re
+        text = open(ui.theme_cfg()).read()
+        m = _re.search(r'^WIN_SKIN=["\']?(\w*)', text, _re.M)
+        if m and m.group(1) in wscard.CARDS:
+            return m.group(1)
+    except OSError:
+        pass
+    return wscard.style_of()
 
 USAGE = os.path.join(ui.HOME, '.cache', os.environ.get('USER', 'user'), 'applauncher-usage.json')
 CATEGORIES = [
@@ -108,6 +129,8 @@ class Launcher(Gtk.Window):
         self.pal = ui.load_palette()
         self.c = ui.rgb_palette(self.pal)
         self.bg = ui.backdrop(self.W, self.H, self.pal, darken=0.55)
+        self.style = theme_style()
+        self.themed_bg = None   # backdrop + the panel in the theme style (cached)
         self.usage = load_usage()
         self.dock = ui.load_dock_conf()
         self.category = 'all'
@@ -253,6 +276,39 @@ class Launcher(Gtk.Window):
 ''').encode())
         Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css,
                                                  Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 2)
+        if self.style:
+            # the panel is painted in on_draw (scene + frame of the style)
+            themed = Gtk.CssProvider()
+            themed.load_from_data(b'''
+.hud .panel { background: transparent; border: none; box-shadow: none; }
+.hud .side { background-image: linear-gradient(to bottom, alpha(@black, 0.55), alpha(@black, 0.2)); border-right: none; }
+''')
+            Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), themed,
+                                                     Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 3)
+
+    def themed_backdrop(self):
+        """The blurred wallpaper with the panel drawn in the theme's style:
+        its scene inside, its frame and ornaments around (made once)."""
+        a = self.panel.get_allocation()
+        if a.width <= 1:
+            return None
+        surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, self.W, self.H)
+        cr = cairo.Context(surf)
+        cr.set_source_surface(self.bg, 0, 0)
+        cr.paint()
+        x, y, w, h = a.x, a.y, a.width, a.height
+        tint = wscard.ws.tint_target('windows')
+        cr.save()
+        wscard.shape(cr, self.style, x, y, w, h, 1.0)
+        cr.clip()
+        cr.set_source_surface(wsback.render(self.style, w, h, tint), x, y)
+        cr.paint()
+        # a veil of the palette's background: icons and names stay readable
+        cr.set_source_rgba(*self.c['bg'], 0.5)
+        cr.paint()
+        cr.restore()
+        wscard.paint_card(cr, self.style, x, y, w, h, 1.0, part='windows')
+        return surf
 
     def build_sidebar(self):
         side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
@@ -559,7 +615,12 @@ class Launcher(Gtk.Window):
     # ─────────────────────────────────────────────────────────── drawing
     def on_draw(self, _w, cr):
         cr.set_operator(cairo.OPERATOR_SOURCE)
-        cr.set_source_surface(self.bg, 0, 0)
+        bg = self.bg
+        if self.style:
+            if self.themed_bg is None:
+                self.themed_bg = self.themed_backdrop()
+            bg = self.themed_bg or self.bg
+        cr.set_source_surface(bg, 0, 0)
         cr.paint()
         cr.set_operator(cairo.OPERATOR_OVER)
         now = time.monotonic()
