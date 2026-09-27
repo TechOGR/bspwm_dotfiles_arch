@@ -30,9 +30,15 @@ get_brightness() {
     brightnessctl i | extract_pct
 }
 
+# The themed OSD (bin/RiceOSD), dunst when it is missing
+osd() {
+    command -v RiceOSD >/dev/null 2>&1 && RiceOSD "$@"
+}
+
 send_notification() {
     brightness="$1"
     icon="$DIR/brightness.svg"
+    osd brightness "$brightness" && return
 
     # The graphical bar comes from the int:value hint, dunst draws it itself.
     dunstify "Brightness $brightness%" -i "$icon" -r 5555 -h int:value:"$brightness"

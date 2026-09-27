@@ -1,135 +1,358 @@
-#!/bin/sh
+#!/usr/bin/env python3
 # =============================================================
-# ModulesList - Polybar module browser / toggler for bspwm
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
 #
-# Shows every polybar module known to this rice (active or not)
-# in a rofi menu, with an icon, a short description and its
-# current status. Selecting a non-fixed module toggles it on/off
-# (BarCtl edits config/polybar.json and restarts polybar; the full
-# editor is RiceEditor -> Polybar). Bound to
-# `super + alt + m` in sxhkdrc, and to the "" help button in the
-# bar itself.
+# ModulesList - the polybar modules of the rice, on and off, in a panel
+# of the theme's style (its scene and window frame; the icons are the
+# theme's bar icons, lib/baricons.py; the switches end in the style's own
+# dot). Every module known to modules.ini, active or not: a click (or
+# Enter / Space) turns it on or off (BarCtl edits config/polybar.json and
+# restarts polybar); typing filters; the full editor is RiceEditor ->
+# Polybar. Bound to super + alt + m and to the help button of the bar.
+#
+#   ModulesList        (a second launch closes it)
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
 # =============================================================
 
-CONFIG_DIR="$HOME/.config/bspwm"
-read -r RICE < "$CONFIG_DIR/.rice"
-THEME="$CONFIG_DIR/config/rofi-themes/ModulesList.rasi"
-WS_PREVIEW_FLAG="$CONFIG_DIR/config/.ws_preview_enabled"
+import os
+import sys
+import subprocess
+
+sys.path.insert(0, os.path.expanduser('~/.config/bspwm/lib'))
+import riceui as ui  # noqa: E402
+from riceui import Gtk, Gdk, GLib, cairo  # noqa: E402
+
+BSPWM = ui.BSPWM
+WS_PREVIEW_FLAG = os.path.join(BSPWM, 'config/.ws_preview_enabled')
+
+# id, (es name, es description), fixed, kind (bar / service), icon key of lib/baricons.py
+CATALOG = [
+    ('launcher', ('Lanzador', 'Menú de aplicaciones y selector de rice'), 1, 'bar', 'emblem'),
+    ('bspwm', ('Escritorios', 'Indicador de espacios de trabajo'), 1, 'bar', None),
+    ('cpu_wave', ('CPU', 'Carga de la CPU'), 0, 'bar', 'cpu'),
+    ('memory_bar', ('Memoria', 'Uso de RAM'), 0, 'bar', 'mem'),
+    ('filesystem', ('Disco', 'Espacio usado en /'), 0, 'bar', 'disk'),
+    ('network', ('Red', 'Estado y velocidad de red · clic: centro de red'), 0, 'bar', None),
+    ('pulseaudio', ('Volumen', 'Control y nivel de audio'), 0, 'bar', 'vol'),
+    ('mic', ('Micrófono', 'Silenciar / activar el micrófono'), 0, 'bar', None),
+    ('date', ('Fecha y hora', 'Reloj del sistema'), 1, 'bar', None),
+    ('uptime', ('Uptime', 'Tiempo desde el último arranque'), 0, 'bar', None),
+    ('sensors_temp', ('Temperatura', 'Temperatura de la CPU'), 0, 'bar', None),
+    ('gpu', ('GPU', 'Uso y temperatura de la GPU'), 0, 'bar', None),
+    ('heartbeat', ('Heartbeat', 'Pulso neón animado (decorativo)'), 0, 'bar', None),
+    ('song_wave', ('Now Playing', 'Ticker animado de la canción en MPD'), 0, 'bar', None),
+    ('mpd', ('MPD', 'Estado corto del reproductor MPD'), 0, 'bar', None),
+    ('mplayer', ('Reproductor', 'Accesos directos al panel de reproducción'), 0, 'bar', 'music'),
+    ('bluetooth', ('Bluetooth', 'Estado del adaptador Bluetooth'), 0, 'bar', None),
+    ('battery', ('Batería', 'Nivel y estado de carga'), 0, 'bar', None),
+    ('brightness', ('Brillo', 'Nivel de brillo de pantalla'), 0, 'bar', 'bright'),
+    ('updates', ('Actualizaciones', 'Paquetes pendientes de actualizar'), 0, 'bar', 'update'),
+    ('weather', ('Clima', 'Temperatura y clima actual'), 0, 'bar', None),
+    ('xkeyboard', ('Teclado', 'Distribución de teclado activa'), 0, 'bar', 'kb'),
+    ('colorpicker', ('Selector de color', 'Captura colores en pantalla'), 0, 'bar', 'picker'),
+    ('clipboard', ('Portapapeles', 'Historial del portapapeles (clipcat)'), 0, 'bar', 'clip'),
+    ('screenshot', ('Captura', 'Herramienta de captura de pantalla'), 0, 'bar', 'shot'),
+    ('sysmonitor', ('Monitor', 'Abre el monitor de procesos'), 0, 'bar', 'monitor'),
+    ('caffeine', ('Modo despierto', 'Evita que la pantalla se apague'), 0, 'bar', None),
+    ('usercard', ('Tarjeta de usuario', 'Widget del perfil'), 0, 'bar', 'user'),
+    ('tray', ('Bandeja', 'Iconos de apps en segundo plano'), 0, 'bar', None),
+    ('workspace_preview', ('Vista previa de escritorios',
+                           'Miniatura al pasar el mouse sobre los escritorios'), 0, 'service', None),
+    ('power', ('Energía', 'Menú de apagado / reinicio'), 1, 'bar', 'power'),
+    ('modules_help', ('Módulos', 'Abre este mismo panel'), 1, 'bar', 'help'),
+]
+EYE = '\U000f0208'
 
 
-# id|icon|name|description|fixed(0/1)|kind(bar/service)
-# "bar" entries live in config/polybar.json (modules left/center/right). "service"
-# entries are background daemons started/stopped directly (nothing to
-# add/remove from the bar's module lists).
-_catalog='
-launcher||Lanzador|Menú de aplicaciones y selector de rice|1|bar
-bspwm||Escritorios|Indicador de espacios de trabajo|1|bar
-cpu_wave||CPU Wave|Gráfico animado de carga de CPU|0|bar
-memory_bar||Memoria|Uso de RAM|0|bar
-filesystem||Disco|Espacio usado en /|0|bar
-uptime||Uptime|Tiempo desde el último arranque|0|bar
-sensors_temp||Temperatura|Temperatura de la CPU|0|bar
-gpu||GPU|Uso y temperatura de la GPU|0|bar
-heartbeat||Heartbeat|Pulso neón animado (decorativo)|0|bar
-song_wave||Now Playing|Ticker animado de la canción en MPD|0|bar
-mpd||MPD|Estado corto del reproductor MPD|0|bar
-mplayer||Reproductor|Accesos directos al panel de reproducción|0|bar
-bluetooth||Bluetooth|Estado del adaptador Bluetooth|0|bar
-network||Red|Estado y velocidad de red|0|bar
-pulseaudio||Volumen|Control y nivel de audio|0|bar
-mic||Micrófono|Silenciar/activar el micrófono|0|bar
-battery||Batería|Nivel y estado de carga|0|bar
-updates||Actualizaciones|Paquetes pendientes de actualizar|0|bar
-weather||Clima|Temperatura y clima actual|0|bar
-brightness||Brillo|Nivel de brillo de pantalla|0|bar
-xkeyboard||Teclado|Diseño de teclado activo|0|bar
-colorpicker||Selector de color|Captura colores en pantalla|0|bar
-clipboard||Portapapeles|Historial de portapapeles (clipcat)|0|bar
-screenshot||Captura|Herramienta de captura de pantalla|0|bar
-sysmonitor||Monitor|Abre el monitor de procesos del sistema|0|bar
-caffeine||Modo despierto|Evita que la pantalla se apague|0|bar
-workspace_preview||Preview de workspaces|Miniatura al pasar el mouse sobre el selector de escritorios|0|service
-date||Fecha y hora|Reloj del sistema|1|bar
-tray||Bandeja|Iconos de apps en segundo plano|0|bar
-power||Energía|Menú de apagado / reinicio|1|bar
-modules_help||Ayuda de módulos|Abre este mismo listado|1|bar
-'
+def lang_es():
+    try:
+        import ricelang
+        return ricelang.get_lang() == 'es'
+    except Exception:
+        return True
 
-# Modules live in config/polybar.json (BarCtl renders bar.ini from it)
-get_lines() {
-    active=$("$CONFIG_DIR/bin/BarCtl" list 2>/dev/null)
-}
 
-is_active() {
-    id="$1"
-    kind="$2"
-    if [ "$kind" = "service" ]; then
-        # enabled AND really running (a dead daemon shows as inactive)
-        [ -f "$WS_PREVIEW_FLAG" ] && "$CONFIG_DIR/bin/WorkspacePreview" status
-    else
-        printf '%s\n' "$active" | grep -qx "$id"
-    fi
-}
+class Modules(Gtk.Window):
+    COLS, ROW_H, GAP = 2, 64, 12
 
-toggle_module() {
-    mod="$1"
-    if [ "$("$CONFIG_DIR/bin/BarCtl" toggle "$mod")" = "on" ]; then
-        action="activado"
-    else
-        action="desactivado"
-    fi
-    dunstify -i dialog-information "Módulos de Polybar" "'$mod' $action"
-}
+    def __init__(self):
+        super().__init__(type=Gtk.WindowType.POPUP)
+        self.set_title('ModulesList')
+        ui.rgba_window(self)
+        self.pal = ui.load_palette()
+        self.c = ui.rgb_palette(self.pal)
+        self.style = ui.theme_style()
+        self.es = lang_es()
+        import barconf
+        import baricons
+        self.bc = barconf
+        icons = baricons.icons(barconf.icon_style())
+        glyphs = {m: g for m, g, *_ in barconf.CATALOG}
+        en = {m: (n, d) for m, _g, n, d in barconf.CATALOG}
+        self.items = []
+        for mid, es, fixed, kind, key in CATALOG:
+            name, desc = es if self.es else en.get(mid, es)
+            glyph = icons[key] if key else glyphs.get(mid, EYE)
+            self.items.append(dict(id=mid, name=name, desc=desc, fixed=bool(fixed), kind=kind, glyph=glyph))
+        self.accent = ui.style_accent(self.style, self.pal) if self.style else self.c['blue']
+        self.M = 44 if self.style else 14
+        self.filter = ''
+        self.sel = 0
+        self.scroll = 0
+        self.busy = set()
+        self.hover = None
+        geo = ui.monitor_geometry()
+        self.W = min(980, geo.width - 60) + 2 * self.M
+        self.H = min(700, geo.height - 80) + 2 * self.M
+        self.move(geo.x + (geo.width - self.W) // 2, geo.y + (geo.height - self.H) // 2)
+        self.set_size_request(self.W, self.H)
+        self.bg = None
+        self.read_state()
+        self.add_events(Gdk.EventMask.KEY_PRESS_MASK | Gdk.EventMask.BUTTON_PRESS_MASK |
+                        Gdk.EventMask.SCROLL_MASK | Gdk.EventMask.POINTER_MOTION_MASK)
+        self.connect('draw', self.on_draw)
+        self.connect('key-press-event', self.on_key)
+        self.connect('button-press-event', self.on_click)
+        self.connect('scroll-event', self.on_scroll)
+        self.connect('motion-notify-event', self.on_motion)
+        self.connect('map-event', lambda *_: ui.grab_input(self))
+        self.connect('destroy', Gtk.main_quit)
 
-toggle_service() {
-    mod="$1"
-    case "$mod" in
-        workspace_preview)
-            if [ "$("$CONFIG_DIR/bin/WorkspacePreview" toggle)" = "on" ]; then
-                action="activado"
-            else
-                action="desactivado"
-            fi
-            ;;
-        *)
-            return 1
-            ;;
-    esac
-    dunstify -i dialog-information "Módulos de Polybar" "'$mod' $action"
-}
+    # ── state
+    def read_state(self):
+        try:
+            active = set(self.bc.active_modules(self.bc.load()))
+        except Exception:
+            active = set()
+        for it in self.items:
+            if it['kind'] == 'service':
+                it['on'] = os.path.exists(WS_PREVIEW_FLAG) and subprocess.run(
+                    [os.path.join(BSPWM, 'bin/WorkspacePreview'), 'status'], capture_output=True).returncode == 0
+            else:
+                it['on'] = it['fixed'] or it['id'] in active
 
-build_menu() {
-    printf '%s\n' "$_catalog" | while IFS='|' read -r id icon name desc fixed kind; do
-        [ -z "$id" ] && continue
-        if is_active "$id" "$kind"; then
-            status="<span foreground='#9ece6a'>● Activo</span>"
-        else
-            status="<span foreground='#565f89'>○ Inactivo</span>"
-        fi
-        [ "$fixed" = "1" ] && status="<span foreground='#7aa2f7'>▣ Base</span>"
-        printf "$icon  <b>%s</b>  <span foreground='#8C8C8C'>— %s</span>   %s\n" "$name" "$desc" "$status"
-    done
-}
+    def shown(self):
+        f = self.filter.lower()
+        return [it for it in self.items if not f or f in it['name'].lower() or f in it['desc'].lower()
+                or f in it['id']]
 
-get_lines
+    def toggle(self, it):
+        if it['fixed'] or it['id'] in self.busy:
+            return
+        self.busy.add(it['id'])
+        it['on'] = not it['on']   # optimistic: the switch moves at once
+        self.queue_draw()
+        cmd = ([os.path.join(BSPWM, 'bin/WorkspacePreview'), 'toggle'] if it['kind'] == 'service'
+               else [os.path.join(BSPWM, 'bin/BarCtl'), 'toggle', it['id']])
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-selection_index=$(build_menu | rofi -dmenu -i -markup-rows -format i \
-    -p "Módulos de Polybar" \
-    -mesg "Enter: activar / desactivar   ·   Esc: cerrar" \
-    -theme "$THEME")
+        def done(_pid, _status):
+            self.busy.discard(it['id'])
+            self.read_state()
+            self.queue_draw()
+        GLib.child_watch_add(GLib.PRIORITY_DEFAULT, proc.pid, done)
 
-[ -z "$selection_index" ] && exit 0
+    # ── layout
+    def grid(self):
+        M = self.M
+        x0, y0 = M + 34, M + 118
+        w = (self.W - 2 * M - 68 - self.GAP) / self.COLS
+        return x0, y0, w, self.H - M - 46 - y0
 
-sel_id=$(printf '%s\n' "$_catalog" | awk -F'|' -v n="$((selection_index + 1))" 'NF{c++} c==n{print $1; exit}')
-sel_fixed=$(printf '%s\n' "$_catalog" | awk -F'|' -v n="$((selection_index + 1))" 'NF{c++} c==n{print $5; exit}')
-sel_kind=$(printf '%s\n' "$_catalog" | awk -F'|' -v n="$((selection_index + 1))" 'NF{c++} c==n{print $6; exit}')
+    def rect(self, i):
+        x0, y0, w, _h = self.grid()
+        r, c = divmod(i, self.COLS)
+        return x0 + c * (w + self.GAP), y0 + r * (self.ROW_H + self.GAP) - self.scroll, w, self.ROW_H
 
-[ -z "$sel_id" ] && exit 0
+    def max_scroll(self):
+        _x0, _y0, _w, h = self.grid()
+        rows = (len(self.shown()) + self.COLS - 1) // self.COLS
+        return max(0, rows * (self.ROW_H + self.GAP) - self.GAP - h)
 
-if [ "$sel_fixed" = "1" ]; then
-    dunstify "Módulos de Polybar" "'$sel_id' es un módulo base y no se puede desactivar."
-elif [ "$sel_kind" = "service" ]; then
-    toggle_service "$sel_id"
-else
-    toggle_module "$sel_id"
-fi
+    def ensure_visible(self):
+        _x0, y0, _w, h = self.grid()
+        _x, y, _w2, rh = self.rect(self.sel)
+        if y < y0:
+            self.scroll -= y0 - y
+        elif y + rh > y0 + h:
+            self.scroll += y + rh - (y0 + h)
+        self.scroll = max(0, min(self.max_scroll(), self.scroll))
+
+    def hit(self, px, py):
+        _x0, y0, _w, h = self.grid()
+        if not (y0 <= py <= y0 + h):
+            return None
+        for i in range(len(self.shown())):
+            x, y, w, rh = self.rect(i)
+            if x <= px <= x + w and y <= py <= y + rh:
+                return i
+        return None
+
+    # ── drawing
+    def on_draw(self, _w, cr):
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+        if self.bg is None:   # the panel is the slow part: drawn once
+            self.bg = cairo.ImageSurface(cairo.FORMAT_ARGB32, self.W, self.H)
+            ui.themed_panel(cairo.Context(self.bg), self.W, self.H, self.M, self.pal, radius=22, veil=0.62,
+                            style=self.style)
+        cr.set_source_surface(self.bg, 0, 0)
+        cr.paint()
+        M, fg, acc = self.M, self.c['fg'], self.accent
+        emblem = self.items[0]['glyph']
+        ui.glyph(cr, emblem, M + 58, M + 58, 24, (*acc, 1), glow=0.4)
+        ui.text(cr, 'MÓDULOS DE POLYBAR' if self.es else 'POLYBAR MODULES', M + 96, M + 34, 15, (*fg, 1),
+                bold=True, spacing=3)
+        n_on = sum(1 for it in self.items if it['on'])
+        sub = (f'{n_on} activos de {len(self.items)}  ·  clic / ⏎: activar o desactivar  ·  escribe para filtrar'
+               if self.es else f'{n_on} of {len(self.items)} on  ·  click / ⏎: turn on or off  ·  type to filter')
+        ui.text(cr, sub, M + 96, M + 62, 9, (*fg, 0.55))
+        # the filter
+        fx, fy, fw, fh = self.W - M - 34 - 260, M + 36, 260, 34
+        ui.rounded(cr, fx, fy, fw, fh, fh / 2)
+        cr.set_source_rgba(0, 0, 0, 0.4)
+        cr.fill_preserve()
+        cr.set_source_rgba(*acc, 0.6 if self.filter else 0.3)
+        cr.set_line_width(1.2)
+        cr.stroke()
+        ui.glyph(cr, '\U000f0349', fx + 18, fy + fh / 2, 11, (*acc, 0.9))
+        ui.text(cr, self.filter or ('Filtrar…' if self.es else 'Filter…'), fx + 34, fy + fh / 2, 10,
+                (*fg, 1 if self.filter else 0.4), valign='middle')
+        # the modules
+        x0, y0, gw, gh = self.grid()
+        cr.save()
+        cr.rectangle(x0 - 20, y0 - 6, self.W - 2 * x0 + 40, gh + 12)
+        cr.clip()
+        for i, it in enumerate(self.shown()):
+            x, y, w, h = self.rect(i)
+            if y + h < y0 - 6 or y > y0 + gh + 6:
+                continue
+            self.draw_item(cr, it, x, y, w, h, i == self.sel, i == self.hover)
+        cr.restore()
+        if self.max_scroll():   # scroll bar
+            frac = self.scroll / self.max_scroll()
+            bh = max(30, gh * gh / (gh + self.max_scroll()))
+            ui.rounded(cr, self.W - M - 18, y0 + (gh - bh) * frac, 4, bh, 2)
+            cr.set_source_rgba(*acc, 0.5)
+            cr.fill()
+        foot = ('Esc: cerrar  ·  RiceEditor → Polybar: orden, estilo y grupos' if self.es
+                else 'Esc: close  ·  RiceEditor → Polybar: order, style and groups')
+        ui.text(cr, foot, self.W / 2, self.H - M - 34, 8, (*fg, 0.4), align='center', spacing=1)
+        return True
+
+    def draw_item(self, cr, it, x, y, w, h, sel, hover):
+        fg, acc = self.c['fg'], self.accent
+        on = it['on']
+        ui.rounded(cr, x, y, w, h, 14)
+        cr.set_source_rgba(*(acc if sel else (0, 0, 0)), 0.14 if sel else (0.34 if hover else 0.26))
+        cr.fill_preserve()
+        cr.set_source_rgba(*acc, 0.75 if sel else (0.28 if on else 0.1))
+        cr.set_line_width(1.4 if sel else 1)
+        cr.stroke()
+        col = acc if on else (fg[0] * 0.55, fg[1] * 0.55, fg[2] * 0.55)
+        ui.glyph(cr, it['glyph'], x + 32, y + h / 2, 17, (*col, 1), glow=0.3 if on else 0)
+        ui.text(cr, it['name'], x + 62, y + 13, 11, (*fg, 1 if on else 0.7), bold=True)
+        desc = it['desc'] if len(it['desc']) < 52 else it['desc'][:50] + '…'
+        ui.text(cr, desc, x + 62, y + 35, 8, (*fg, 0.5))
+        sx, sy = x + w - 70, y + h / 2 - 6
+        if it['fixed']:
+            ui.rounded(cr, sx - 6, sy - 3, 58, 18, 9)
+            cr.set_source_rgba(*acc, 0.18)
+            cr.fill()
+            ui.text(cr, 'BASE', sx + 23, sy + 6, 7, (*acc, 1), bold=True, align='center', spacing=2,
+                    valign='middle')
+            return
+        # the switch: the style's level bar, empty or full
+        if on:
+            ui.level_bar(cr, self.style, sx, sy, 46, 12, 1.0, self.pal)
+        else:
+            self.off_switch(cr, sx, sy)
+        if it['id'] in self.busy:
+            cr.arc(x + w - 86, y + h / 2, 3, 0, 6.3)
+            cr.set_source_rgba(*acc, 0.8)
+            cr.fill()
+
+    def off_switch(self, cr, sx, sy):
+        ui.rounded(cr, sx, sy, 46, 12, 6)
+        cr.set_source_rgba(0, 0, 0, 0.45)
+        cr.fill_preserve()
+        cr.set_source_rgba(*self.c['fg'], 0.25)
+        cr.set_line_width(1)
+        cr.stroke()
+        cr.arc(sx + 6, sy + 6, 7, 0, 6.3)
+        cr.set_source_rgba(*self.c['fg'], 0.45)
+        cr.fill()
+
+    # ── input
+    def on_key(self, _w, ev):
+        key = Gdk.keyval_name(ev.keyval) or ''
+        items = self.shown()
+        if key == 'Escape':
+            if self.filter:
+                self.filter = ''
+                self.sel = 0
+            else:
+                self.destroy()
+                return True
+        elif key in ('Return', 'KP_Enter', 'space') and items and not (key == 'space' and self.filter):
+            self.toggle(items[min(self.sel, len(items) - 1)])
+        elif key in ('Down', 'Up', 'Left', 'Right', 'Tab', 'ISO_Left_Tab') and items:
+            step = {'Down': self.COLS, 'Up': -self.COLS, 'Left': -1, 'Right': 1, 'Tab': 1, 'ISO_Left_Tab': -1}[key]
+            self.sel = max(0, min(len(items) - 1, self.sel + step))
+            self.ensure_visible()
+        elif key == 'BackSpace':
+            self.filter = self.filter[:-1]
+            self.sel, self.scroll = 0, 0
+        else:
+            ch = chr(Gdk.keyval_to_unicode(ev.keyval) or 0)
+            if ch.isprintable() and ch.strip() or ch == ' ' and self.filter:
+                self.filter += ch
+                self.sel, self.scroll = 0, 0
+        self.queue_draw()
+        return True
+
+    def on_click(self, _w, ev):
+        if not (self.M <= ev.x <= self.W - self.M and self.M <= ev.y <= self.H - self.M):
+            self.destroy()   # a click outside the panel closes it
+            return True
+        i = self.hit(ev.x, ev.y)
+        if i is not None:
+            self.sel = i
+            self.toggle(self.shown()[i])
+        self.queue_draw()
+        return True
+
+    def on_scroll(self, _w, ev):
+        d = {Gdk.ScrollDirection.UP: -1, Gdk.ScrollDirection.DOWN: 1}.get(ev.direction)
+        if d is None:
+            ok, _dx, dy = ev.get_scroll_deltas()
+            d = dy if ok else 0
+        self.scroll = max(0, min(self.max_scroll(), self.scroll + d * (self.ROW_H + self.GAP) * 0.6))
+        self.hover = self.hit(ev.x, ev.y)
+        self.queue_draw()
+        return True
+
+    def on_motion(self, _w, ev):
+        h = self.hit(ev.x, ev.y)
+        if h != self.hover:
+            self.hover = h
+            self.queue_draw()
+        return True
+
+
+def main():
+    _lock = ui.single_instance('moduleslist', toggle=True)  # noqa: F841
+    GLib.set_prgname('ModulesList')
+    win = Modules()
+    ui.quit_on_sigterm(win.destroy)
+    win.show_all()
+    Gtk.main()
+
+
+if __name__ == '__main__':
+    main()

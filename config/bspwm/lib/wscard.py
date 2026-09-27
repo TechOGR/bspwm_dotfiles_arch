@@ -33,7 +33,7 @@ _RADIUS = [None]
 
 RADIUS = {'glass': 26, 'minimal': 16, 'liquid': 30, 'fire': 22,
           'nature': 26, 'sketch': 20, 'crystal': 28, 'lava': 20, 'neon': 24, 'holo': 28}
-CHAMFER = {'cyber': 24, 'hud': 16}
+CHAMFER = {'cyber': 24, 'hud': 16, 'crystal': 14}
 
 
 def style_of():
@@ -114,16 +114,45 @@ def notched(cr, x, y, w, h, q):
 
 
 def wavy(x, y, w, h, r, amp, seed):
+    """Points of a rounded rectangle pushed in and out by two sines. On a
+    window frame the waves keep the same length whatever its size (and a
+    bit deeper), so a big window gets many waves, like the bar."""
     rnd = random.Random(seed)
     ph = [rnd.uniform(0, 6) for _ in range(3)]
     pts = rrect_points(x, y, w, h, r, 2.5)
     n = len(pts)
+    k1, k2 = 5, 9
+    if _FRAME[0]:
+        k1 = max(5, round(2 * (w + h) / 170))
+        k2 = round(k1 * 1.75)
+        amp *= 1.5
     out = []
     for i, (px, py, nx, ny) in enumerate(pts):
         t = i / n * 2 * PI
-        o = amp * (0.6 * math.sin(t * 5 + ph[0]) + 0.4 * math.sin(t * 9 + ph[1]))
+        o = amp * (0.6 * math.sin(t * k1 + ph[0]) + 0.4 * math.sin(t * k2 + ph[1]))
         out.append((px + nx * o, py + ny * o, nx, ny))
     return out
+
+
+def zigzag(x, y, w, h, r, amp, seed, step=7.0):
+    """A lightning outline: the points of a rounded rectangle pushed out
+    and in, one each, by a random share of amp."""
+    rnd = random.Random(seed)
+    out = []
+    for i, (px, py, nx, ny) in enumerate(rrect_points(x, y, w, h, r, step)):
+        o = amp * rnd.uniform(0.35, 1) * (1 if i % 2 else -1)
+        out.append((px + nx * o, py + ny * o, nx, ny))
+    return out
+
+
+# the outline of each style (wavy/jagged ones also cut the window itself
+# to that shape: bin/RoundBorders, window_region)
+WAVES = {'liquid': (3, 7), 'venom': (3.2, 3), 'butterfly': (2.6, 4), 'fire': (2.2, 11), 'nature': (1.6, 13)}
+SHAPED = {'cyber', 'hud', 'crystal', 'pixel', 'lava', 'storm', 'sketch'} | set(WAVES)
+
+
+def _r(style, s):
+    return _RADIUS[0] if _RADIUS[0] is not None else RADIUS.get(style, 24) * s
 
 
 def shape(cr, style, x, y, w, h, s):
@@ -133,14 +162,71 @@ def shape(cr, style, x, y, w, h, s):
     elif style == 'pixel':
         q = max(3, round(4 * s))
         notched(cr, round(x), round(y), round(w / q) * q, round(h / q) * q, q)
-    elif style == 'liquid':
-        r = _RADIUS[0] if _RADIUS[0] is not None else RADIUS['liquid'] * s
-        poly(cr, wavy(x, y, w, h, max(r, 4), 3 * s, 7))
+    elif style in WAVES:
+        amp, seed = WAVES[style]
+        poly(cr, wavy(x, y, w, h, max(_r(style, s), 4), amp * s, seed))
     elif style == 'lava':
-        ws.jagged(cr, rrect_points(x, y, w, h, RADIUS['lava'] * s, 3), random.Random(3), 2.2 * s, smooth=1)
+        ws.jagged(cr, rrect_points(x, y, w, h, RADIUS['lava'] * s, 3), random.Random(3),
+                  2.2 * s * (1.4 if _FRAME[0] else 1), smooth=1)
+    elif style == 'storm':
+        poly(cr, zigzag(x, y, w, h, max(_r(style, s), 4), 3 * s, 5))
+    elif style == 'sketch':
+        ws.jagged(cr, rrect_points(x, y, w, h, max(_r(style, s), 4), 4), random.Random(8), 1.6 * s, smooth=4)
     else:
-        r = _RADIUS[0] if _RADIUS[0] is not None else RADIUS.get(style, 24) * s
-        rounded(cr, x, y, w, h, r)
+        rounded(cr, x, y, w, h, _r(style, s))
+
+
+def window_outline(cr, style, x, y, w, h, radius):
+    """shape() as a window frame draws it (same scale, radius and waves)."""
+    _FRAME[0], _RADIUS[0] = True, float(radius)
+    try:
+        shape(cr, style, x, y, w, h, WINDOW_SCALE)
+    finally:
+        _FRAME[0], _RADIUS[0] = False, None
+
+
+def window_region(style, w, h, bw, radius):
+    """The X shape of a w x h window (bw border) cut to the style's outline,
+    as a cairo.Region in the window's coordinates (the border is outside,
+    at negative ones). Only the edge rows need runs: the middle is one
+    rectangle per band of identical rows."""
+    W, H = int(w + 2 * bw), int(h + 2 * bw)
+    surf = cairo.ImageSurface(cairo.FORMAT_A8, W, H)
+    cr = cairo.Context(surf)
+    cr.set_antialias(cairo.ANTIALIAS_NONE)
+    window_outline(cr, style, bw / 2, bw / 2, W - bw, H - bw, max(0, radius))
+    cr.set_source_rgba(0, 0, 0, 1)
+    cr.fill()
+    surf.flush()
+    stride = surf.get_stride()
+    data = bytes(surf.get_data())
+    reg = cairo.Region()
+    try:
+        import numpy as np
+        a = np.frombuffer(data, np.uint8).reshape(H, stride)[:, :W] > 127
+        pad = np.zeros((H, 1), bool)
+        d = np.diff(np.hstack([pad, a, pad]).astype(np.int8), axis=1)
+        rows = [(tuple(np.flatnonzero(d[yy] == 1)), tuple(np.flatnonzero(d[yy] == -1))) for yy in range(H)]
+    except ImportError:
+        rows = []
+        for yy in range(H):
+            line = data[yy * stride:yy * stride + W]
+            st_, en = [], []
+            inside = False
+            for xx, v in enumerate(line):
+                if (v > 127) != inside:
+                    (st_ if not inside else en).append(xx)
+                    inside = not inside
+            if inside:
+                en.append(W)
+            rows.append((tuple(st_), tuple(en)))
+    y0 = 0
+    for yy in range(1, H + 1):
+        if yy == H or rows[yy] != rows[y0]:
+            for a0, a1 in zip(*rows[y0]):
+                reg.union(cairo.RectangleInt(int(a0) - int(bw), y0 - int(bw), int(a1 - a0), yy - y0))
+            y0 = yy
+    return reg
 
 
 def card_mask(style, w, h, s):
@@ -674,15 +760,14 @@ def card_storm(cr, p, x, y, w, h, cx, cy, s):
             w3.bolt(cr, rnd, px_, py_, px_ + nx * L + rnd.uniform(-6, 6) * s, py_ + ny * L + rnd.uniform(-6, 6) * s,
                     0.8 * s, blue, 0, a=0.85)
     for extra, a in ((12 * s, 0.07), (6 * s, 0.16), (3 * s, 0.4)):
-        ws.jagged(cr, pts, random.Random(5), 1.8 * s, smooth=0)
+        p()
         cr.set_line_width(1.6 * s + extra)
         cr.set_source_rgba(*blue, a)
         cr.stroke()
-    ws.jagged(cr, pts, random.Random(5), 1.8 * s, smooth=0)
+    p()
     cr.set_line_width(1.4 * s)
     cr.set_source_rgba(0.9, 0.96, 1, 1)
     cr.stroke()
-
 
 def card_venom(cr, p, x, y, w, h, cx, cy, s):
     red, black, rim = rgb('#ff1a2e'), rgb('#0a0406'), rgb('#ff3a3a')

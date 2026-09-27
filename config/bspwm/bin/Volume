@@ -34,11 +34,17 @@ get_icon() {
     esac
 }
 
+# The themed OSD (bin/RiceOSD), dunst when it is missing
+osd() {
+    command -v RiceOSD >/dev/null 2>&1 && RiceOSD "$@"
+}
+
 # Show notification
 show_notification() {
     local vol
 
     vol=$(get_volume)
+    osd volume "$vol" && return
     get_icon "$vol"
 
     if [ "$vol" = "muted" ]; then
@@ -62,10 +68,12 @@ toggle_mute() {
     pamixer --toggle-mute
 
     if [ "$(pamixer --get-mute)" = "true" ]; then
+        osd volume muted && return
         get_icon muted
         notify -i "$icon" "Muted"
     else
         vol=$(get_volume)
+        osd volume "$vol" && return
         get_icon "$vol"
         notify -i "$icon" "Unmuted"
     fi

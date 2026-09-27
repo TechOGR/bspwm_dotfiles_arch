@@ -390,3 +390,114 @@ def hud_css(pal):
 .hud scrollbar slider {{ background-color: alpha(@accent, 0.35); border-radius: 6px; min-width: 4px; border: none; }}
 .hud tooltip {{ background-color: @black; border: 1px solid alpha(@accent, 0.4); }}
 '''
+
+
+# ─────────────────────────────────────────── themed panels (OSD, menus)
+ICON_FONT = 'Material Design Icons Desktop'
+
+
+def glyph(cr, ch, x, y, size, rgba, glow=0.0):
+    """A Material Design icon centered on x, y (glow: halo alpha)."""
+    layout = PangoCairo.create_layout(cr)
+    layout.set_font_description(Pango.FontDescription(f'{ICON_FONT} {size}'))
+    layout.set_text(ch, -1)
+    _ink, log = layout.get_pixel_extents()
+    if glow:
+        g = cairo.RadialGradient(x, y, 0, x, y, size * 1.6)
+        g.add_color_stop_rgba(0, rgba[0], rgba[1], rgba[2], glow)
+        g.add_color_stop_rgba(1, rgba[0], rgba[1], rgba[2], 0)
+        cr.set_source(g)
+        cr.arc(x, y, size * 1.6, 0, 2 * math.pi)
+        cr.fill()
+    cr.move_to(x - log.width / 2 - log.x, y - log.height / 2 - log.y)
+    cr.set_source_rgba(*rgba)
+    PangoCairo.show_layout(cr, layout)
+
+
+def style_accent(style, pal):
+    """The accent of a style as it is drawn now (palette tint included)."""
+    try:
+        import wscard
+        with wscard.ws.tinted(style, wscard.ws.tint_target('windows')):
+            return wscard.ws.rgb(wscard.FIELD.get(style, (pal['blue'],))[0])
+    except Exception:
+        return hex_rgb(pal['blue'])
+
+
+def themed_panel(cr, W, H, M, pal, radius=18, veil=0.55, style=None):
+    """A panel filling a W x H window with M px left around it for the
+    style's ornaments: the scene inside the style's outline, veiled for
+    reading, and the style's window frame. Returns the style (None: a plain
+    glassy panel)."""
+    style = style if style is not None else theme_style()
+    x, y, w, h = M, M, W - 2 * M, H - 2 * M
+    if style:
+        try:
+            import wscard
+            import wsback
+            cr.save()
+            wscard.window_outline(cr, style, x, y, w, h, radius)
+            cr.clip()
+            cr.set_source_surface(wsback.render(style, int(w), int(h), wscard.ws.tint_target('windows')), x, y)
+            cr.paint()
+            cr.set_source_rgba(*hex_rgb(pal['bg']), veil)
+            cr.paint()
+            cr.restore()
+            wscard.paint_window(cr, style, x, y, w, h, radius, True)
+            return style
+        except Exception:
+            style = None
+    rounded(cr, x, y, w, h, radius)
+    cr.set_source_rgba(*hex_rgb(pal['bg']), 0.9)
+    cr.fill_preserve()
+    cr.set_source_rgba(*hex_rgb(pal['blue']), 0.45)
+    cr.set_line_width(1.2)
+    cr.stroke()
+    return None
+
+
+def level_bar(cr, style, x, y, w, h, frac, pal):
+    """A level (volume, brightness, signal) in the style: its field as the
+    track, the style's gradient as the fill and the style's own dot (a
+    flame, a drop, an orb, a flower...) riding the end."""
+    frac = max(0.0, min(1.0, frac))
+    try:
+        import wscard
+        ws = wscard.ws
+        with ws.tinted(style, ws.tint_target('windows')):
+            a, b = (ws.rgb(c) for c in wscard.FIELD.get(style, (pal['blue'], pal['magenta'])))
+    except Exception:
+        wscard = ws = None
+        a, b = hex_rgb(pal['blue']), hex_rgb(pal['magenta'])
+    rounded(cr, x, y, w, h, h / 2)
+    cr.set_source_rgba(0, 0, 0, 0.45)
+    cr.fill()
+    fw = max(h, w * frac) if frac > 0 else 0
+    if fw:
+        g = cairo.LinearGradient(x, 0, x + w, 0)
+        g.add_color_stop_rgb(0, *a)
+        g.add_color_stop_rgb(1, *b)
+        for extra, al in ((6, 0.12), (3, 0.25)):
+            rounded(cr, x - extra / 2, y - extra / 2, fw + extra, h + extra, (h + extra) / 2)
+            cr.set_source_rgba(*a, al)
+            cr.fill()
+        rounded(cr, x, y, fw, h, h / 2)
+        cr.set_source(g)
+        cr.fill()
+        rounded(cr, x + 2, y + 1, max(0, fw - 4), h * 0.35, h * 0.2)   # gloss
+        cr.set_source_rgba(1, 1, 1, 0.22)
+        cr.fill()
+    rounded(cr, x, y, w, h, h / 2)
+    cr.set_source_rgba(*a, 0.5)
+    cr.set_line_width(1)
+    cr.stroke()
+    hx, hy, s = x + fw, y + h / 2, h * 2.1
+    if ws and style in ws.ICON_PAINTERS:
+        c = tuple(a[i] + (b[i] - a[i]) * frac for i in range(3))
+        with ws.tinted(style, ws.tint_target('windows')):
+            ws.halo(cr, hx, hy, s, c, 0.5)
+            ws.ICON_PAINTERS[style](cr, 'dot', hx, hy, s, c)
+    else:
+        cr.arc(hx, hy, h * 0.75, 0, 2 * math.pi)
+        cr.set_source_rgb(1, 1, 1)
+        cr.fill()

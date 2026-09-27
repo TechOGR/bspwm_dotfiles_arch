@@ -129,7 +129,8 @@ def main():
     _lock = ui.single_instance('roundborders')  # noqa: F841  writes LOCK
     GLib.set_prgname('RoundBorders')
 
-    st = {'conf': None, 'rings': {}, 'backs': {}, 'back_want': {}, 'timer': None, 'raise': set()}
+    st = {'conf': None, 'rings': {}, 'backs': {}, 'back_want': {}, 'timer': None, 'raise': set(),
+          'shaped': {}, 'on_screen': set()}
 
     def hexcolor(h):
         h = (h or '#000000').lstrip('#')[-6:]
@@ -178,6 +179,7 @@ def main():
         if not (c['skin'] or c['xrender'] and c['r'] > 0 and c['bw'] > 0):
             return {}
         out = {}
+        st['on_screen'] = set()
         f = bspc('query', '-N', '-n', 'focused.window')
         focused = int(f, 16) if f else None
         for desk in bspc('query', '-D', '-d', '.active').split():
@@ -192,6 +194,8 @@ def main():
                     continue
                 stack += [n.get('firstChild'), n.get('secondChild')]
                 cl = n.get('client')
+                if cl:
+                    st['on_screen'].add(n['id'])
                 if not cl or n.get('hidden') or cl.get('state') == 'fullscreen':
                     continue
                 if cl.get('className') in SQUARE:
@@ -255,16 +259,89 @@ def main():
 
     foreign = {}
 
+    def foreign_win(cid):
+        target = foreign.get(cid)
+        if target is None:
+            try:
+                target = GdkX11.X11Window.foreign_new_for_display(Gdk.Display.get_default(), cid)
+            except Exception:
+                target = None
+            foreign[cid] = target
+        return target
+
+    regions = {}
+
+    def style_region(skin, w, h, bw, r):
+        """The window cut to the style's outline (wavy, zigzag, jagged,
+        chamfered...), cached per size."""
+        key = (skin, w, h, bw, r)
+        if key not in regions:
+            if len(regions) > 64:
+                regions.clear()
+            regions[key] = wscard.window_region(skin, w, h, bw, r)
+        return regions[key]
+
+    def shape_clients(want):
+        """Give each window the shape of the theme's outline (X Shape on
+        the client itself: its corners and edges follow the waves / cuts of
+        the frame instead of staying a rectangle). Windows that leave the
+        style (fullscreen, another theme) get their plain shape back."""
+        skin = st['conf']['skin']
+        cut = wscard and skin in wscard.SHAPED
+        r = st['conf']['r']
+        for cid, (_x, _y, w, h, bw, _f) in want.items():
+            key = (skin, w - 2 * bw, h - 2 * bw, bw, r) if cut else None
+            if st['shaped'].get(cid) == key:
+                continue
+            gw = foreign_win(cid)
+            if gw is None:
+                continue
+            try:
+                gw.shape_combine_region(style_region(*key) if key else None, 0, 0)
+            except Exception:
+                continue
+            if key:
+                st['shaped'][cid] = key
+            else:
+                st['shaped'].pop(cid, None)
+        alive = st.get('alive', set())
+        for cid in list(st['shaped']):
+            if cid in want:
+                continue
+            if cid not in alive:
+                st['shaped'].pop(cid)
+                foreign.pop(cid, None)
+            elif cid in st['on_screen']:   # fullscreen / hidden now: rectangle again
+                unshape(cid)
+
+    def unshape(cid):
+        st['shaped'].pop(cid, None)
+        gw = foreign_win(cid)
+        if gw is not None:
+            try:
+                gw.shape_combine_region(None, 0, 0)
+            except Exception:
+                pass
+
     def restack(cid, win, where='above', new=False):
         """Frames go right above their window, through our own X
         connection (in order with everything else we send, no fork).
-        Backgrounds go to the very bottom of the stack: bspwm never moves
-        windows relative to them, so they can never end up over a
-        window's text (it did for a frame when focus changed)."""
+        Backgrounds go right under their terminal (never over it: a
+        restack puts them below it, the only way they can move)
+        and follow it when bspwm restacks."""
         gw = win.get_window()
         if not gw:
             return
         if where == 'below':
+            # right under its terminal: whatever else is under the terminal
+            # (monocle, a float over a browser) stays hidden by the scene
+            target = foreign_win(cid)
+            if target is not None:
+                try:
+                    gw.restack(target, False)
+                    return
+                except Exception:
+                    pass
             gw.lower()
             # a video wallpaper (VideoWall) sits at the bottom too: go over it
             vids = subprocess.run(['xdotool', 'search', '--class', '^VideoWall$'], capture_output=True,
@@ -276,13 +353,7 @@ def main():
                 except Exception:
                     pass
             return
-        target = foreign.get(cid)
-        if target is None:
-            try:
-                target = GdkX11.X11Window.foreign_new_for_display(Gdk.Display.get_default(), cid)
-            except Exception:
-                target = None
-            foreign[cid] = target
+        target = foreign_win(cid)
         if target is not None:
             gw.restack(target, True)
         else:
@@ -323,7 +394,9 @@ def main():
                 restack(cid, win, 'below', True)
             changed = info != win.info
             if not changed:
-                continue   # at the bottom of the stack: nothing can cover it wrongly
+                if restack_all or cid in st['raise']:   # the terminal moved in the stack
+                    restack(cid, win, 'below')
+                continue
             if (x, y, w, h) != tuple(win.info.get(k) for k in ('x', 'y', 'w', 'h')):
                 win.set_size_request(w, h)
                 win.resize(w, h)
@@ -332,6 +405,10 @@ def main():
             if new:
                 win.realize()
                 win.get_window().input_shape_combine_region(cairo.Region(), 0, 0)
+            skin = st['conf']['skin']
+            win.get_window().shape_combine_region(
+                style_region(skin, w, h, bw, st['conf']['r']) if wscard and skin in wscard.SHAPED else None, 0, 0)
+            if new:
                 win.connect('map-event', lambda w, _e, c=cid: (restack(c, w, 'below', True), False)[1])
                 win.show()
                 # and once more when everything settled (map, theme reload)
@@ -343,6 +420,7 @@ def main():
     def sync(restack_all=False):
         st['timer'] = None
         want = wanted()
+        shape_clients(want)
         sync_backs(restack_all)
         for cid in list(st['rings']):
             if cid not in want:
@@ -475,6 +553,9 @@ def main():
     schedule(True)
     Gtk.main()
     proc.terminate()
+    for cid in list(st['shaped']):   # leave the windows as rectangles
+        unshape(cid)
+    Gdk.Display.get_default().flush()
 
 
 if __name__ == '__main__':

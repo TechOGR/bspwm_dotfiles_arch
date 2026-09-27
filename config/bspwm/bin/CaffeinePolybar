@@ -26,6 +26,12 @@ notify() {
     dunstify -u low -h string:x-dunst-stack-tag:ccaffeine "$@"
 }
 
+# The themed OSD (bin/RiceOSD), dunst when it is missing
+osd() {
+    command -v RiceOSD >/dev/null 2>&1 && RiceOSD "$@"
+}
+
+
 is_awake() {
     [ -f "$STATE_FILE" ] && [ "$(cat "$STATE_FILE")" = "on" ]
 }
@@ -43,11 +49,11 @@ case "$1" in
         if is_awake; then
             xset s default +dpms >/dev/null 2>&1
             echo "off" > "$STATE_FILE"
-            notify "Ahorro de pantalla: activado"
+            osd caffeine off || notify "Ahorro de pantalla: activado"
         else
             xset s off -dpms >/dev/null 2>&1
             echo "on" > "$STATE_FILE"
-            notify "Ahorro de pantalla: inhibido"
+            osd caffeine on || notify "Ahorro de pantalla: inhibido"
         fi
         ;;
     *)
