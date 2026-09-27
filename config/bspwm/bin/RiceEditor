@@ -64,6 +64,14 @@ try:
 except Exception:
     ricekit = None
 try:
+    import ricelang  # noqa: E402  (English / Español)
+    tr = ricelang.tr
+except Exception:
+    ricelang = None
+
+    def tr(text):
+        return text
+try:
     import avatar  # noqa: E402  (profile picture made by AvatarForge)
 except Exception:
     avatar = None
@@ -1632,6 +1640,10 @@ class RiceEditor(Gtk.Window):
 
         self.connect('key-press-event', self.on_key)
         self.connect('destroy', self.on_destroy)
+        self.translate_tree(self)
+        if ricelang and ricelang.LANG != 'en':
+            # rebuilt parts of a page (lists, cards) get translated too
+            GLib.timeout_add(1000, lambda: (self.translate_tree(self.stack.get_visible_child()), True)[1])
         self.go('dashboard')
         self.loading = False
         GLib.timeout_add_seconds(1, self.update_stats)
@@ -1726,7 +1738,7 @@ class RiceEditor(Gtk.Window):
             (ctx.add_class if k == key else ctx.remove_class)('active')
         for k, icon, title, sub in self.SECTIONS:
             if k == key:
-                self.header.set_section(icon, title.upper(), sub)
+                self.header.set_section(icon, tr(title).upper(), tr(sub))
         if key == 'lockscreen':
             self.lock_prev.reload()
             if not self.loading:
@@ -1768,8 +1780,42 @@ class RiceEditor(Gtk.Window):
             return True
         return False
 
+    # ──────────────────────────────────────────────────────── language
+    def translate_tree(self, w):
+        """Spanish (or the chosen language) for every text under widget w."""
+        if not ricelang or ricelang.LANG == 'en' or w is None:
+            return
+        if isinstance(w, Gtk.Label) and not w.get_use_markup():
+            t = w.get_text()
+            n = tr(t)
+            if n != t:
+                w.set_text(n)
+        tip = w.get_tooltip_text()
+        if tip:
+            n = tr(tip)
+            if n != tip:
+                w.set_tooltip_text(n)
+        if isinstance(w, Gtk.ComboBoxText):
+            for row in w.get_model():
+                n = tr(row[0])
+                if n != row[0]:
+                    row[0] = n
+        if isinstance(w, Gtk.Container):
+            for ch in w.get_children():
+                self.translate_tree(ch)
+
+    def set_language(self, lang):
+        if not ricelang or lang == ricelang.LANG:
+            return
+        ricelang.set_lang(lang)
+        cur = self.stack.get_visible_child_name() or 'dashboard'
+        # reopen in the new language, on the same section
+        spawn([os.path.abspath(sys.argv[0]), '--section', cur])
+        GLib.timeout_add(400, lambda: (self.destroy(), False)[1])
+
     # ──────────────────────────────────────────────────────── ui helpers
     def toast(self, msg, error=False):
+        msg = tr(msg)
         ctx = self.toast_box.get_style_context()
         (ctx.add_class if error else ctx.remove_class)('error')
         self.toast_label.set_text(('  ' if error else '  ') + msg)
@@ -2779,7 +2825,7 @@ class RiceEditor(Gtk.Window):
 
     def display_confirm(self, secs=15):
         dlg = Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.QUESTION,
-                                text='Keep this display configuration?')
+                                text=tr('Keep this display configuration?'))
         dlg.add_buttons('Revert', Gtk.ResponseType.CANCEL, 'Keep changes', Gtk.ResponseType.OK)
         dlg.set_default_response(Gtk.ResponseType.CANCEL)
         dlg.set_position(Gtk.WindowPosition.CENTER_ALWAYS)
@@ -4364,6 +4410,11 @@ class RiceEditor(Gtk.Window):
 
     def page_appearance(self):
         p = self.page()
+        if ricelang:
+            c = self.card('󰗊', 'Language', 'English · Español')
+            c.pack_start(self.row('Language', 'Interface language of RiceEditor (it reopens itself)',
+                                  self.combo(ricelang.LANGS, ricelang.LANG, self.set_language)), False, False, 0)
+            p.pack_start(c, False, False, 0)
         c = self.card('󰀄', 'Avatar', 'UserCard · RiceEditor · picture or ASCII art')
         conf = avatar.load() if avatar else {}
         mode = 'ASCII art' if conf.get('mode') == 'ascii' else 'Picture'
