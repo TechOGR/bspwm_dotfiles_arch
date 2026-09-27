@@ -41,6 +41,9 @@ PICOM_CONF = os.path.join(BSPWM, 'config/picom/picom.conf')
 LOCK = os.path.join(HOME, '.cache', os.environ.get('USER', 'user'), '.roundborders.lock')
 # picom-rules.conf gives these square corners: no ring for them
 SQUARE = {'mpv', 'Viewnior', 'retroarch'}
+# translucent terminals get the theme's background drawn under them
+TERMINALS = {'kitty', 'alacritty', 'com.mitchellh.ghostty', 'st', 'st-256color', 'xterm', 'uxterm', 'urxvt',
+             'foot', 'wezterm', 'org.wezfurlong.wezterm', 'xfce4-terminal', 'bspwm-scratch'}
 
 
 def running_pid():
@@ -91,15 +94,19 @@ def corner_radius():
         return 0
 
 
-def win_skin():
-    """WIN_SKIN of theme-config.bash: the style window frames are drawn in."""
+def theme_var(name):
     try:
         rice = open(os.path.join(BSPWM, '.rice')).read().strip()
         text = open(os.path.join(BSPWM, 'rices', rice, 'theme-config.bash')).read()
     except OSError:
         return ''
-    m = re.search(r'^WIN_SKIN=["\']?(\w*)', text, re.M)
+    m = re.search(rf'^{name}=["\']?([\w.]*)', text, re.M)
     return m.group(1) if m else ''
+
+
+def win_skin():
+    """WIN_SKIN of theme-config.bash: the style window frames are drawn in."""
+    return theme_var('WIN_SKIN')
 
 
 def main():
@@ -118,7 +125,7 @@ def main():
     _lock = ui.single_instance('roundborders')  # noqa: F841  writes LOCK
     GLib.set_prgname('RoundBorders')
 
-    st = {'conf': None, 'rings': {}, 'timer': None}
+    st = {'conf': None, 'rings': {}, 'backs': {}, 'back_want': {}, 'timer': None}
 
     def hexcolor(h):
         h = (h or '#000000').lstrip('#')[-6:]
@@ -129,6 +136,7 @@ def main():
         skin = skin if wscard and skin in wscard.CARDS else ''
         st['conf'] = {
             'skin': skin,
+            'backdrop': bool(skin) and theme_var('WIN_BACKDROP') != 'false',
             'tint': wscard and wscard.ws.tint_target('windows'),
             'xrender': xrender(),
             'r': corner_radius(),
@@ -138,8 +146,10 @@ def main():
         }
 
     def wanted():
-        """{client id: (frame x, y, w, h, focused)} for the windows on screen."""
+        """{client id: (frame x, y, w, h, focused)} for the windows on screen
+        (and st['back_want']: the terminals that get a themed background)."""
         c = st['conf']
+        st['back_want'] = {}
         if not (c['skin'] or c['xrender'] and c['r'] > 0 and c['bw'] > 0):
             return {}
         out = {}
@@ -167,6 +177,9 @@ def main():
                 r = cl['floatingRectangle'] if cl.get('state') == 'floating' else cl['tiledRectangle']
                 out[n['id']] = (r['x'] - bw, r['y'] - bw, r['width'] + 2 * bw, r['height'] + 2 * bw, bw,
                                 n['id'] == focused)
+                names = {(cl.get('className') or '').lower(), (cl.get('instanceName') or '').lower()}
+                if c['backdrop'] and names & TERMINALS:
+                    st['back_want'][n['id']] = (r['x'], r['y'], r['width'], r['height'], bw)
         return out
 
     def ring_region(w, h, bw, r):
@@ -216,15 +229,57 @@ def main():
         cr.stroke()
         return True
 
-    def restack(cid, win):
+    def restack(cid, win, where='above'):
         gw = win.get_window()
         if gw:
-            subprocess.run(['xdo', 'above', '-t', hex(cid), hex(gw.get_xid())],
+            subprocess.run(['xdo', where, '-t', hex(cid), hex(gw.get_xid())],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def draw_back(win, cr):
+        i = win.info
+        wscard.paint_backdrop(cr, st['conf']['skin'], i['w'], i['h'], max(0, st['conf']['r'] - i['bw']))
+        return True
+
+    def sync_backs(restack_all):
+        """Themed backgrounds right under the translucent terminals."""
+        want = st.get('back_want', {})
+        for cid in list(st['backs']):
+            if cid not in want:
+                st['backs'].pop(cid).destroy()
+        for cid, (x, y, w, h, bw) in want.items():
+            win = st['backs'].get(cid)
+            new = win is None
+            if new:
+                win = Gtk.Window(type=Gtk.WindowType.POPUP)
+                win.set_title('RoundBorders')
+                win.set_app_paintable(True)
+                vis = win.get_screen().get_rgba_visual()
+                if vis:
+                    win.set_visual(vis)
+                win.info = {}
+                win.connect('draw', draw_back)
+                st['backs'][cid] = win
+            info = {'x': x, 'y': y, 'w': w, 'h': h, 'bw': bw, 'skin': st['conf']['skin'],
+                    'tint': st['conf']['tint'], 'r': st['conf']['r']}
+            if info == win.info and not restack_all:
+                continue
+            if (x, y, w, h) != tuple(win.info.get(k) for k in ('x', 'y', 'w', 'h')):
+                win.set_size_request(w, h)
+                win.resize(w, h)
+                win.move(x, y)
+            win.info = info
+            if new:
+                win.realize()
+                win.get_window().input_shape_combine_region(cairo.Region(), 0, 0)
+                win.show()
+            if new or restack_all:
+                restack(cid, win, 'below')
+            win.queue_draw()
 
     def sync(restack_all=False):
         st['timer'] = None
         want = wanted()
+        sync_backs(restack_all)
         for cid in list(st['rings']):
             if cid not in want:
                 st['rings'].pop(cid).destroy()
@@ -291,7 +346,7 @@ def main():
 
     def reload():
         read_conf()
-        for win in st['rings'].values():
+        for win in list(st['rings'].values()) + list(st['backs'].values()):
             win.info = {}
         schedule(True)
         return True

@@ -166,7 +166,7 @@ def paint_card(cr, style, x, y, w, h, s, part='locks'):
 
 
 WINDOW_SCALE = 0.8   # decorations of a window frame vs a lock card
-WINDOW_REACH = 44     # px they may draw outside the window (overlay margin)
+WINDOW_REACH = 64     # px they may draw outside the window (overlay margin)
 
 
 def paint_window(cr, style, x, y, w, h, radius, focused):
@@ -354,6 +354,56 @@ def card_liquid(cr, p, x, y, w, h, cx, cy, s):
         cr.arc(bx - br * 0.3, by - br * 0.35, br * 0.35, 0, 2 * PI)
         cr.set_source_rgba(1, 1, 1, 0.6)
         cr.fill()
+    if not _far():
+        liquid_tube(cr, p, x, y, w, h, s)
+
+
+def liquid_tube(cr, p, x, y, w, h, s):
+    """A window's liquid rim: a thick glossy tube of the gradient, with
+    bubbles running in it and drops hanging from the bottom edge."""
+    stops = ['#34dcff', '#4f8dff', '#7a5cff', '#b37cff']
+    for extra, a in ((18, 0.07), (10, 0.16)):
+        p()
+        cr.set_line_width(7 + extra)
+        cr.set_source(neon_grad(x, x + w, stops, a))
+        cr.stroke()
+    p()
+    cr.set_line_width(7)
+    cr.set_source(neon_grad(x, x + w, stops, 0.95))
+    cr.stroke()
+    cr.save()   # gloss: a white line along the top-left of the tube
+    cr.translate(-1.2, -1.6)
+    p()
+    cr.restore()
+    cr.set_line_width(1.6)
+    g = cairo.LinearGradient(x, y, x + w * 0.6, y + h * 0.6)
+    g.add_color_stop_rgba(0, 1, 1, 1, 0.75)
+    g.add_color_stop_rgba(1, 1, 1, 1, 0.05)
+    cr.set_source(g)
+    cr.stroke()
+    rnd = random.Random(int(w) * 7 + int(h))
+    pts = rrect_points(x, y, w, h, _RADIUS[0] or 12, 6)
+    for px_, py_, nx, ny in pts[::11]:   # bubbles inside the tube
+        if rnd.random() < 0.55:
+            r = rnd.uniform(1.2, 2.6)
+            cr.arc(px_, py_, r, 0, 2 * PI)
+            cr.set_source_rgba(1, 1, 1, 0.45)
+            cr.set_line_width(0.8)
+            cr.stroke()
+    for px_, py_, nx, ny in pts:            # drops hanging from the bottom
+        if ny > 0.9 and rnd.random() < 0.035:
+            L = rnd.uniform(6, 16)
+            col = ws.color_at(stops, (px_ - x) / max(1, w))
+            cr.new_path()
+            cr.move_to(px_ - 3, py_ + 2)
+            cr.curve_to(px_ - 3, py_ + L * 0.6, px_ - 4, py_ + L, px_, py_ + L)
+            cr.curve_to(px_ + 4, py_ + L, px_ + 3, py_ + L * 0.6, px_ + 3, py_ + 2)
+            cr.close_path()
+            cr.set_source_rgba(*col, 0.95)
+            cr.fill()
+            cr.arc(px_ - 1, py_ + L - 3, 1, 0, 2 * PI)
+            cr.set_source_rgba(1, 1, 1, 0.6)
+            cr.fill()
 
 
 def card_hud(cr, p, x, y, w, h, cx, cy, s):
@@ -434,7 +484,7 @@ def card_nature(cr, p, x, y, w, h, cx, cy, s):
     halo(cr, cx, cy, w * 0.8, rgb('#0c5a2a'), 0.3)
     _tint(cr, p, '#06140c', 0.5)
     glow_stroke(cr, p, green, 2 * s, layers=((12 * s, 0.06), (5 * s, 0.15)))
-    L = 92 * s
+    L = (92 if _far() else 64) * s   # on a window they must fit in WINDOW_REACH
     bunch = [(-0.5, 1.0, '#2fbf55'), (0.45, 0.9, '#1f8f3a'), (-1.1, 0.75, '#6fdc7f'),
              (0.05, 0.8, '#3fd46a'), (1.0, 0.65, '#58c96a'), (-0.2, 0.55, '#8ff09a')]
     for (sx, sy, base) in ((x + 8 * s, y + 8 * s, -3 * PI / 4), (x + w - 8 * s, y + h - 8 * s, PI / 4),
@@ -662,3 +712,295 @@ if __name__ == '__main__':
     else:
         print('wscard.py style | panel SRC DST X Y W H SCALE BG STYLE', file=sys.stderr)
         sys.exit(1)
+
+
+# ═══════════════════════════════════════════════ window backgrounds
+# Drawn right UNDER a (translucent) terminal by bin/RoundBorders: typing
+# on a lava rock, in liquid glass, among leaves... Dark enough to read on.
+def _bg_base(cr, w, h, top, bottom):
+    g = cairo.LinearGradient(0, 0, w * 0.3, h)
+    g.add_color_stop_rgb(0, *rgb(top))
+    g.add_color_stop_rgb(1, *rgb(bottom))
+    cr.set_source(g)
+    cr.paint()
+
+
+def _vignette(cr, w, h, a=0.55):
+    g = cairo.RadialGradient(w / 2, h / 2, min(w, h) * 0.3, w / 2, h / 2, max(w, h) * 0.75)
+    g.add_color_stop_rgba(0, 0, 0, 0, 0)
+    g.add_color_stop_rgba(1, 0, 0, 0, a)
+    cr.set_source(g)
+    cr.paint()
+
+
+def bg_lava(cr, w, h, rnd):
+    _bg_base(cr, w, h, '#1e0d08', '#0d0503')
+    # basalt plates: jittered grid cells, each a slightly different stone
+    cell = 90
+    pts = {}
+    for i in range(-1, int(w / cell) + 2):
+        for j in range(-1, int(h / cell) + 2):
+            pts[i, j] = (i * cell + rnd.uniform(-30, 30), j * cell + rnd.uniform(-30, 30))
+    for i in range(-1, int(w / cell) + 1):
+        for j in range(-1, int(h / cell) + 1):
+            quad = [pts[i, j], pts[i + 1, j], pts[i + 1, j + 1], pts[i, j + 1]]
+            cr.new_path()
+            for k, (px_, py_) in enumerate(quad):
+                (cr.move_to if k == 0 else cr.line_to)(px_, py_)
+            cr.close_path()
+            v = rnd.uniform(0.06, 0.16)
+            cr.set_source_rgba(0.32 * v * 6, 0.16 * v * 6, 0.1 * v * 6, 0.55)
+            cr.fill_preserve()
+            # molten seams between the plates
+            glow = rnd.random()
+            for lw, a, col in ((7, 0.07 * glow, '#ff2a00'), (3, 0.25 * glow, '#ff5a00'), (1.1, 0.8 * glow, '#ffb020')):
+                cr.set_line_width(lw)
+                cr.set_source_rgba(*rgb(col), a)
+                cr.stroke_preserve()
+            cr.new_path()
+    halo(cr, w * 0.85, h, w * 0.6, rgb('#ff3a00'), 0.25)
+    for _ in range(int(w * h / 9000)):
+        cr.arc(rnd.uniform(0, w), rnd.uniform(0, h), rnd.uniform(0.6, 1.6), 0, 2 * PI)
+        cr.set_source_rgba(*rgb(rnd.choice(['#ff7a18', '#ffc400', '#ff3a00'])), rnd.uniform(0.2, 0.7))
+        cr.fill()
+    _vignette(cr, w, h, 0.5)
+
+
+def bg_liquid(cr, w, h, rnd):
+    _bg_base(cr, w, h, '#0b1a45', '#120a38')
+    for fx, fy, col, a in ((0.15, 0.2, '#20c8ff', 0.35), (0.85, 0.35, '#7a5cff', 0.32),
+                           (0.4, 0.9, '#3b6bff', 0.30), (0.95, 0.95, '#b37cff', 0.25)):
+        halo(cr, w * fx, h * fy, max(w, h) * 0.55, rgb(col), a)
+    for k in range(7):   # slow wave lines
+        yy = h * (0.12 + k * 0.13)
+        cr.move_to(0, yy)
+        for i in range(1, 41):
+            xx = w * i / 40
+            cr.line_to(xx, yy + 10 * math.sin(i / 40 * 2 * PI * 1.5 + k))
+        cr.set_line_width(1.2)
+        cr.set_source_rgba(*rgb('#6fd8ff'), 0.08)
+        cr.stroke()
+    for _ in range(int(w * h / 12000)):   # bubbles
+        bx, by, br = rnd.uniform(0, w), rnd.uniform(0, h), rnd.uniform(2, 9)
+        cr.arc(bx, by, br, 0, 2 * PI)
+        cr.set_source_rgba(1, 1, 1, 0.06)
+        cr.fill_preserve()
+        cr.set_source_rgba(*rgb('#9fe6ff'), 0.25)
+        cr.set_line_width(0.8)
+        cr.stroke()
+        cr.arc(bx - br * 0.35, by - br * 0.35, br * 0.25, 0, 2 * PI)
+        cr.set_source_rgba(1, 1, 1, 0.35)
+        cr.fill()
+    _vignette(cr, w, h, 0.4)
+
+
+def bg_nature(cr, w, h, rnd):
+    _bg_base(cr, w, h, '#0a2214', '#04100a')
+    halo(cr, w * 0.2, 0, max(w, h) * 0.7, rgb('#5fdc7f'), 0.16)   # light through the canopy
+    for _ in range(int(w * h / 14000)):   # a forest of dim leaves
+        ws.leaf(cr, rnd.uniform(-20, w), rnd.uniform(-20, h), rnd.uniform(26, 70), rnd.uniform(0, 2 * PI),
+                rgb(rnd.choice(['#1f8f3a', '#2fbf55', '#145c28'])))
+    cr.set_source_rgba(*rgb('#04100a'), 0.62)
+    cr.paint()
+    for (cx, cy, base) in ((0, 0, PI / 4), (w, h, -3 * PI / 4)):   # brighter branches at two corners
+        for k in range(6):
+            ws.leaf(cr, cx, cy, rnd.uniform(40, 90), base + rnd.uniform(-0.7, 0.7),
+                    rgb(rnd.choice(['#2fbf55', '#3fd46a', '#1f8f3a'])))
+    cr.set_source_rgba(*rgb('#04100a'), 0.35)
+    cr.paint()
+    _vignette(cr, w, h, 0.45)
+
+
+def bg_fire(cr, w, h, rnd):
+    _bg_base(cr, w, h, '#120604', '#1e0804')
+    halo(cr, w / 2, h * 1.05, max(w, h) * 0.7, rgb('#ff3a00'), 0.38)
+    halo(cr, w * 0.2, h, w * 0.4, rgb('#ffb000'), 0.18)
+    for i in range(int(w / 26)):   # flame silhouettes along the bottom
+        fx = i * 26 + rnd.uniform(-6, 6)
+        L = rnd.uniform(h * 0.08, h * 0.28)
+        _flame(cr, fx, h + 4, rnd.uniform(-0.15, 0.15), -1, L, rnd.uniform(8, 16), a=0.35)
+    for _ in range(int(w * h / 5000)):   # embers rising
+        cr.arc(rnd.uniform(0, w), rnd.uniform(0, h) ** 1.0, rnd.uniform(0.6, 1.8), 0, 2 * PI)
+        cr.set_source_rgba(*rgb(rnd.choice(['#ff7a18', '#ffc400', '#ff3a00'])), rnd.uniform(0.15, 0.7))
+        cr.fill()
+    _vignette(cr, w, h, 0.45)
+
+
+def bg_hud(cr, w, h, rnd):
+    _bg_base(cr, w, h, '#061226', '#030912')
+    blue = rgb('#2d8cff')
+    for x in range(0, int(w), 24):   # fine grid
+        cr.move_to(x + 0.5, 0)
+        cr.line_to(x + 0.5, h)
+    for y in range(0, int(h), 24):
+        cr.move_to(0, y + 0.5)
+        cr.line_to(w, y + 0.5)
+    cr.set_line_width(1)
+    cr.set_source_rgba(*blue, 0.06)
+    cr.stroke()
+    for _ in range(int(w * h / 40000) + 3):   # circuit traces
+        x, y = rnd.randrange(0, int(w), 24), rnd.randrange(0, int(h), 24)
+        cr.move_to(x, y)
+        for _k in range(rnd.randint(2, 5)):
+            if rnd.random() < 0.5:
+                x += rnd.choice((-1, 1)) * 24 * rnd.randint(2, 6)
+            else:
+                y += rnd.choice((-1, 1)) * 24 * rnd.randint(1, 4)
+            cr.line_to(x, y)
+        cr.set_line_width(1.3)
+        cr.set_source_rgba(*blue, 0.22)
+        cr.stroke()
+        cr.arc(x, y, 2.5, 0, 2 * PI)
+        cr.set_source_rgba(*rgb('#7fc6ff'), 0.5)
+        cr.fill()
+    for y in range(0, int(h), 3):   # scan lines
+        cr.rectangle(0, y, w, 1)
+    cr.set_source_rgba(0, 0, 0, 0.12)
+    cr.fill()
+    halo(cr, w * 0.8, h * 0.2, w * 0.5, blue, 0.10)
+    _vignette(cr, w, h, 0.5)
+
+
+def bg_cyber(cr, w, h, rnd):
+    _bg_base(cr, w, h, '#120828', '#07030f')
+    hz = h * 0.62   # synthwave floor
+    halo(cr, w / 2, hz, w * 0.6, rgb('#ff2bd6'), 0.22)
+    for i in range(-20, 21):
+        cr.move_to(w / 2 + i * w * 0.02, hz)
+        cr.line_to(w / 2 + i * w * 0.12, h)
+    k = 0
+    y = hz
+    while y < h:
+        cr.move_to(0, y)
+        cr.line_to(w, y)
+        k += 1
+        y = hz + (k ** 1.7) * 3
+    cr.set_line_width(1)
+    cr.set_source_rgba(*rgb('#ff2bd6'), 0.18)
+    cr.stroke()
+    cr.move_to(0, hz)
+    cr.line_to(w, hz)
+    cr.set_source_rgba(*rgb('#19e6ff'), 0.5)
+    cr.set_line_width(1.5)
+    cr.stroke()
+    ws.stars(cr, (0, 0, w, hz), int(w * hz / 6000), 3)
+    _vignette(cr, w, h, 0.5)
+
+
+def bg_neon(cr, w, h, rnd):
+    _bg_base(cr, w, h, '#0a0d24', '#070a18')
+    for fx, fy, col in ((0, 0, '#19d4ff'), (1, 1, '#ff3fd8'), (1, 0, '#2f6bff'), (0, 1, '#8b3dff')):
+        halo(cr, w * fx, h * fy, max(w, h) * 0.5, rgb(col), 0.18)
+    _vignette(cr, w, h, 0.3)
+
+
+def bg_glass(cr, w, h, rnd, deep='#0f1530'):
+    _bg_base(cr, w, h, '#1a2550', deep)
+    for i in range(4):   # light streaks across the glass
+        x0 = rnd.uniform(-w * 0.3, w)
+        g = cairo.LinearGradient(x0, 0, x0 + w * 0.25, h)
+        g.add_color_stop_rgba(0, 1, 1, 1, 0)
+        g.add_color_stop_rgba(0.5, 0.8, 0.9, 1, 0.05)
+        g.add_color_stop_rgba(1, 1, 1, 1, 0)
+        cr.move_to(x0, 0)
+        cr.line_to(x0 + w * 0.12, 0)
+        cr.line_to(x0 + w * 0.37, h)
+        cr.line_to(x0 + w * 0.25, h)
+        cr.close_path()
+        cr.set_source(g)
+        cr.fill()
+    halo(cr, w * 0.85, h * 0.1, w * 0.5, rgb('#6fa8ff'), 0.18)
+    _vignette(cr, w, h, 0.35)
+
+
+def bg_crystal(cr, w, h, rnd):
+    bg_glass(cr, w, h, rnd, deep='#0a1228')
+    for _ in range(int(w * h / 60000) + 2):
+        ws.sparkle(cr, rnd.uniform(0, w), rnd.uniform(0, h), rnd.uniform(3, 7), (1, 1, 1), 0.35)
+
+
+def bg_gradient(cr, w, h, rnd):
+    g = cairo.LinearGradient(0, 0, w, h)
+    for t, col in ((0, '#10205e'), (0.5, '#221450'), (1, '#3a1050')):
+        g.add_color_stop_rgb(t, *rgb(col))
+    cr.set_source(g)
+    cr.paint()
+    halo(cr, w * 0.1, h * 0.1, max(w, h) * 0.5, rgb('#2f6bff'), 0.25)
+    halo(cr, w * 0.9, h * 0.9, max(w, h) * 0.5, rgb('#e040fb'), 0.22)
+    _vignette(cr, w, h, 0.4)
+
+
+def bg_pixel(cr, w, h, rnd):
+    _bg_base(cr, w, h, '#071030', '#040818')
+    for x in range(0, int(w), 16):
+        for y in range(0, int(h), 16):
+            cr.rectangle(x, y, 2, 2)
+    cr.set_source_rgba(*rgb('#1f5bff'), 0.10)
+    cr.fill()
+    for _ in range(int(w * h / 15000)):   # pixel stars
+        x, y = rnd.randrange(0, int(w), 4), rnd.randrange(0, int(h), 4)
+        q = rnd.choice((2, 4))
+        cr.rectangle(x, y, q, q)
+        cr.set_source_rgba(*rgb(rnd.choice(['#ffffff', '#ffd21e', '#4f86ff'])), rnd.uniform(0.2, 0.6))
+        cr.fill()
+
+
+def bg_macos(cr, w, h, rnd):
+    _bg_base(cr, w, h, '#2a3048', '#1c1f2b')
+    halo(cr, w / 2, 0, w * 0.7, (1, 1, 1), 0.05)
+    _vignette(cr, w, h, 0.3)
+
+
+def bg_minimal(cr, w, h, rnd):
+    _bg_base(cr, w, h, '#12151e', '#0b0d13')
+    _vignette(cr, w, h, 0.25)
+
+
+def bg_sketch(cr, w, h, rnd):
+    _bg_base(cr, w, h, '#1a1a1a', '#121212')
+    lead = rgb('#d6d6d6')
+    for y in range(24, int(h), 24):   # notebook lines drawn by hand
+        cr.move_to(0, y + rnd.uniform(-0.6, 0.6))
+        cr.line_to(w, y + rnd.uniform(-0.6, 0.6))
+    cr.set_line_width(0.7)
+    cr.set_source_rgba(*lead, 0.07)
+    cr.stroke()
+    cr.move_to(48, 0)
+    cr.line_to(48, h)
+    cr.set_source_rgba(*rgb('#d98080'), 0.12)
+    cr.stroke()
+    for _ in range(6):   # shading scribbles in the corners
+        x, y = rnd.choice((rnd.uniform(0, w * 0.2), rnd.uniform(w * 0.8, w))), rnd.uniform(h * 0.7, h)
+        for i in range(8):
+            cr.move_to(x + i * 5, y)
+            cr.line_to(x + i * 5 + 14, y - 14)
+    cr.set_source_rgba(*lead, 0.06)
+    cr.stroke()
+
+
+def bg_holo(cr, w, h, rnd):
+    _bg_base(cr, w, h, '#0c0a2a', '#05040f')
+    for fx, fy, col, a in ((0.2, 0.3, '#3b5bff', 0.28), (0.75, 0.6, '#c03cff', 0.26), (0.5, 0.95, '#ff4fd8', 0.15)):
+        halo(cr, w * fx, h * fy, max(w, h) * 0.45, rgb(col), a)   # nebula
+    ws.stars(cr, (0, 0, w, h), int(w * h / 2500), 9)
+    ws.orbit(cr, w * 0.6, h * 0.5, w * 0.55, h * 0.25, -0.2, 0.14, width=1.2, beads=False)
+    _vignette(cr, w, h, 0.4)
+
+
+BACKDROPS = {'lava': bg_lava, 'liquid': bg_liquid, 'nature': bg_nature, 'fire': bg_fire, 'hud': bg_hud,
+             'cyber': bg_cyber, 'neon': bg_neon, 'glass': bg_glass, 'crystal': bg_crystal,
+             'gradient': bg_gradient, 'pixel': bg_pixel, 'macos': bg_macos, 'minimal': bg_minimal,
+             'sketch': bg_sketch, 'holo': bg_holo}
+
+
+def paint_backdrop(cr, style, w, h, radius=0):
+    """The themed background of a window, w x h, corners rounded like it."""
+    fn = BACKDROPS.get(style)
+    if not fn:
+        return
+    cr.save()
+    rounded(cr, 0, 0, w, h, max(0, radius))
+    cr.clip()
+    with ws.tinted(style, ws.tint_target('windows')):
+        fn(cr, w, h, random.Random(1234))
+    cr.restore()

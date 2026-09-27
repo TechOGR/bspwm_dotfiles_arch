@@ -360,6 +360,9 @@ ES = {
     'Soft reload (bars, picom, dunst, sxhkd)': 'Recarga suave (barras, picom, dunst, sxhkd)',
     'Login lock (betterlockscreen)': 'Bloqueo de inicio (betterlockscreen)', 'Close RiceEditor': 'Cerrar RiceEditor',
     'Shortcuts': 'Atajos', 'How it works': 'Cómo funciona',
+    'Themed terminal background': 'Fondo temático de la terminal',
+    'Lava rock, liquid glass, leaves, circuits… under the terminals (they become slightly translucent)':
+        'Roca de lava, vidrio líquido, hojas, circuitos… bajo las terminales (se vuelven algo translúcidas)',
     'Language': 'Idioma', 'Interface language of RiceEditor (it reopens itself)':
         'Idioma de la interfaz de RiceEditor (se vuelve a abrir sola)',
 }

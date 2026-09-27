@@ -2465,6 +2465,11 @@ class RiceEditor(Gtk.Window):
             c.pack_start(self.row('Frame style', 'Liquid glass, leaves, flames, HUD brackets… drawn around each '
                                   'window (unfocused ones dimmed)',
                                   self.combo(frames, cfg.raw('WIN_SKIN', ''), self.set_win_skin)), False, False, 0)
+            c.pack_start(self.row('Themed terminal background',
+                                  'Lava rock, liquid glass, leaves, circuits… under the terminals (they become '
+                                  'slightly translucent)',
+                                  self.switch(cfg.raw('WIN_BACKDROP', 'false') == 'true', self.set_win_backdrop)),
+                         False, False, 0)
             p.pack_start(c, False, False, 0)
 
         c = self.card('󰙵', 'Behaviour', 'bspwmrc')
@@ -2488,6 +2493,14 @@ class RiceEditor(Gtk.Window):
                      False, False, 0)
         p.pack_start(c, False, False, 0)
         return p
+
+    def set_win_backdrop(self, on):
+        self.cfg.set('WIN_BACKDROP', 'true' if on else 'false')
+        if on and float(self.cfg.raw('P_TERM_OPACITY', '1.0') or 1) > 0.7:
+            self.cfg.set('P_TERM_OPACITY', '0.6')
+        self.apply_modules('', '05-kitty.sh', '05-alacritty.sh', '05-ghostty.sh')
+        spawn([os.path.join(BIN, 'RoundBorders'), '--reload'])
+        self.toast(f'Themed terminal background → {"on" if on else "off"}')
 
     def set_win_skin(self, v):
         self.cfg.set('WIN_SKIN', v or '')
