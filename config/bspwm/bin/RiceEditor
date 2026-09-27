@@ -60,6 +60,10 @@ try:
 except Exception:
     wspill = None
 try:
+    import ricekit  # noqa: E402  (whole-rice themes built on the wspill styles)
+except Exception:
+    ricekit = None
+try:
     import avatar  # noqa: E402  (profile picture made by AvatarForge)
 except Exception:
     avatar = None
@@ -1539,6 +1543,7 @@ class MonitorMap(Gtk.DrawingArea):
 class RiceEditor(Gtk.Window):
     SECTIONS = [
         ('dashboard', '󰕮', 'Dashboard', 'SYSTEM OVERVIEW · QUICK ACTIONS'),
+        ('themes', '󰸌', 'Themes', 'WHOLE-RICE THEMES · APPLY EVERYTHING OR BY PARTS'),
         ('palette', '󰏘', 'Palette', 'COLOR SCHEMES OF THE RICE · APPLIED INSTANTLY'),
         ('windows', '󰖲', 'Windows', 'BSPWM · BORDERS · GAPS · BEHAVIOUR'),
         ('display', '󰍹', 'Display', 'RESOLUTION · REFRESH · ROTATION · MONITORS · NIGHT LIGHT'),
@@ -1604,7 +1609,7 @@ class RiceEditor(Gtk.Window):
         self.toast_timer = None
 
         builders = {
-            'dashboard': self.page_dashboard, 'palette': self.page_palette,
+            'dashboard': self.page_dashboard, 'themes': self.page_themes, 'palette': self.page_palette,
             'windows': self.page_windows, 'display': self.page_display, 'compositor': self.page_compositor,
             'terminal': self.page_terminal, 'wallpaper': self.page_wallpaper,
             'dock': self.page_dock, 'polybar': self.page_polybar,
@@ -1957,6 +1962,108 @@ class RiceEditor(Gtk.Window):
         run_bg(lambda: run_modules(*mods, reload_picom=reload_picom), lambda _r: msg and self.toast(msg))
 
     # ══════════════════════════════════════════════════════════ PAGES
+    # ────────────────────────────────────────────────────────── themes
+    def page_themes(self):
+        p = self.page()
+        if ricekit is None or wspill is None:
+            c = self.card('󰸌', 'Themes')
+            c.pack_start(Gtk.Label(label='~/.config/bspwm/lib/ricekit.py is missing', xalign=0), False, False, 0)
+            p.pack_start(c, False, False, 0)
+            return p
+        cur = ricekit.current()
+        self.kit_sel = cur if cur in ricekit.KITS else ricekit.ORDER[0]
+
+        c = self.card('󰸌', 'Themes', 'bar, workspaces, windows and colors in one style')
+        flow = Gtk.FlowBox()
+        flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        flow.set_homogeneous(True)
+        flow.set_min_children_per_line(2)
+        flow.set_max_children_per_line(3)
+        flow.set_column_spacing(12)
+        flow.set_row_spacing(12)
+        self.kit_btns = {}
+        for key in ricekit.ORDER:
+            kit = ricekit.KITS[key]
+            b = Gtk.Button()
+            b.get_style_context().add_class('style-tile')
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            art = Gtk.DrawingArea()
+            art.set_size_request(300, 169)
+
+            def draw(w, cr, k=key):
+                W, H = w.get_allocated_width(), w.get_allocated_height()
+                rounded(cr, 0, 0, W, H, 10)
+                cr.clip()
+                ricekit.preview(cr, k, W, H)
+                return True
+            art.connect('draw', draw)
+            box.pack_start(art, True, True, 0)
+            head = Gtk.Box(spacing=8)
+            t = Gtk.Label(label=kit['name'], xalign=0)
+            t.get_style_context().add_class('row-title')
+            head.pack_start(t, False, False, 0)
+            if key == cur:
+                on = Gtk.Label(label='● in use')
+                on.get_style_context().add_class('value')
+                head.pack_end(on, False, False, 0)
+            box.pack_start(head, False, False, 0)
+            d = Gtk.Label(label=kit['tagline'], xalign=0)
+            d.get_style_context().add_class('row-desc')
+            box.pack_start(d, False, False, 0)
+            b.add(box)
+            b.connect('clicked', lambda *_, k=key: self.kit_select(k))
+            flow.add(b)
+            self.kit_btns[key] = b
+        c.pack_start(flow, False, False, 4)
+        p.pack_start(c, False, False, 0)
+
+        c = self.card('󰄬', 'Apply', 'pick the parts · a snapshot is saved first')
+        self.kit_title = Gtk.Label(xalign=0)
+        self.kit_title.get_style_context().add_class('big')
+        c.pack_start(self.kit_title, False, False, 2)
+        self.kit_parts = {}
+        for key, icon, title, desc in ricekit.PARTS:
+            sw = Gtk.Switch()
+            sw.set_active(True)
+            self.kit_parts[key] = sw
+            c.pack_start(self.row(f'{icon}  {title}', desc, sw), False, False, 0)
+        acts = Gtk.Box(spacing=8)
+        acts.pack_start(self.button('󰸌  Apply whole theme', 'neon', lambda *_: self.kit_apply(all_parts=True)),
+                        False, False, 0)
+        acts.pack_start(self.button('󰄬  Apply selected parts', 'ghost', lambda *_: self.kit_apply()),
+                        False, False, 0)
+        c.pack_start(self.row('Apply', 'Everything is re-applied live: bar, windows, terminals, menus', acts),
+                     False, False, 0)
+        p.pack_start(c, False, False, 0)
+        self.kit_select(self.kit_sel)
+        return p
+
+    def kit_select(self, key):
+        self.kit_sel = key
+        self.mark_tiles(self.kit_btns, key)
+        self.kit_title.set_text(ricekit.KITS[key]['name'].upper())
+
+    def kit_apply(self, all_parts=False):
+        key = self.kit_sel
+        parts = [k for k, *_ in ricekit.PARTS] if all_parts else \
+            [k for k, sw in self.kit_parts.items() if sw.get_active()]
+        if not parts:
+            self.toast('Pick at least one part', error=True)
+            return
+        self.snapshot_create(f'before-{key}', quiet=True)
+        name = ricekit.KITS[key]['name']
+        self.toast(f'Applying {name}…')
+
+        def done(_r):
+            if 'colors' in parts:
+                self.load_colors()
+                self.refresh_dashboard_palette()
+            self.bar_sync()
+            if hasattr(self, 'ws_style_btns'):
+                self.mark_tiles(self.ws_style_btns, barconf.load().get('ws_style', 'classic'))
+            self.toast(f'{name} applied ({", ".join(parts)})')
+        run_bg(lambda: ricekit.apply(key, parts), done)
+
     # ─────────────────────────────────────────────────────── dashboard
     def page_dashboard(self):
         p = self.page()

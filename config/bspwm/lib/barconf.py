@@ -35,6 +35,7 @@ DEFAULT = {
     'separators': True,
     'autohide': False,
     'ws_style': 'classic',     # workspaces: classic (polybar) | a lib/wspill.py style
+    'bar_skin': 'none',        # none | a lib/wspill.py style drawn under a transparent bar
     'modules': {
         'left': ['launcher', 'gap', 'cpu_wave', 'memory_bar', 'filesystem'],
         'center': ['bspwm'],
@@ -229,6 +230,20 @@ def ws_widget(conf):
     return conf.get('ws_style', 'classic') in wspill.STYLE_IDS and conf.get('ws_style') != 'classic'
 
 
+def skin_on(conf):
+    """True when bin/WorkspacePill draws the bar's background (bar skin)."""
+    try:
+        import wspill
+    except Exception:
+        return False
+    return conf.get('bar_skin', 'none') in getattr(wspill, 'BAR_SKINS', {})
+
+
+def deco_on(conf):
+    """bin/WorkspacePill has something to draw."""
+    return ws_widget(conf) or skin_on(conf)
+
+
 def reserve(conf):
     """Space bspwm must keep free for the bar."""
     if conf['style'] == 'strip':
@@ -247,7 +262,11 @@ def render(conf=None, pal=None):
     accent = pal.get(conf['accent'], pal['blue'])
     bottom = conf['position'] == 'bottom'
 
-    if pill:
+    skin = skin_on(conf)
+    if skin:
+        # the skin drawn by bin/WorkspacePill shows through the whole bar
+        bar_bg = pod = '#00000000'
+    elif pill:
         bar_bg, pod = '#00000000', argb(base, op)
     else:
         # polybar paints module backgrounds with SOURCE, not OVER: a
@@ -258,7 +277,7 @@ def render(conf=None, pal=None):
     else:
         width = f'100%:-{2 * int(conf["margin_x"])}'
         off_x, off_y, radius = str(int(conf['margin_x'])), str(int(conf['offset_y'])), conf['radius']
-    if pill:
+    if pill or skin:
         radius = 0
 
     lines = [
@@ -288,7 +307,7 @@ def render(conf=None, pal=None):
     if style == 'strip':
         side = 'top' if bottom else 'bottom'
         lines += [f'border-{side}-size = 2', f'border-{side}-color = {accent}']
-    elif conf['border'] and not pill:
+    elif conf['border'] and not pill and not skin:
         lines += ['border-size = 1', f'border-color = {argb(accent, 85)}']
     else:
         lines += ['border-size = 0']

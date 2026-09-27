@@ -749,3 +749,333 @@ def paint(cr, style, m, states, pal=None):
         else:
             dot(cr, x, y, s * (1.1 if style in ('gradient', 'macos', 'liquid') else 0.95), c)
     return centers
+
+
+# ═══════════════════════════════════════════════════════════ bar skins
+# The whole polybar background in a style (bar_skin in polybar.json):
+# polybar is made transparent and bin/WorkspacePill draws this under it.
+def paint_bar(cr, style, W, rect, pal=None):
+    """rect = (x, y, w, h) of the bar inside a window W px wide."""
+    x, y, w, h = rect
+    cy = y + h / 2
+    BAR_SKINS.get(style, bar_minimal)(cr, x, y, w, h, cy)
+
+
+def _capsule(cr, x, y, w, h, r=None):
+    rounded(cr, x, y, w, h, h / 2 if r is None else r)
+
+
+def bar_glass(cr, x, y, w, h, cy):
+    path = lambda: _capsule(cr, x, y, w, h)  # noqa: E731
+    glow_stroke(cr, path, rgb('#6fa8ff'), 1, layers=((8, 0.05), (4, 0.09)))
+    path()
+    cr.set_source_rgba(*rgb('#0f1530'), 0.62)
+    cr.fill()
+    path()
+    g = cairo.LinearGradient(0, y, 0, y + h)
+    g.add_color_stop_rgba(0, 0.75, 0.85, 1, 0.16)
+    g.add_color_stop_rgba(1, 0.35, 0.45, 0.9, 0.06)
+    cr.set_source(g)
+    cr.fill()
+    # light sweeping across the glass
+    sweep = cairo.LinearGradient(x, 0, x + w, 0)
+    for t, a in ((0, 0), (0.18, 0.10), (0.3, 0), (0.7, 0), (0.82, 0.08), (1, 0)):
+        sweep.add_color_stop_rgba(t, 0.7, 0.8, 1, a)
+    path()
+    cr.set_source(sweep)
+    cr.fill()
+    path()
+    edge = cairo.LinearGradient(0, y, 0, y + h)
+    edge.add_color_stop_rgba(0, 1, 1, 1, 0.45)
+    edge.add_color_stop_rgba(1, 0.7, 0.8, 1, 0.18)
+    cr.set_source(edge)
+    cr.set_line_width(1.1)
+    cr.stroke()
+
+
+def bar_cyber(cr, x, y, w, h, cy):
+    cyan, mag = rgb('#19e6ff'), rgb('#ff2bd6')
+    c = h * 0.55
+
+    def path():
+        cr.new_path()
+        cr.move_to(x, cy)
+        cr.line_to(x + c, y)
+        cr.line_to(x + w - c, y)
+        cr.line_to(x + w, cy)
+        cr.line_to(x + w - c, y + h)
+        cr.line_to(x + c, y + h)
+        cr.close_path()
+    path()
+    cr.set_source_rgba(*rgb('#0a0614'), 0.92)
+    cr.fill()
+    for extra, a in ((8, 0.06), (4, 0.14), (0, 1)):
+        path()
+        cr.set_line_width(1.6 + extra)
+        g = cairo.LinearGradient(x, 0, x + w, 0)
+        g.add_color_stop_rgba(0, *cyan, a)
+        g.add_color_stop_rgba(0.5, *rgb('#8f3bff'), a)
+        g.add_color_stop_rgba(1, *mag, a)
+        cr.set_source(g)
+        cr.stroke()
+    # HUD notches on the edges
+    for px_, col in ((x + w * 0.22, cyan), (x + w * 0.78, mag)):
+        cr.move_to(px_ - 30, y + 2.5)
+        cr.line_to(px_ + 30, y + 2.5)
+        cr.move_to(px_ - 18, y + h - 2.5)
+        cr.line_to(px_ + 18, y + h - 2.5)
+        cr.set_line_width(1.5)
+        cr.set_source_rgba(*col, 0.7)
+        cr.stroke()
+    for i in range(3):
+        cr.move_to(x + c + 8 + i * 6, y + h - 3)
+        cr.line_to(x + c + 11 + i * 6, y + 3)
+        cr.move_to(x + w - c - 8 - i * 6, y + h - 3)
+        cr.line_to(x + w - c - 11 - i * 6, y + 3)
+    cr.set_line_width(1.4)
+    cr.set_source_rgba(1, 1, 1, 0.25)
+    cr.stroke()
+
+
+def bar_minimal(cr, x, y, w, h, cy):
+    _capsule(cr, x, y, w, h, 12)
+    cr.set_source_rgba(*rgb('#0e1016'), 0.96)
+    cr.fill_preserve()
+    cr.set_source_rgba(*rgb('#2a2f42'), 1)
+    cr.set_line_width(1)
+    cr.stroke()
+    rounded(cr, x + 1.5, y + 1.5, w - 3, h - 3, 10.5)
+    cr.set_source_rgba(1, 1, 1, 0.03)
+    cr.stroke()
+
+
+def bar_gradient(cr, x, y, w, h, cy):
+    path = lambda: _capsule(cr, x, y, w, h)  # noqa: E731
+    for extra, a in ((10, 0.05), (5, 0.10)):
+        path()
+        cr.set_line_width(extra)
+        g = cairo.LinearGradient(x, 0, x + w, 0)
+        g.add_color_stop_rgba(0, *rgb('#2f6bff'), a)
+        g.add_color_stop_rgba(1, *rgb('#e040fb'), a)
+        cr.set_source(g)
+        cr.stroke()
+    path()
+    g = cairo.LinearGradient(x, 0, x + w, 0)
+    g.add_color_stop_rgba(0, *rgb('#1b3bc8'), 0.94)
+    g.add_color_stop_rgba(0.5, *rgb('#4a22b8'), 0.94)
+    g.add_color_stop_rgba(1, *rgb('#9a22b8'), 0.94)
+    cr.set_source(g)
+    cr.fill()
+    rounded(cr, x + 4, y + 2, w - 8, h * 0.45, h * 0.22)
+    gl = cairo.LinearGradient(0, y, 0, y + h * 0.5)
+    gl.add_color_stop_rgba(0, 1, 1, 1, 0.18)
+    gl.add_color_stop_rgba(1, 1, 1, 1, 0)
+    cr.set_source(gl)
+    cr.fill()
+
+
+def bar_pixel(cr, x, y, w, h, cy):
+    q = max(2, round(h / 10))
+    x0, y0 = round(x), round(y)
+    ww, hh = round(w / q) * q, round(h / q) * q
+    for inset, col in ((0, '#1f5bff'), (q, '#4f86ff'), (2 * q, '#050a1f')):
+        xx, yy, w2, h2 = x0 + inset, y0 + inset, ww - 2 * inset, hh - 2 * inset
+        cr.new_path()
+        cr.move_to(xx + 2 * q, yy)
+        cr.line_to(xx + w2 - 2 * q, yy)
+        cr.line_to(xx + w2 - 2 * q, yy + q)
+        cr.line_to(xx + w2 - q, yy + q)
+        cr.line_to(xx + w2 - q, yy + 2 * q)
+        cr.line_to(xx + w2, yy + 2 * q)
+        cr.line_to(xx + w2, yy + h2 - 2 * q)
+        cr.line_to(xx + w2 - q, yy + h2 - 2 * q)
+        cr.line_to(xx + w2 - q, yy + h2 - q)
+        cr.line_to(xx + w2 - 2 * q, yy + h2 - q)
+        cr.line_to(xx + w2 - 2 * q, yy + h2)
+        cr.line_to(xx + 2 * q, yy + h2)
+        cr.line_to(xx + 2 * q, yy + h2 - q)
+        cr.line_to(xx + q, yy + h2 - q)
+        cr.line_to(xx + q, yy + h2 - 2 * q)
+        cr.line_to(xx, yy + h2 - 2 * q)
+        cr.line_to(xx, yy + 2 * q)
+        cr.line_to(xx + q, yy + 2 * q)
+        cr.line_to(xx + q, yy + q)
+        cr.line_to(xx + 2 * q, yy + q)
+        cr.close_path()
+        cr.set_source_rgba(*rgb(col), 0.97)
+        cr.fill()
+    # scanline dots along the bottom
+    for i in range(int(ww / (6 * q))):
+        cr.rectangle(x0 + 4 * q + i * 6 * q, y0 + hh - 3 * q, q, q)
+    cr.set_source_rgba(*rgb('#1f5bff'), 0.35)
+    cr.fill()
+
+
+def bar_macos(cr, x, y, w, h, cy):
+    for i, a in enumerate((0.12, 0.08, 0.05, 0.03)):
+        _capsule(cr, x - i, y + 2 + i, w + 2 * i, h)
+        cr.set_source_rgba(0, 0, 0, a)
+        cr.fill()
+    _capsule(cr, x, y, w, h)
+    g = cairo.LinearGradient(0, y, 0, y + h)
+    g.add_color_stop_rgba(0, *rgb('#3c4462'), 0.88)
+    g.add_color_stop_rgba(1, *rgb('#252a40'), 0.88)
+    cr.set_source(g)
+    cr.fill_preserve()
+    cr.set_source_rgba(1, 1, 1, 0.20)
+    cr.set_line_width(1)
+    cr.stroke()
+    rounded(cr, x + 2, y + 1.2, w - 4, h * 0.5, h * 0.25)
+    gl = cairo.LinearGradient(0, y, 0, y + h * 0.5)
+    gl.add_color_stop_rgba(0, 1, 1, 1, 0.08)
+    gl.add_color_stop_rgba(1, 1, 1, 1, 0)
+    cr.set_source(gl)
+    cr.fill()
+
+
+def bar_liquid(cr, x, y, w, h, cy):
+    r = h / 2
+
+    def path():
+        cr.new_path()
+        n = 120
+        top, bot = [], []
+        for i in range(n + 1):
+            t = i / n
+            xx = x + r + (w - 2 * r) * t
+            top.append((xx, y - 1.5 * math.sin(t * PI * 7) - 1.2 * math.sin(t * PI * 3 + 1)))
+            bot.append((xx, y + h + 1.5 * math.sin(t * PI * 6 + 2) + 1.0 * math.sin(t * PI * 2.5)))
+        cr.move_to(*top[0])
+        for pt in top[1:]:
+            cr.line_to(*pt)
+        cr.curve_to(x + w + r * 0.3, top[-1][1], x + w + r * 0.3, bot[-1][1], *bot[-1])
+        for pt in reversed(bot[:-1]):
+            cr.line_to(*pt)
+        cr.curve_to(x - r * 0.3, bot[0][1], x - r * 0.3, top[0][1], *top[0])
+        cr.close_path()
+    for extra, a in ((8, 0.08), (4, 0.14)):
+        path()
+        cr.set_line_width(extra)
+        cr.set_source_rgba(*rgb('#3b6bff'), a)
+        cr.stroke()
+    path()
+    g = cairo.LinearGradient(x, 0, x + w, 0)
+    g.add_color_stop_rgba(0, *rgb('#0b6fa8'), 0.93)
+    g.add_color_stop_rgba(0.5, *rgb('#1f2f9a'), 0.93)
+    g.add_color_stop_rgba(1, *rgb('#5a2aa0'), 0.93)
+    cr.set_source(g)
+    cr.fill()
+    cr.save()
+    path()
+    cr.clip()
+    hl = cairo.LinearGradient(0, y - 3, 0, cy)
+    hl.add_color_stop_rgba(0, 1, 1, 1, 0.28)
+    hl.add_color_stop_rgba(1, 1, 1, 1, 0)
+    cr.rectangle(x, y - 4, w, h / 2 + 4)
+    cr.set_source(hl)
+    cr.fill()
+    cr.restore()
+
+
+def bar_hud(cr, x, y, w, h, cy):
+    blue, soft = rgb('#2d8cff'), rgb('#7fc6ff')
+    c = h * 0.35
+
+    def plate():
+        cr.new_path()
+        cr.move_to(x + c, y)
+        cr.line_to(x + w - c, y)
+        cr.line_to(x + w, y + c)
+        cr.line_to(x + w, y + h - c)
+        cr.line_to(x + w - c, y + h)
+        cr.line_to(x + c, y + h)
+        cr.line_to(x, y + h - c)
+        cr.line_to(x, y + c)
+        cr.close_path()
+    plate()
+    cr.set_source_rgba(*rgb('#050c18'), 0.93)
+    cr.fill()
+    glow_stroke(cr, plate, blue, 1, layers=((5, 0.07), (2, 0.14)))
+    # corner brackets
+    L = 16
+    for sx, sy in ((x + 3, y + 3), (x + w - 3, y + 3), (x + 3, y + h - 3), (x + w - 3, y + h - 3)):
+        dx = 1 if sx < x + w / 2 else -1
+        dy = 1 if sy < cy else -1
+        cr.move_to(sx + dx * (c * 0.6), sy)
+        cr.line_to(sx + dx * (c * 0.6 + L), sy)
+        cr.move_to(sx, sy + dy * (c * 0.6))
+        cr.line_to(sx, sy + dy * min(h / 2 - 4, c * 0.6 + 4))
+    cr.set_line_width(1.6)
+    cr.set_source_rgba(*soft, 0.8)
+    cr.stroke()
+    # ticks along the bottom
+    for i in range(int(w / 24)):
+        tx = x + 40 + i * 24
+        if tx > x + w - 40:
+            break
+        cr.move_to(tx, y + h - 1.5)
+        cr.line_to(tx, y + h - (4 if i % 4 == 0 else 2.5))
+    cr.set_line_width(1)
+    cr.set_source_rgba(*blue, 0.45)
+    cr.stroke()
+
+
+def bar_fire(cr, x, y, w, h, cy):
+    orange, yellow = rgb('#ff6a00'), rgb('#ffc400')
+    rnd = random.Random(11)
+    path = lambda: _capsule(cr, x, y, w, h)  # noqa: E731
+
+    def flame(fx, fy, length, width):
+        tx, ty = fx + rnd.uniform(-3, 3), fy - length
+        cr.new_path()
+        cr.move_to(fx - width, fy)
+        cr.curve_to(fx - width, fy - length * 0.5, tx - width * 0.3, ty + length * 0.3, tx, ty)
+        cr.curve_to(tx + width * 0.3, ty + length * 0.3, fx + width, fy - length * 0.5, fx + width, fy)
+        cr.close_path()
+        g = cairo.LinearGradient(fx, fy, tx, ty)
+        g.add_color_stop_rgba(0, *orange, 0.9)
+        g.add_color_stop_rgba(0.6, *yellow, 0.5)
+        g.add_color_stop_rgba(1, *yellow, 0)
+        cr.set_source(g)
+        cr.fill()
+    fx = x + h
+    while fx < x + w - h:
+        if rnd.random() < 0.55:
+            flame(fx, y + 2, rnd.uniform(3, y + 1), rnd.uniform(2, 3.5))
+        fx += rnd.uniform(14, 34)
+    path()
+    cr.set_source_rgba(*rgb('#120604'), 0.94)
+    cr.fill()
+    grad = cairo.LinearGradient(0, y, 0, y + h)
+    grad.add_color_stop_rgb(0, *yellow)
+    grad.add_color_stop_rgb(1, *orange)
+    glow_stroke(cr, path, orange, 1.5, layers=((8, 0.08), (4, 0.18)), source=grad)
+    for _ in range(18):   # embers
+        cr.arc(rnd.uniform(x + h, x + w - h), rnd.uniform(y + h * 0.7, y + h - 3), rnd.uniform(0.6, 1.3), 0, 2 * PI)
+        cr.set_source_rgba(*yellow, rnd.uniform(0.3, 0.7))
+        cr.fill()
+
+
+def bar_nature(cr, x, y, w, h, cy):
+    green = rgb('#2ee06f')
+    path = lambda: _capsule(cr, x, y, w, h)  # noqa: E731
+    path()
+    cr.set_source_rgba(*rgb('#06140c'), 0.93)
+    cr.fill()
+    glow_stroke(cr, path, green, 1.5, layers=((8, 0.06), (4, 0.14)))
+    L = h * 0.9
+    for ang, kk, col in ((-0.5, 1.0, '#2fbf55'), (0.5, 0.8, '#1f8f3a'), (-1.1, 0.7, '#6fdc7f'), (1.2, 0.6, '#58c96a')):
+        leaf(cr, x + h * 0.35, cy + ang * 2, L * kk, PI + ang * 0.8, rgb(col))
+        leaf(cr, x + w - h * 0.35, cy - ang * 2, L * kk, -ang * 0.8, rgb(col))
+    # a small vine sprig every so often
+    rnd = random.Random(5)
+    vx = x + w * 0.12
+    while vx < x + w * 0.9:
+        if not (x + w * 0.35 < vx < x + w * 0.65):
+            leaf(cr, vx, y + 1, rnd.uniform(6, 9), -PI / 2 + rnd.uniform(-0.8, 0.8), rgb('#2fbf55'), vein=False)
+        vx += rnd.uniform(60, 120)
+
+
+BAR_SKINS = {'glass': bar_glass, 'cyber': bar_cyber, 'minimal': bar_minimal, 'gradient': bar_gradient,
+             'pixel': bar_pixel, 'macos': bar_macos, 'liquid': bar_liquid, 'hud': bar_hud,
+             'fire': bar_fire, 'nature': bar_nature}

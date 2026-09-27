@@ -88,7 +88,7 @@ def apply():
     bc.render(conf)
     apply_paddings(conf)
     restart_bar()
-    pill('--restart' if bc.ws_widget(conf) else '--stop')
+    pill('--restart' if bc.deco_on(conf) else '--stop')
     pid = daemon_pid()
     if conf['autohide'] and not pid:
         subprocess.Popen([os.path.abspath(__file__), 'daemon'], start_new_session=True,

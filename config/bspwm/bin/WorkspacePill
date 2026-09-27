@@ -67,7 +67,9 @@ def main():
     cli()
     conf = bc.load()
     style = conf.get('ws_style', 'classic')
-    if style not in wspill.STYLE_IDS or style == 'classic':
+    skin = conf.get('bar_skin', 'none') if bc.skin_on(conf) else None
+    has_pill = bc.ws_widget(conf)
+    if not (has_pill or skin):
         return
     import gi
     gi.require_version('Gtk', '3.0')
@@ -95,13 +97,36 @@ def main():
     H = int(conf['height'])
     st = {'desks': [], 'hidden_bar': False, 'fullscreen': False, 'polybar': True, 'm': None}
 
-    win = Gtk.Window(type=Gtk.WindowType.POPUP)
-    win.set_title('WorkspacePill')
-    win.set_app_paintable(True)
-    visual = win.get_screen().get_rgba_visual()
-    if visual:
-        win.set_visual(visual)
+    def popup():
+        w = Gtk.Window(type=Gtk.WindowType.POPUP)
+        w.set_title('WorkspacePill')
+        w.set_app_paintable(True)
+        visual = w.get_screen().get_rgba_visual()
+        if visual:
+            w.set_visual(visual)
+        return w
+
+    win = popup()
     win.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.SCROLL_MASK)
+    # the bar's background in the style: under polybar, which is transparent
+    skin_win = popup() if skin else None
+    off_y = int(conf['offset_y'])
+    skin_h = off_y + H + 8
+    if skin_win:
+        skin_win.set_size_request(geo.width, skin_h)
+        skin_win.move(geo.x, geo.y if conf['position'] != 'bottom' else geo.y + geo.height - skin_h)
+
+        def draw_skin(_w, cr):
+            cr.set_operator(cairo.OPERATOR_SOURCE)
+            cr.set_source_rgba(0, 0, 0, 0)
+            cr.paint()
+            cr.set_operator(cairo.OPERATOR_OVER)
+            mx = int(conf['margin_x'])
+            y = off_y if conf['position'] != 'bottom' else skin_h - off_y - H
+            wspill.paint_bar(cr, skin, geo.width, (mx, y, geo.width - 2 * mx, H))
+            return True
+        skin_win.connect('draw', draw_skin)
+        skin_win.connect('realize', lambda w: w.get_window().input_shape_combine_region(cairo.Region(), 0, 0))
 
     def place():
         m = wspill.metrics(len(st['desks']) or 6, H)
@@ -121,28 +146,38 @@ def main():
             gw.input_shape_combine_region(region, 0, 0)
 
     def restack():
-        gw = win.get_window()
         bars = polybar_windows()
-        if gw and bars:
-            # just above the bar: under every client, so fullscreen covers it
-            subprocess.run(['xdo', 'above', '-t', bars[0], hex(gw.get_xid())],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if not bars:
+            return
+        # the pill right above the bar, the skin right under it: both under
+        # every client, so a fullscreen window covers them
+        for w, where in ((skin_win, 'below'), (win if has_pill else None, 'above')):
+            gw = w.get_window() if w else None
+            if gw:
+                subprocess.run(['xdo', where, '-t', bars[0], hex(gw.get_xid())],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def update_visibility():
         want = st['polybar'] and not st['hidden_bar'] and not st['fullscreen']
-        if want and not win.get_visible():
-            win.show()
-            place()
+        lead = win if has_pill else skin_win
+        if want and not lead.get_visible():
+            if skin_win:
+                skin_win.show()
+            if has_pill:
+                win.show()
+                place()
             restack()
-        elif not want and win.get_visible():
+        elif not want and lead.get_visible():
             win.hide()
+            if skin_win:
+                skin_win.hide()
 
     def on_draw(_w, cr):
         cr.set_operator(cairo.OPERATOR_SOURCE)
         cr.set_source_rgba(0, 0, 0, 0)
         cr.paint()
         cr.set_operator(cairo.OPERATOR_OVER)
-        if st['m'] and st['desks']:
+        if has_pill and st['m'] and st['desks']:
             wspill.paint(cr, style, st['m'], [d[1] for d in st['desks']])
         return True
 
@@ -214,7 +249,7 @@ def main():
                 first = not st['desks']
                 st['desks'] = desks
                 place()
-                if not first:
+                if not first and has_pill:
                     # desktop added/removed: the bar's gap must change width too
                     subprocess.Popen([os.path.join(bc.BSPWM, 'bin/BarCtl'), 'apply'],
                                      start_new_session=True)

@@ -33,7 +33,9 @@ wait_for_termination() {
 # Kill polybar or eww bars when you switch from the current theme to another
 if pgrep -x polybar >/dev/null 2>&1; then
     polybar-msg cmd quit >/dev/null 2>&1
-    wait_for_termination polybar
+    # -x: "pgrep -f polybar" also matched any command line that just
+    # mentions polybar (an editor, a script) and waited forever
+    while pgrep -x polybar >/dev/null; do sleep 0.2; done
 fi
 
 # Kill eww bars

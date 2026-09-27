@@ -18,6 +18,26 @@ cargar_tokyo_night
 #-- Cold Frost--
 #cargar_cold_frost
 
+#cargar_glassmorphism
+
+#cargar_neon_cyberpunk
+
+#cargar_minimal_dark
+
+#cargar_gradient_pop
+
+#cargar_pixel_retro
+
+#cargar_macos
+
+#cargar_liquid
+
+#cargar_hud
+
+#cargar_fire
+
+#cargar_nature
+
 
 # Bspwm options
 BORDER_WIDTH="0"		# Bspwm border

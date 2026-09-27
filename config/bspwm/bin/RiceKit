@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# RiceKit - whole-rice themes (the same as RiceEditor -> Themes)
+#   RiceKit list
+#   RiceKit apply THEME [colors,bar,workspaces,windows]   (default: all)
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+import os
+import sys
+
+sys.path.insert(0, os.path.expanduser('~/.config/bspwm/lib'))
+import ricekit  # noqa: E402
+
+
+def main():
+    args = sys.argv[1:]
+    if not args or args[0] == 'list':
+        cur = ricekit.current()
+        for k in ricekit.ORDER:
+            print(f'{"*" if k == cur else " "} {k:<9} {ricekit.KITS[k]["name"]} - {ricekit.KITS[k]["tagline"]}')
+        return 0
+    if args[0] == 'apply' and len(args) >= 2 and args[1] in ricekit.KITS:
+        parts = args[2].split(',') if len(args) > 2 else [p for p, *_ in ricekit.PARTS]
+        bad = [p for p in parts if p not in dict((q, 1) for q, *_ in ricekit.PARTS)]
+        if bad:
+            print(f'unknown part(s): {", ".join(bad)}', file=sys.stderr)
+            return 1
+        ricekit.apply(args[1], parts)
+        return 0
+    print(__doc__ or 'RiceKit list | apply THEME [parts]', file=sys.stderr)
+    return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
