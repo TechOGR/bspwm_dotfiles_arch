@@ -451,7 +451,7 @@ install_packages() {
     # This list is based on commands referenced by THIS repository's config tree.
     # No packages from another dotfiles repository are added here.
     local official=(
-        xorg-server xorg-xinit xorg-xrandr xorg-xrdb xorg-xsetroot xorg-xset
+        xorg-server xorg-xinit xorg-xrandr libxcvt xorg-xrdb xorg-xsetroot xorg-xset
         xorg-xprop xorg-xinput xorg-xauth xorg-xdpyinfo xorg-xwininfo
         bspwm sxhkd polybar rofi picom dunst libnotify jgmenu
         kitty feh imagemagick jq maim xdotool xdo xclip xsettingsd hsetroot

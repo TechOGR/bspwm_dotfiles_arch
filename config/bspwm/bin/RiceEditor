@@ -12,7 +12,7 @@
 # RiceEditor - futuristic control center for the bspwm rice
 #   ✔ Every option applies LIVE (bspc / picom reload / theme modules)
 #   ✔ Palettes with instant re-theme (the editor re-themes itself too)
-#   ✔ Windows, compositor, terminal, wallpaper, notifications,
+#   ✔ Windows, display (xrandr), compositor, terminal, wallpaper, notifications,
 #     lockscreen, login lock (betterlockscreen), GTK/rofi appearance
 #   ✔ Live terminal + lockscreen previews, system HUD gauges
 #   ✔ Snapshots: save / restore the whole rice state (auto daily backup)
@@ -33,6 +33,7 @@ import time
 import shutil
 import random
 import hashlib
+import copy
 import json
 import platform
 import threading
@@ -383,6 +384,302 @@ def pretty_wall(path):
 
 
 # ════════════════════════════════════════════════════════════════ styling
+# ════════════════════════════════════════════════════════════ display
+MON_CONF = os.path.join(BSPWM, 'config/monitors.conf')
+XSETTINGSD = os.path.join(BSPWM, 'config/xsettingsd')
+ROTATIONS = (('normal', 'Normal'), ('left', 'Left (90°)'), ('right', 'Right (270°)'), ('inverted', 'Inverted (180°)'))
+REFLECTS = (('normal', 'None'), ('x', 'Horizontal'), ('y', 'Vertical'), ('xy', 'Both'))
+RELATIONS = (('right-of', 'Right of'), ('left-of', 'Left of'), ('above', 'Above'), ('below', 'Below'),
+             ('same-as', 'Mirror of'))
+SCALES = (0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0)
+DPIS = (96, 108, 120, 144, 168, 192)
+NIGHT_OFF = 6500   # K: no color shift
+DISP_LAYOUT = ('enabled', 'primary', 'mode', 'rate', 'rotate', 'reflect', 'scale', 'relation', 'target')
+
+
+def cmd_out(*cmd, timeout=5):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
+    except Exception:
+        return ''
+
+
+def mode_size(mode):
+    m = re.match(r'(\d+)x(\d+)', mode or '')
+    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+
+def kelvin_gamma(k):
+    """xrandr --gamma triple for a color temperature (6500 K = 1:1:1)."""
+    def rgb(t):
+        t /= 100
+        r = 1.0 if t <= 66 else 329.698727446 * (t - 60) ** -0.1332047592 / 255
+        g = (99.4708025861 * math.log(t) - 161.1195681661) / 255 if t <= 66 else \
+            288.1221695283 * (t - 60) ** -0.0755148492 / 255
+        b = 1.0 if t >= 66 else (0.0 if t <= 19 else (138.5177312231 * math.log(t - 10) - 305.0447927307) / 255)
+        return [min(1.0, max(0.0, v)) for v in (r, g, b)]
+    ref, cur = rgb(NIGHT_OFF), rgb(k)
+    return ':'.join(f'{max(0.1, min(1.0, c / r)):.3f}' for c, r in zip(cur, ref))
+
+
+class MonConf:
+    """monitors.conf read by bin/MonitorSetup at login: one line per output
+    ("OUTPUT MODE RATE xrandr-options  # temp=K") plus @mode/@dpms/@dpi."""
+    HEADER = ('# Written by RiceEditor -> Display, read by bin/MonitorSetup at login.\n'
+              '# OUTPUT  MODE  RATE  [xrandr options]   ("-" = automatic, see MonitorSetup)\n')
+
+    def __init__(self):
+        self.lines = [ln for ln in read_file(MON_CONF).splitlines()
+                      if ln.strip() and not ln.startswith(('# Written by RiceEditor', '# OUTPUT  MODE'))]
+
+    @staticmethod
+    def _key(line):
+        body = line.split('#', 1)[0].split()
+        return body[0] if body else None
+
+    def get(self, key):
+        """(tokens, {comment key: value}) of the first line for key, or None."""
+        for ln in self.lines:
+            if self._key(ln) == key:
+                body, _, com = ln.partition('#')
+                return body.split(), dict(kv.split('=', 1) for kv in com.split() if '=' in kv)
+        return None
+
+    def all(self, key):
+        return [ln.split('#', 1)[0].split() for ln in self.lines if self._key(ln) == key]
+
+    def set(self, key, text):
+        """Replace the line(s) of key with text (None removes them)."""
+        out, done = [], False
+        for ln in self.lines:
+            if self._key(ln) == key:
+                if text and not done:
+                    out.append(text)
+                done = True
+            else:
+                out.append(ln)
+        if text and not done:
+            out.append(text)
+        self.lines = out
+
+    def add(self, text):
+        if text.split() not in (ln.split() for ln in self.lines):
+            self.lines.append(text)
+
+    def save(self):
+        if any(self._key(ln) for ln in self.lines):
+            write_file(MON_CONF, self.HEADER + '\n'.join(self.lines) + '\n')
+        elif os.path.exists(MON_CONF):
+            os.remove(MON_CONF)
+
+
+def xrandr_outputs():
+    """Connected outputs as dicts (xrandr order): modes {name: [rates]},
+    preferred and current mode/rate, rotation, reflection, geometry,
+    primary, scale and brightness; night-light temp and placement come
+    from monitors.conf / the current positions."""
+    outs, o = [], None
+    for line in cmd_out('xrandr', '--query').splitlines():
+        if line and not line[0].isspace():
+            o = None
+            parts = line.split('(')[0].split()
+            if len(parts) < 2 or parts[1] != 'connected':
+                continue
+            o = dict(name=parts[0], primary='primary' in parts, enabled=False, x=0, y=0, w=0, h=0,
+                     modes={}, pref=None, pref_rate='', mode=None, rate='', rotate='normal',
+                     reflect='normal', scale=1.0, brightness=1.0, temp=NIGHT_OFF,
+                     relation='right-of', target='')
+            rest = [t for t in parts[2:] if t != 'primary']
+            if rest and re.match(r'\d+x\d+\+\d+\+\d+$', rest[0]):
+                w, h, x, y = map(int, re.split(r'[x+]', rest.pop(0)))
+                o.update(enabled=True, w=w, h=h, x=x, y=y)
+            if rest and rest[0] in dict(ROTATIONS):
+                o['rotate'] = rest.pop(0)
+            refl = ' '.join(rest)
+            o['reflect'] = {'X axis': 'x', 'Y axis': 'y', 'X and Y axis': 'xy'}.get(refl, 'normal')
+            outs.append(o)
+            continue
+        toks = line.split()
+        if o is None or not toks or not re.match(r'\d+x\d+', toks[0]):
+            continue
+        name, rates, last = toks[0], o['modes'].setdefault(toks[0], []), None
+        for t in toks[1:]:
+            r = t.rstrip('*+')
+            if r:
+                if not re.match(r'[\d.]+$', r):
+                    break           # not a rate list (interlace flags etc.)
+                last = r
+                if r not in rates:
+                    rates.append(r)
+            flags = t[len(r):]
+            if last and '*' in flags:
+                o['mode'], o['rate'] = name, last
+            if last and '+' in flags and not o['pref']:
+                o['pref'], o['pref_rate'] = name, last
+    byname = {o['name']: o for o in outs}
+    cur = None
+    for line in cmd_out('xrandr', '--verbose').splitlines():
+        if line and not line[0].isspace():
+            cur = byname.get(line.split()[0])
+        elif cur:
+            s = line.split()
+            try:
+                if s[0] == 'Brightness:':
+                    cur['brightness'] = round(float(s[1]), 2)
+                elif s[0] == 'Transform:':
+                    cur['scale'] = round(float(s[1]), 2) or 1.0
+            except (IndexError, ValueError):
+                pass
+    for o in outs:
+        o['modes'] = {k: v for k, v in o['modes'].items() if v}
+        o['pref'] = o['pref'] or next(iter(o['modes']), None)
+        o['pref_rate'] = o['pref_rate'] or (o['modes'].get(o['pref']) or [''])[0]
+        if not o['mode']:
+            o['mode'], o['rate'] = o['pref'], o['pref_rate']
+    # primary: xrandr's, else the first enabled one
+    on = [o for o in outs if o['enabled']]
+    prim = next((o for o in on if o['primary']), on[0] if on else None)
+    for o in outs:
+        o['primary'] = o is prim
+    conf = MonConf()
+    for o in outs:
+        saved = conf.get(o['name'])
+        opts, meta = saved if saved else ([], {})
+        try:
+            o['temp'] = int(meta.get('temp', NIGHT_OFF))
+        except ValueError:
+            pass
+        rel = next((i for i, t in enumerate(opts) if t.lstrip('-') in dict(RELATIONS)), None)
+        if rel is not None and rel + 1 < len(opts) and opts[rel + 1] in byname:
+            o['relation'], o['target'] = opts[rel].lstrip('-'), opts[rel + 1]
+        elif prim and o is not prim:
+            o['target'] = prim['name']
+            if o['enabled']:
+                if (o['x'], o['y']) == (prim['x'], prim['y']):
+                    o['relation'] = 'same-as'
+                elif o['x'] >= prim['x'] + prim['w']:
+                    o['relation'] = 'right-of'
+                elif o['x'] + o['w'] <= prim['x']:
+                    o['relation'] = 'left-of'
+                elif o['y'] + o['h'] <= prim['y']:
+                    o['relation'] = 'above'
+                else:
+                    o['relation'] = 'below'
+    return outs
+
+
+def display_primary(outs):
+    on = [o for o in outs if o['enabled']]
+    return next((o for o in on if o['primary']), on[0] if on else None)
+
+
+def display_args(outs):
+    """One xrandr call that sets every output (layout + color)."""
+    prim = display_primary(outs)
+    args = ['xrandr']
+    for o in outs:
+        args += ['--output', o['name']]
+        if not o['enabled']:
+            args.append('--off')
+            continue
+        args += ['--mode', o['mode']]
+        if o['rate']:
+            args += ['--rate', o['rate']]
+        s = o['scale']
+        args += ['--rotate', o['rotate'], '--reflect', o['reflect'], '--scale', f'{s:g}x{s:g}',
+                 '--brightness', f'{o["brightness"]:.2f}', '--gamma', kelvin_gamma(o['temp'])]
+        if o is prim:
+            args += ['--primary', '--pos', '0x0']
+        else:
+            ok = any(t['name'] == o['target'] and t['enabled'] and t is not o for t in outs)
+            tgt = o['target'] if ok else prim['name']
+            args += [f'--{o["relation"]}', tgt]
+    return args
+
+
+def display_conf_line(o, prim, multi):
+    """monitors.conf line for one output (None = nothing to force)."""
+    auto = o['mode'] == o['pref'] and o['rate'] in ('', o['pref_rate'])
+    mode, rate = ('-', '-') if auto else (o['mode'], o['rate'] or '-')
+    opts = []
+    if not o['enabled']:
+        opts.append('--off')
+    if o['rotate'] != 'normal':
+        opts += ['--rotate', o['rotate']]
+    if o['reflect'] != 'normal':
+        opts += ['--reflect', o['reflect']]
+    if abs(o['scale'] - 1) > 0.001:
+        opts += ['--scale', f'{o["scale"]:g}x{o["scale"]:g}']
+    if o['brightness'] < 0.995:
+        opts += ['--brightness', f'{o["brightness"]:.2f}']
+    if o['temp'] != NIGHT_OFF:
+        opts += ['--gamma', kelvin_gamma(o['temp'])]
+    if multi and o['enabled']:
+        if o is prim:
+            opts.append('--primary')
+        elif o['target']:
+            opts += [f'--{o["relation"]}', o['target']]
+    if mode == '-' and not opts:
+        return None
+    line = f'{o["name"]:<12} {mode:<12} {rate:<7} {" ".join(opts)}'.rstrip()
+    return line + (f'   # temp={o["temp"]}' if o['temp'] != NIGHT_OFF else '')
+
+
+def display_layout(outs):
+    """Where xrandr will put each enabled output: {name: (x, y, w, h)}."""
+    size = {}
+    for o in outs:
+        w, h = mode_size(o['mode'])
+        if o['rotate'] in ('left', 'right'):
+            w, h = h, w
+        size[o['name']] = (w * o['scale'], h * o['scale'])
+    prim = display_primary(outs)
+    if not prim:
+        return {}
+    pos = {prim['name']: (0, 0, *size[prim['name']])}
+    todo = [o for o in outs if o['enabled'] and o is not prim]
+    for _ in range(len(todo) + 1):
+        for o in list(todo):
+            if o['target'] in pos:
+                tgt = o['target']
+            elif o['target'] in {t['name'] for t in todo}:
+                continue            # its reference is not placed yet
+            else:
+                tgt = prim['name']
+            tx, ty, tw, th = pos[tgt]
+            w, h = size[o['name']]
+            x, y = {'right-of': (tx + tw, ty), 'left-of': (tx - w, ty), 'above': (tx, ty - h),
+                    'below': (tx, ty + th)}.get(o['relation'], (tx, ty))
+            pos[o['name']] = (x, y, w, h)
+            todo.remove(o)
+    for o in todo:   # cycles: right of everything
+        right = max(x + w for x, _y, w, _h in pos.values())
+        pos[o['name']] = (right, 0, *size[o['name']])
+    return pos
+
+
+def backlight():
+    """Hardware backlight percent (brightnessctl), None without a panel."""
+    out = cmd_out('brightnessctl', '-m', '-c', 'backlight', 'info').strip()
+    parts = out.split(',')
+    try:
+        return int(parts[3].rstrip('%'))
+    except (IndexError, ValueError):
+        return None
+
+
+def dpms_state():
+    """(enabled, off-seconds) from xset q."""
+    q = cmd_out('xset', 'q')
+    m = re.search(r'Off:\s+(\d+)', q)
+    return 'DPMS is Enabled' in q, int(m.group(1)) if m else 600
+
+
+def current_dpi():
+    m = re.search(r'^Xft\.dpi:\s*(\d+)', cmd_out('xrdb', '-query'), re.M)
+    return int(m.group(1)) if m else 96
+
+
 def build_css(c):
     return f'''
 @define-color bg {c["bg"]};
@@ -1162,11 +1459,81 @@ class LoginPreview(Animated):
 
 
 # ═══════════════════════════════════════════════════════════ main window
+class MonitorMap(Gtk.DrawingArea):
+    """Screens as they will be laid out; click one to edit it."""
+
+    def __init__(self, app):
+        super().__init__()
+        self.app = app
+        self.rects = []
+        self.set_size_request(-1, 190)
+        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.connect('draw', self.on_draw)
+        self.connect('button-press-event', self.on_click)
+
+    def on_click(self, _w, ev):
+        for name, (x, y, w, h) in self.rects:
+            if x <= ev.x <= x + w and y <= ev.y <= y + h:
+                self.app.display_select(name)
+                return True
+        return False
+
+    def on_draw(self, w, cr):
+        W, H = w.get_allocated_width(), w.get_allocated_height()
+        c = self.app.rgb
+        outs = getattr(self.app, 'disp', [])
+        pos = display_layout(outs)
+        off = [o for o in outs if not o['enabled']]
+        self.rects = []
+        if not pos:
+            draw_text(cr, 'No screens detected', W / 2, H / 2 - 8, 10, (*c['fg'], 0.5), align='center')
+            return True
+        x0 = min(x for x, *_ in pos.values())
+        y0 = min(y for _x, y, *_ in pos.values())
+        x1 = max(x + ww for x, _y, ww, _h in pos.values())
+        y1 = max(y + hh for _x, y, _w, hh in pos.values())
+        ghost_w = (x1 - x0) * 0.28 if off else 0
+        pad = 14
+        k = min((W - 2 * pad) / max(1, x1 - x0 + ghost_w * 1.1 * len(off)), (H - 2 * pad) / max(1, y1 - y0))
+        ox = (W - (x1 - x0 + ghost_w * 1.1 * len(off)) * k) / 2
+        oy = (H - (y1 - y0) * k) / 2
+        sel = self.app.disp_sel
+        items = [(o, pos[o['name']]) for o in outs if o['name'] in pos]
+        # mirrored screens overlap: draw the selected one last
+        items.sort(key=lambda it: it[0]['name'] == sel)
+        gx = x1
+        for o in off:
+            items.append((o, (gx + ghost_w * 0.1, y0, ghost_w, ghost_w * 9 / 16)))
+            gx += ghost_w * 1.1
+        for o, (x, y, ww, hh) in items:
+            rx, ry, rw, rh = ox + (x - x0) * k + 3, oy + (y - y0) * k + 3, ww * k - 6, hh * k - 6
+            self.rects.insert(0, (o['name'], (rx, ry, rw, rh)))
+            is_sel = o['name'] == sel
+            acc = c['cyan'] if is_sel else c['blue']
+            rounded(cr, rx, ry, rw, rh, 8)
+            cr.set_source_rgba(*acc, 0.22 if is_sel else (0.03 if not o['enabled'] else 0.09))
+            cr.fill_preserve()
+            if not o['enabled']:
+                cr.set_dash([5, 4])
+            cr.set_line_width(2 if is_sel else 1)
+            cr.set_source_rgba(*acc, 0.95 if is_sel else 0.45)
+            cr.stroke()
+            cr.set_dash([])
+            fs = max(7, min(11, rh / 7))
+            star = '★ ' if o['primary'] and o['enabled'] else ''
+            draw_text(cr, star + o['name'], rx + rw / 2, ry + rh / 2 - fs - 2, fs, (*c['fg'], 0.95),
+                      bold=True, align='center')
+            info = 'off' if not o['enabled'] else f'{o["mode"]} · {o["rate"] or "auto"}Hz'
+            draw_text(cr, info, rx + rw / 2, ry + rh / 2 + 3, max(6, fs - 2), (*c['fg'], 0.55), align='center')
+        return True
+
+
 class RiceEditor(Gtk.Window):
     SECTIONS = [
         ('dashboard', '󰕮', 'Dashboard', 'SYSTEM OVERVIEW · QUICK ACTIONS'),
         ('palette', '󰏘', 'Palette', 'COLOR SCHEMES OF THE RICE · APPLIED INSTANTLY'),
         ('windows', '󰖲', 'Windows', 'BSPWM · BORDERS · GAPS · BEHAVIOUR'),
+        ('display', '󰍹', 'Display', 'RESOLUTION · REFRESH · ROTATION · MONITORS · NIGHT LIGHT'),
         ('compositor', '󰨇', 'Compositor', 'PICOM · CORNERS · SHADOWS · BLUR · OPACITY'),
         ('terminal', '󰆍', 'Terminal', 'KITTY · ALACRITTY · GHOSTTY · SHELL'),
         ('wallpaper', '󰸉', 'Wallpaper', 'ENGINE · GALLERY · 3D SELECTOR'),
@@ -1230,7 +1597,7 @@ class RiceEditor(Gtk.Window):
 
         builders = {
             'dashboard': self.page_dashboard, 'palette': self.page_palette,
-            'windows': self.page_windows, 'compositor': self.page_compositor,
+            'windows': self.page_windows, 'display': self.page_display, 'compositor': self.page_compositor,
             'terminal': self.page_terminal, 'wallpaper': self.page_wallpaper,
             'dock': self.page_dock, 'polybar': self.page_polybar,
             'notifications': self.page_notifications, 'lockscreen': self.page_lockscreen,
@@ -1288,6 +1655,12 @@ class RiceEditor(Gtk.Window):
         chip.set_halign(Gtk.Align.CENTER)
         box.pack_start(chip, False, False, 8)
 
+        # the section list scrolls, so the window still fits 768/800 px screens
+        nav_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        nav_scroll = Gtk.ScrolledWindow()
+        nav_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        nav_scroll.add(nav_box)
+        box.pack_start(nav_scroll, True, True, 0)
         self.nav = {}
         for i, (key, icon, title, _sub) in enumerate(self.SECTIONS):
             btn = Gtk.Button()
@@ -1304,7 +1677,7 @@ class RiceEditor(Gtk.Window):
             btn.add(inner)
             btn.connect('clicked', lambda _b, k=key: self.go(k))
             btn.set_tooltip_text(f'Ctrl+{(i + 1) % 10}' if i < 10 else None)
-            box.pack_start(btn, False, False, 0)
+            nav_box.pack_start(btn, False, False, 0)
             self.nav[key] = btn
 
         bottom = Gtk.Box(spacing=6)
@@ -1347,6 +1720,8 @@ class RiceEditor(Gtk.Window):
             self.dock_sync()
         if key == 'polybar' and not self.loading:
             self.bar_sync()
+        if key == 'display' and not self.loading and not self.display_dirty():
+            self.display_scan()
 
     def on_key(self, _w, ev):
         ctrl = ev.state & Gdk.ModifierType.CONTROL_MASK
@@ -1915,6 +2290,409 @@ class RiceEditor(Gtk.Window):
         bspwmrc_set(key, value)
         bspc('config', key, value)
         self.toast(f'{title} → {value}')
+
+    # ───────────────────────────────────────────────────────── display
+    def page_display(self):
+        p = self.page()
+        self.disp, self.disp_applied, self.disp_sel = [], [], None
+
+        c = self.card('󰍹', 'Screens', 'click a screen to edit it · xrandr')
+        self.disp_map = MonitorMap(self)
+        c.pack_start(self.disp_map, False, False, 4)
+        btns = Gtk.Box(spacing=8)
+        for label, cls, cb, tip in (
+                ('󰑓  Detect', 'neon', lambda *_: self.display_scan(), 'Re-read the connected screens'),
+                ('󰍺  Identify', 'ghost', lambda *_: self.display_identify(), 'Show each screen\'s name on it'),
+                ('󰁯  Automatic', 'ghost', lambda *_: self.display_reset(),
+                 'Forget the saved layout: preferred mode of every screen (MonitorSetup)')):
+            b = self.button(label, cls, cb)
+            b.set_tooltip_text(tip)
+            btns.pack_start(b, False, False, 0)
+        self.disp_pending = Gtk.Label(xalign=1)
+        self.disp_pending.get_style_context().add_class('mono-note')
+        btns.pack_end(self.disp_pending, False, False, 0)
+        c.pack_start(btns, False, False, 6)
+        p.pack_start(c, False, False, 0)
+
+        # per-output cards, rebuilt when the selection / screens change
+        self.disp_body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        p.pack_start(self.disp_body, False, False, 0)
+
+        c = self.card('󰶐', 'Power & DPI', 'xset · Xresources · xsettingsd')
+        on, secs = dpms_state()
+        mins = self.spin(1, 240, max(1, secs // 60) if secs else 10, self.set_dpms_time)
+        self.dpms_spin = mins
+        mins.set_sensitive(on and secs > 0)
+        c.pack_start(self.row('Turn screens off', 'Power the monitors down after this many idle minutes '
+                              '(idle LOCK is set in Login Lock)', mins,
+                              self.switch(on and secs > 0, self.set_dpms)), False, False, 0)
+        dpi = current_dpi()
+        items = [(str(d), f'{d} dpi · {d * 100 // 96}%') for d in sorted(set(DPIS) | {dpi})]
+        c.pack_start(self.row('Font DPI', 'Text size of GTK / Qt / terminal apps (new windows); '
+                              'for HiDPI screens without changing the resolution',
+                              self.combo(items, str(dpi), self.set_dpi)), False, False, 0)
+        p.pack_start(c, False, False, 0)
+        self.display_scan()
+        return p
+
+    def display_out(self, name=None):
+        name = name or self.disp_sel
+        return next((o for o in self.disp if o['name'] == name), None)
+
+    def display_scan(self, select=None):
+        self.disp = xrandr_outputs()
+        self.disp_applied = copy.deepcopy(self.disp)
+        names = [o['name'] for o in self.disp]
+        if select in names:
+            self.disp_sel = select
+        elif self.disp_sel not in names:
+            prim = display_primary(self.disp)
+            self.disp_sel = prim['name'] if prim else (names[0] if names else None)
+        self.display_build()
+
+    def display_select(self, name):
+        self.disp_sel = name
+        self.display_build()
+
+    def display_dirty(self):
+        old = {o['name']: o for o in self.disp_applied}
+        return any(o['name'] not in old or any(o[k] != old[o['name']][k] for k in DISP_LAYOUT)
+                   for o in self.disp)
+
+    def display_refresh(self):
+        dirty = self.display_dirty()
+        self.disp_pending.set_text('● changes not applied yet' if dirty else '')
+        if getattr(self, 'disp_apply_btn', None):
+            self.disp_apply_btn.set_sensitive(dirty)
+            self.disp_undo_btn.set_sensitive(dirty)
+        self.disp_map.queue_draw()
+
+    def display_build(self):
+        for ch in self.disp_body.get_children():
+            self.disp_body.remove(ch)
+            ch.destroy()
+        self.disp_apply_btn = None
+        o = self.display_out()
+        if not o:
+            self.display_refresh()
+            return
+        was, self.loading = self.loading, True
+        multi = len(self.disp) > 1
+
+        if multi:
+            c = self.card('󰍺', f'Output {o["name"]}', 'multi-monitor layout')
+            en = self.switch(o['enabled'], lambda v: self.display_edit('enabled', v))
+            c.pack_start(self.row('Enabled', 'Switch this screen on or off', en), False, False, 0)
+            pr = self.switch(o['primary'], lambda v: self.display_edit('primary', v))
+            pr.set_sensitive(o['enabled'] and not o['primary'])
+            c.pack_start(self.row('Primary', 'Main screen: sits at 0,0, holds the bar and the first desktops', pr),
+                         False, False, 0)
+            others = [t['name'] for t in self.disp if t is not o]
+            items = [(f'{r}|{t}', f'{lab} {t}') for t in others for r, lab in RELATIONS]
+            tgt = o['target'] if o['target'] in others else others[0]
+            pos = self.combo(items, f'{o["relation"]}|{tgt}', lambda v: self.display_edit('position', v))
+            pos.set_sensitive(o['enabled'] and not o['primary'])
+            c.pack_start(self.row('Position', 'Where it goes next to another screen ("Mirror" = same picture)',
+                                  pos), False, False, 0)
+            self.disp_body.pack_start(c, False, False, 0)
+
+        c = self.card('󰹑', 'Resolution', f'{o["name"]} · preferred {o["pref"] or "?"}')
+        modes = []
+        for m in o['modes']:
+            w, h = mode_size(m)
+            g = math.gcd(w, h) or 1
+            ratio = {(8, 5): '16:10', (683, 384): '16:9', (85, 48): '16:9', (5, 3): '15:9',
+                     (64, 27): '21:9', (43, 18): '21:9'}.get((w // g, h // g), f'{w // g}:{h // g}')
+            tag = '  ★ preferred' if m == o['pref'] else ''
+            modes.append((m, f'{m}  ·  {ratio}{tag}'))
+        c.pack_start(self.row('Resolution', 'Size of the screen in pixels',
+                              self.combo(modes, o['mode'], lambda v: self.display_edit('mode', v))),
+                     False, False, 0)
+        self.disp_rate = self.combo([], '', lambda v: self.display_edit('rate', v))
+        self.display_fill_rates(o)
+        c.pack_start(self.row('Refresh rate', 'Hz available for that resolution', self.disp_rate), False, False, 0)
+        c.pack_start(self.row('Rotation', 'Turn the picture (portrait screens)',
+                              self.combo(list(ROTATIONS), o['rotate'], lambda v: self.display_edit('rotate', v))),
+                     False, False, 0)
+        c.pack_start(self.row('Reflection', 'Mirror the picture (projectors, rear screens)',
+                              self.combo(list(REFLECTS), o['reflect'], lambda v: self.display_edit('reflect', v))),
+                     False, False, 0)
+        scales = sorted(set(SCALES) | {o['scale']})
+        items = [(f'{s:g}', f'{s:g}×' + (' · bigger UI (blurry)' if s < 1 else
+                                         (' · more space' if s > 1 else ' · native'))) for s in scales]
+        c.pack_start(self.row('Scale', 'Render the desktop bigger or smaller than the mode (xrandr --scale)',
+                              self.combo(items, f'{o["scale"]:g}', lambda v: self.display_edit('scale', float(v)))),
+                     False, False, 0)
+        acts = Gtk.Box(spacing=8)
+        self.disp_undo_btn = self.button('󰕌  Discard', 'ghost', lambda *_: self.display_discard())
+        pref = self.button('★  Preferred', 'ghost', lambda *_: self.display_preferred())
+        pref.set_tooltip_text('Preferred mode and rate, no rotation, 1× scale')
+        self.disp_apply_btn = self.button('󰄬  Apply', 'neon', lambda *_: self.display_apply())
+        for b in (pref, self.disp_undo_btn, self.disp_apply_btn):
+            acts.pack_start(b, False, False, 0)
+        c.pack_start(self.row('Apply layout', 'You get 15 s to keep it, otherwise it goes back by itself', acts),
+                     False, False, 0)
+        self.disp_body.pack_start(c, False, False, 0)
+
+        c = self.card('󰌁', 'Color', 'applied live · software gamma')
+        sc, lab = self.scale(0.3, 1.0, 0.01, o['brightness'], 2, lambda v: self.display_color('brightness', v),
+                             fmt=lambda v: f'{v * 100:.0f}%', delay=120)
+        c.pack_start(self.row('Brightness', 'Dims the picture (works on any screen / VM)', sc, lab), False, False, 0)
+        sc, lab = self.scale(2500, NIGHT_OFF, 100, o['temp'], 0, lambda v: self.display_color('temp', int(v)),
+                             fmt=lambda v: 'off' if v >= NIGHT_OFF else f'{int(v)} K', delay=120)
+        c.pack_start(self.row('Night light', 'Warmer colors, easier on the eyes at night', sc, lab), False, False, 0)
+        hw = backlight()
+        if hw is not None:
+            sc, lab = self.scale(2, 100, 1, hw, 0, self.set_backlight, fmt=lambda v: f'{int(v)}%', delay=80)
+            c.pack_start(self.row('Backlight', 'Panel hardware brightness (brightnessctl)', sc, lab), False, False, 0)
+        self.disp_body.pack_start(c, False, False, 0)
+
+        c = self.card('󰩬', 'Custom resolution', 'cvt · xrandr --newmode')
+        size = Gtk.Box(spacing=6)
+        self.cm_w = Gtk.SpinButton.new_with_range(320, 7680, 1)
+        self.cm_h = Gtk.SpinButton.new_with_range(200, 4320, 1)
+        self.cm_r = Gtk.SpinButton.new_with_range(24, 360, 1)
+        w, h = mode_size(o['mode'])
+        for sp, v in ((self.cm_w, w or 1920), (self.cm_h, h or 1080), (self.cm_r, 60)):
+            sp.set_value(v)
+        for wdg in (self.cm_w, Gtk.Label(label='×'), self.cm_h, Gtk.Label(label='@'), self.cm_r,
+                    Gtk.Label(label='Hz')):
+            size.pack_start(wdg, False, False, 0)
+        c.pack_start(self.row('New mode', 'For sizes the screen does not list (VMs, odd panels); '
+                              'saved and re-created at login',
+                              size, self.button('󰐕  Add', 'neon', lambda *_: self.display_add_mode())),
+                     False, False, 0)
+        self.disp_body.pack_start(c, False, False, 0)
+
+        self.disp_body.show_all()
+        self.loading = was
+        self.display_refresh()
+
+    def display_fill_rates(self, o):
+        self.loading, was = True, self.loading
+        self.disp_rate.remove_all()
+        for r in o['modes'].get(o['mode'], []):
+            self.disp_rate.append(r, f'{float(r):.2f} Hz' + ('  ★' if o['mode'] == o['pref'] and
+                                                            r == o['pref_rate'] else ''))
+        if not self.disp_rate.set_active_id(o['rate']):
+            self.disp_rate.set_active(0)
+            o['rate'] = self.disp_rate.get_active_id() or ''
+        self.loading = was
+
+    def display_edit(self, key, value):
+        o = self.display_out()
+        if not o:
+            return
+        if key == 'mode':
+            o['mode'] = value
+            rates = o['modes'].get(value, [])
+            o['rate'] = o['pref_rate'] if value == o['pref'] and o['pref_rate'] in rates else \
+                (rates[0] if rates else '')
+            self.display_fill_rates(o)
+        elif key == 'enabled':
+            if not value and sum(t['enabled'] for t in self.disp) <= 1:
+                self.toast('At least one screen must stay on', error=True)
+                self.display_build()
+                return
+            o['enabled'] = value
+            if not value and o['primary']:
+                o['primary'] = False
+                nxt = next(t for t in self.disp if t['enabled'])
+                nxt['primary'] = True
+            self.display_build()
+        elif key == 'primary':
+            for t in self.disp:
+                t['primary'] = t is o
+            self.display_build()
+        elif key == 'position':
+            o['relation'], o['target'] = value.split('|', 1)
+        else:
+            o[key] = value
+        self.display_refresh()
+
+    def display_discard(self):
+        self.disp = copy.deepcopy(self.disp_applied)
+        self.display_build()
+
+    def display_preferred(self):
+        o = self.display_out()
+        if o:
+            o.update(mode=o['pref'], rate=o['pref_rate'], rotate='normal', reflect='normal', scale=1.0)
+            self.display_build()
+
+    def display_xrandr(self, outs):
+        try:
+            r = subprocess.run(display_args(outs), capture_output=True, text=True, timeout=15)
+            return r.returncode == 0, (r.stderr or '').strip().splitlines()[-1:] or ['']
+        except Exception as e:  # noqa: BLE001
+            return False, [str(e)]
+
+    def display_apply(self):
+        if not any(o['enabled'] for o in self.disp):
+            self.toast('At least one screen must stay on', error=True)
+            return
+        old, new = copy.deepcopy(self.disp_applied), copy.deepcopy(self.disp)
+        ok, err = self.display_xrandr(new)
+        if not ok:
+            self.display_xrandr(old)
+            self.toast(f'xrandr refused it: {err[0]}', error=True)
+            return
+        if self.display_confirm():
+            self.disp_applied = new
+            self.display_save()
+            if [o['enabled'] for o in old] != [o['enabled'] for o in new] or \
+                    display_primary(old)['name'] != display_primary(new)['name']:
+                # desktops per monitor + bar on the new primary
+                spawn([os.path.join(BIN, 'MonitorSetup')])
+            self.toast('Display layout saved')
+            GLib.timeout_add(1500, lambda: (self.display_scan(), False)[1])
+        else:
+            self.display_xrandr(old)
+            self.disp = old
+            self.display_build()
+            self.toast('Display reverted')
+
+    def display_confirm(self, secs=15):
+        dlg = Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.QUESTION,
+                                text='Keep this display configuration?')
+        dlg.add_buttons('Revert', Gtk.ResponseType.CANCEL, 'Keep changes', Gtk.ResponseType.OK)
+        dlg.set_default_response(Gtk.ResponseType.CANCEL)
+        dlg.set_position(Gtk.WindowPosition.CENTER_ALWAYS)
+        left = [secs]
+
+        def tick():
+            left[0] -= 1
+            if left[0] <= 0:
+                dlg.response(Gtk.ResponseType.CANCEL)
+                return False
+            dlg.format_secondary_text(f'Going back to the previous one in {left[0]} s.')
+            return True
+        dlg.format_secondary_text(f'Going back to the previous one in {secs} s.')
+        timer = GLib.timeout_add_seconds(1, tick)
+        res = dlg.run()
+        if left[0] > 0:
+            GLib.source_remove(timer)
+        dlg.destroy()
+        return res == Gtk.ResponseType.OK
+
+    def display_save(self):
+        conf = MonConf()
+        prim = display_primary(self.disp_applied)
+        multi = len(self.disp_applied) > 1
+        for o in self.disp_applied:
+            conf.set(o['name'], display_conf_line(o, prim, multi))
+        conf.save()
+
+    def display_color(self, key, value):
+        o = self.display_out()
+        if not o:
+            return
+        for outs in (self.disp, self.disp_applied):
+            t = next((t for t in outs if t['name'] == o['name']), None)
+            if t:
+                t[key] = value
+        if o['enabled']:
+            spawn(['xrandr', '--output', o['name'], '--brightness', f'{o["brightness"]:.2f}',
+                   '--gamma', kelvin_gamma(o['temp'])])
+        self.display_save()
+
+    def set_backlight(self, v):
+        spawn(['brightnessctl', '-q', '-c', 'backlight', 'set', f'{v}%'])
+
+    def display_add_mode(self):
+        o = self.display_out()
+        if not o:
+            return
+        w, h, r = int(self.cm_w.get_value()), int(self.cm_h.get_value()), int(self.cm_r.get_value())
+        line = next((ln for ln in cmd_out('cvt', str(w), str(h), str(r)).splitlines()
+                     if ln.startswith('Modeline')), '')
+        args = line.replace('"', '').split()[1:]
+        if len(args) < 2:
+            self.toast('cvt could not make that mode', error=True)
+            return
+        name = args[0]
+        subprocess.run(['xrandr', '--newmode', *args], capture_output=True)
+        res = subprocess.run(['xrandr', '--addmode', o['name'], name], capture_output=True, text=True)
+        if res.returncode != 0:
+            self.toast(f'{o["name"]} refused {name}', error=True)
+            return
+        conf = MonConf()
+        conf.add(f'@mode {o["name"]} {w} {h} {r}')
+        conf.save()
+        sel, pending = o['name'], copy.deepcopy(self.disp)
+        self.display_scan(select=sel)
+        # keep what was being edited, then point the selected screen at the new mode
+        fresh = {t['name']: t for t in self.disp}
+        for t in pending:
+            if t['name'] in fresh:
+                t['modes'] = fresh[t['name']]['modes']
+        self.disp = pending
+        self.display_edit('mode', name)
+        self.display_build()
+        self.toast(f'Mode {name} added — press Apply')
+
+    def display_reset(self):
+        conf = MonConf()
+        for o in self.disp:
+            conf.set(o['name'], None)
+        conf.set('*', None)
+        for o in self.disp:
+            spawn(['xrandr', '--output', o['name'], '--brightness', '1', '--gamma', '1:1:1'])
+        conf.save()
+
+        def done(_r):
+            self.display_scan()
+            self.toast('Automatic layout (preferred modes)')
+        run_bg(lambda: subprocess.run([os.path.join(BIN, 'MonitorSetup')], timeout=20,
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL), done)
+
+    def display_identify(self):
+        for o in self.disp_applied:
+            if not o['enabled']:
+                continue
+            win = Gtk.Window(type=Gtk.WindowType.POPUP)
+            win.get_style_context().add_class('rice-editor')
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            box.get_style_context().add_class('card')
+            big = Gtk.Label(label=('★ ' if o['primary'] else '') + o['name'])
+            big.get_style_context().add_class('big')
+            box.pack_start(big, False, False, 0)
+            box.pack_start(Gtk.Label(label=f'{o["w"]}×{o["h"]}  ·  {o["rate"]} Hz'), False, False, 0)
+            win.add(box)
+            win.move(o['x'] + 40, o['y'] + 40)
+            win.show_all()
+            GLib.timeout_add(3000, lambda w=win: (w.destroy(), False)[1])
+
+    def set_dpms(self, on):
+        self.dpms_spin.set_sensitive(on)
+        conf = MonConf()
+        if on:
+            secs = int(self.dpms_spin.get_value()) * 60
+            spawn(['xset', '+dpms', 'dpms', str(secs), str(secs), str(secs)])
+            conf.set('@dpms', f'@dpms {secs}')
+        else:
+            spawn(['xset', '-dpms'])
+            conf.set('@dpms', '@dpms off')
+        conf.save()
+        self.toast(f'Screen power-off → {"on" if on else "never"}')
+
+    def set_dpms_time(self, mins):
+        self.set_dpms(True)
+        self.toast(f'Screens turn off after {mins} min')
+
+    def set_dpi(self, v):
+        dpi = int(v)
+        subprocess.run(['xrdb', '-merge'], input=f'Xft.dpi: {dpi}\n', text=True, capture_output=True)
+        text = read_file(XSETTINGSD)
+        text = re.sub(r'^Xft/DPI .*\n?', '', text, flags=re.M)
+        if dpi != 96:
+            text = text.rstrip('\n') + f'\nXft/DPI {dpi * 1024}\n'
+        write_file(XSETTINGSD, text)
+        spawn(['pkill', '-HUP', '-x', 'xsettingsd'])
+        conf = MonConf()
+        conf.set('@dpi', f'@dpi {dpi}' if dpi != 96 else None)
+        conf.save()
+        self.toast(f'DPI → {dpi} (new windows)')
 
     # ────────────────────────────────────────────────────── compositor
     def page_compositor(self):
@@ -3331,7 +4109,8 @@ class RiceEditor(Gtk.Window):
                   ('picom-rules.conf', PICOM_RULES), ('bspwmrc', BSPWMRC), ('kitty.conf', KITTY_CONF),
                   ('dock.json', os.path.join(BSPWM, 'config/dock.json')),
                   ('polybar.json', os.path.join(BSPWM, 'config/polybar.json')),
-                  ('avatar.json', os.path.join(BSPWM, 'config/avatar.json'))]
+                  ('avatar.json', os.path.join(BSPWM, 'config/avatar.json')),
+                  ('monitors.conf', MON_CONF)]
 
     def page_snapshots(self):
         p = self.page()

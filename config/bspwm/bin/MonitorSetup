@@ -15,11 +15,21 @@
 #     already the way we want it (no black flash at login)
 #   - Dynamic workspace assignment
 #
-#   monitors.conf (optional, one line per output, "*" = any output):
-#       # OUTPUT     MODE        [RATE]
+#   monitors.conf (optional, one line per output, "*" = any output;
+#   written by RiceEditor -> Display):
+#       # OUTPUT     MODE        [RATE] [xrandr options...]
 #       Virtual-1    1600x900
-#       HDMI-1       2560x1440   144
+#       HDMI-1       2560x1440   144    --rotate left --right-of eDP-1
+#       DP-1         -           -      --off
 #       *            1920x1080
+#   MODE/RATE "-" = keep the automatic choice. The options go straight
+#   to xrandr (--rotate --reflect --scale --brightness --gamma --pos
+#   --left-of ... --off); --primary picks the primary output. A saved
+#   placement replaces the automatic layout below while its reference
+#   output is connected. Global lines:
+#       @mode   OUTPUT W H RATE   custom mode (cvt), made before the probe
+#       @dpms   SECONDS | off     screen power off after idle
+#       @dpi    96                Xft.dpi (xsettingsd is set by RiceEditor)
 #
 # Author: TechOGR
 # Repo:   https://github.com/TechOGR/bspwm_dotfiles_arch
@@ -31,30 +41,50 @@
 
 OVERRIDES="$HOME/.config/bspwm/config/monitors.conf"
 
+# Custom modes first, so the probe below lists them
+grep -E '^[[:space:]]*@mode[[:space:]]' "$OVERRIDES" 2>/dev/null |
+while read -r _ out w h r _; do
+    set -- $(cvt "$w" "$h" "${r:-60}" 2>/dev/null | sed -n 's/^Modeline //p' | tr -d '"')
+    [ $# -gt 1 ] || continue
+    xrandr --newmode "$@" 2>/dev/null   # fails harmlessly when it exists
+    xrandr --addmode "$out" "$1" 2>/dev/null
+done
+
 # One probe; everything below reads this cached copy
 XRANDR_OUTPUT=$(xrandr --query 2>/dev/null)
 [ -n "$XRANDR_OUTPUT" ] || { echo "MonitorSetup: xrandr failed" >&2; exit 1; }
 
 # Per connected output, one line:
-#   name primary(0/1) current_mode current_x current_y wanted_mode wanted_rate
+#   name primary(0/1) current_mode current_x current_y wanted_mode wanted_rate extra
 # wanted = override > preferred ("+") > current ("*") > first listed mode
 # (xrandr lists the biggest first). The rate is the one carrying the
-# marker on that mode's line, else the first one.
+# marker on that mode's line, else the first one. extra = the saved
+# xrandr options joined with commas ("-" = none).
 MONITORS=$(printf '%s\n' "$XRANDR_OUTPUT" | awk -v ovf="$OVERRIDES" '
     BEGIN {
         while ((getline l < ovf) > 0) {
             sub(/#.*/, "", l); n = split(l, f, " ")
-            if (n >= 2) { omode[f[1]] = f[2]; orate[f[1]] = (n >= 3 ? f[3] : "") }
+            if (n < 2 || f[1] ~ /^@/) continue
+            omode[f[1]] = f[2]; orate[f[1]] = (n >= 3 ? f[3] : "-"); x = ""
+            for (i = 4; i <= n; i++) {
+                if (f[i] == "--primary") { cprim = f[1]; continue }
+                x = x (x == "" ? "" : ",") f[i]
+            }
+            oextra[f[1]] = x
         }
     }
     function flush() {
         if (name == "") return
-        m = pmode; r = prate
+        if (cprim != "") primary = (name == cprim) ? 1 : 0
+        m = pmode; r = prate; x = ""
         if (m == "") { m = cmode; r = crate }
         if (m == "") { m = fmode; r = frate }
-        if (name in omode)      { m = omode[name]; r = orate[name] }
-        else if ("*" in omode)  { m = omode["*"];  r = orate["*"] }
-        print name, primary, (cur == "" ? "-" : cur), cx + 0, cy + 0, (m == "" ? "-" : m), (r == "" ? "-" : r)
+        k = (name in omode) ? name : (("*" in omode) ? "*" : "")
+        if (k != "") {
+            if (omode[k] != "-") { m = omode[k]; r = (orate[k] == "-" ? "" : orate[k]) }
+            x = oextra[k]
+        }
+        print name, primary, (cur == "" ? "-" : cur), cx + 0, cy + 0, (m == "" ? "-" : m), (r == "" ? "-" : r), (x == "" ? "-" : x)
         name = ""
     }
     /^[^ \t]/ {
@@ -88,34 +118,57 @@ MONITORS=$(printf '%s\n' "$XRANDR_OUTPUT" | awk -v ovf="$OVERRIDES" '
     END { flush() }
 ')
 
-# Put the primary output first, keep xrandr order for the rest
-MONITORS=$(printf '%s\n' "$MONITORS" | awk 'NF { if ($2 == 1) print; else rest = rest $0 "\n" } END { printf "%s", rest }')
-set -- $(printf '%s\n' "$MONITORS" | awk 'NF { print $1 }')
-NUM_MONITORS=$#
-
 # Outputs that are gone but still hold a CRTC (e.g. an unplugged screen).
 # Checking the geometry first avoids one xrandr call per empty VM output.
 OFF_ARGS=$(printf '%s\n' "$XRANDR_OUTPUT" |
     awk '$2 == "disconnected" && $3 ~ /^[0-9]+x[0-9]+\+/ { printf "--output %s --off ", $1 }')
 
+# Screens switched off in monitors.conf (never all of them)
+is_off='$8 ~ /(^|,)--off(,|$)/'
+if printf '%s\n' "$MONITORS" | awk "NF && !($is_off) { f = 1 } END { exit !f }"; then
+    for o in $(printf '%s\n' "$MONITORS" | awk "NF && $is_off { print \$1 }"); do
+        OFF_ARGS="$OFF_ARGS--output $o --off "
+    done
+    MONITORS=$(printf '%s\n' "$MONITORS" | awk "NF && !($is_off)")
+fi
+
+# Put the primary output first, keep xrandr order for the rest
+MONITORS=$(printf '%s\n' "$MONITORS" | awk 'NF { if ($2 == 1) print; else rest = rest $0 "\n" } END { printf "%s", rest }')
+set -- $(printf '%s\n' "$MONITORS" | awk 'NF { print $1 }')
+NUM_MONITORS=$#
+
 field() {   # field <output> <n>
     printf '%s\n' "$MONITORS" | awk -v m="$1" -v n="$2" '$1 == m { print $n; exit }'
 }
 
-# xrandr arguments for one output: mode/rate + placement
+PLACE_RE='--(pos|left-of|right-of|above|below|same-as) [^ ]+'
+
+# xrandr arguments for one output: mode/rate + placement + saved options
 out_args() {   # out_args <output> <placement...>
     mon=$1; shift
     mode=$(field "$mon" 6); rate=$(field "$mon" 7)
+    extra=$(field "$mon" 8 | tr ',' ' ' | sed -E 's/(^| )--off( |$)/ /')
+    [ "$extra" = "-" ] && extra=""
     a="--output $mon"
     if [ "$mode" = "-" ]; then a="$a --auto"; else a="$a --mode $mode"; fi
     [ "$rate" != "-" ] && a="$a --rate $rate"
-    echo "$a $*"
+    place="$*"
+    if printf '%s\n' "$extra" | grep -Eq -- "$PLACE_RE"; then
+        # the saved placement wins, unless it points at a screen that is gone
+        ref=$(printf '%s\n' "$extra" | grep -Eo -- "$PLACE_RE" | awk '$1 != "--pos" { print $2 }')
+        if [ -n "$ref" ] && [ "$(field "$ref" 1)" != "$ref" ] || [ "$ref" = "$mon" ]; then
+            extra=$(printf '%s\n' "$extra" | sed -E "s/$PLACE_RE//g")
+        else
+            place=$(printf '%s\n' "$place" | sed -E "s/$PLACE_RE//g")
+        fi
+    fi
+    echo "$a $place $extra"
 }
 
 # Nothing to do when a single screen is already primary, at 0,0, in the
 # wanted mode (a modeset makes the screen flash and bspwm re-layout).
 already_ok() {
-    [ "$NUM_MONITORS" -eq 1 ] && [ -z "$OFF_ARGS" ] || return 1
+    [ "$NUM_MONITORS" -eq 1 ] && [ -z "$OFF_ARGS" ] && [ "$(field "$1" 8)" = "-" ] || return 1
     [ "$(field "$1" 2)" = 1 ] && [ "$(field "$1" 3)" = "$(field "$1" 6)" ] &&
         [ "$(field "$1" 4)" = 0 ] && [ "$(field "$1" 5)" = 0 ]
 }
@@ -164,3 +217,16 @@ case $NUM_MONITORS in
         echo "Warning: Configuration not supported for more than 4 monitors"
         ;;
 esac
+
+# Screen power / DPI (RiceEditor -> Display). Idle LOCK is BetterLock's
+# job (xset s + xss-lock); this is only when the monitor powers off.
+grep -E '^[[:space:]]*@(dpms|dpi)[[:space:]]' "$OVERRIDES" 2>/dev/null |
+while read -r key val _; do
+    case $key in
+        @dpms)
+            if [ "$val" = off ] || [ "$val" = 0 ]; then xset -dpms
+            else xset +dpms dpms "$val" "$val" "$val"; fi ;;
+        @dpi)
+            printf 'Xft.dpi: %s\n' "$val" | xrdb -merge ;;
+    esac
+done
