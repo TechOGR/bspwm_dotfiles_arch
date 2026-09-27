@@ -148,8 +148,69 @@ def wall_thumb(path):
     return thumb if os.path.exists(thumb) else ''
 
 
-def backdrop(W, H, pal, darken=0.62):
-    """Full-screen layer: blurred current wallpaper, tinted + vignette."""
+# ───────────────────────────────────────────────────── theme styles
+def theme_style():
+    """The style windows wear (WIN_SKIN, else the theme / bar skin), or None."""
+    try:
+        import re
+        import wscard
+    except Exception:
+        return None
+    try:
+        m = re.search(r'^WIN_SKIN=["\']?(\w*)', open(theme_cfg()).read(), re.M)
+        if m and m.group(1) in wscard.CARDS:
+            return m.group(1)
+    except OSError:
+        pass
+    return wscard.style_of()
+
+
+def paint_theme_panel(cr, W, H, pal, inset=4, scale=0.55):
+    """A popup's panel in the theme style: its scene under a readable veil,
+    framed by the style's card. False when no style is set."""
+    style = theme_style()
+    if not style:
+        return False
+    import wscard
+    import wsback
+    x, y, w, h = inset, inset, W - 2 * inset, H - 2 * inset
+    if w < 20 or h < 20:
+        return False
+    cr.save()
+    wscard.shape(cr, style, x, y, w, h, scale)
+    cr.clip()
+    cr.set_source_surface(wsback.render(style, int(w), int(h), wscard.ws.tint_target('windows')), x, y)
+    cr.paint()
+    cr.set_source_rgba(*hex_rgb(pal['bg']), 0.5)
+    cr.paint()
+    cr.restore()
+    wscard.paint_card(cr, style, x, y, w, h, scale, part='windows')
+    return True
+
+
+def backdrop(W, H, pal, darken=0.62, themed=True):
+    """Full-screen layer: blurred current wallpaper, tinted + vignette; in
+    the theme's scene and frame when a style is set (KeyHelp, TileLayout,
+    PowerMenu)."""
+    surf = _backdrop(W, H, pal, darken)
+    style = theme_style() if themed else None
+    if style:
+        try:
+            import wscard
+            import wsback
+            cr = cairo.Context(surf)
+            cr.set_source_surface(wsback.render(style, W, H, wscard.ws.tint_target('windows')), 0, 0)
+            cr.paint_with_alpha(0.55)
+            cr.set_source_rgba(*hex_rgb(pal['bg']), darken * 0.55)
+            cr.paint()
+            m = min(W, H) * 0.025
+            wscard.paint_card(cr, style, m, m, W - 2 * m, H - 2 * m, 1.0, part='windows')
+        except Exception:
+            pass
+    return surf
+
+
+def _backdrop(W, H, pal, darken=0.62):
     surf = cairo.ImageSurface(cairo.FORMAT_RGB24, W, H)
     cr = cairo.Context(surf)
     bg = hex_rgb(pal['bg'])
