@@ -1729,6 +1729,11 @@ class RiceEditor(Gtk.Window):
                 self.header.set_section(icon, title.upper(), sub)
         if key == 'lockscreen':
             self.lock_prev.reload()
+            if not self.loading:
+                # re-render when the theme changed (cached: instant otherwise)
+                run_bg(lambda: subprocess.run(['ScreenLocker', '--prepare'], stdout=subprocess.DEVNULL,
+                                              stderr=subprocess.DEVNULL, timeout=120),
+                       lambda _r: self.lock_prev.reload())
         if key == 'loginlock' and not self.loading:
             if self.bl_preview_stale():
                 self.bl_render()

@@ -544,3 +544,39 @@ def paint_field(cr, style, x, y, w, h, s):
     cr.set_line_width(1.6 * s)
     cr.set_source(neon_grad(x, x + w, [a, b], 0.95))
     cr.stroke()
+
+
+# ═══════════════════════════════════════════ command line (ScreenLocker)
+def panel(src, dst, x, y, w, h, s, bg, style):
+    """Frosted panel in the style's shape + its frame, onto an image."""
+    from PIL import Image, ImageFilter
+    img = Image.open(src).convert('RGB')
+    region = img.crop((x, y, x + w, y + h))
+    small = region.resize((max(1, w // 4), max(1, h // 4)), Image.BILINEAR)
+    frost = small.filter(ImageFilter.GaussianBlur(6)).resize((w, h), Image.BICUBIC)
+    frost = Image.blend(frost, Image.new('RGB', (w, h), bg), 0.62)
+    m = card_mask(style, w, h, s)
+    m.flush()
+    mask = Image.frombuffer('L', (w, h), bytes(m.get_data()), 'raw', 'L', m.get_stride(), 1)
+    img.paste(frost, (x, y), mask)
+    over = cairo.ImageSurface(cairo.FORMAT_ARGB32, *img.size)
+    paint_card(cairo.Context(over), style, x, y, w, h, s)
+    over.flush()
+    ov = Image.frombuffer('RGBA', img.size, bytes(over.get_data()), 'raw', 'BGRa', over.get_stride(), 1)
+    img.paste(ov, (0, 0), ov)
+    img.save(dst, compress_level=1)
+
+
+if __name__ == '__main__':
+    import sys
+    args = sys.argv[1:]
+    if args[:1] == ['style']:
+        print(style_of() or '')
+    elif args[:1] == ['panel'] and len(args) == 10:
+        src, dst, x, y, w, h, s, bg, style = args[1:]
+        h_ = bg.lstrip('#')
+        panel(src, dst, int(x), int(y), int(w), int(h), float(s),
+              tuple(int(h_[i:i + 2], 16) for i in (0, 2, 4)), style)
+    else:
+        print('wscard.py style | panel SRC DST X Y W H SCALE BG STYLE', file=sys.stderr)
+        sys.exit(1)

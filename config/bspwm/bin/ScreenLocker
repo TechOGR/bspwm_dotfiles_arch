@@ -42,6 +42,11 @@ LOCK_GLASS=${LOCK_GLASS:-true}        # frosted glass panel true|false
 LOCK_CLOCK=${LOCK_CLOCK:-%H:%M}       # strftime clock format
 LOCK_GREETER=${LOCK_GREETER:-Type the password to Unlock}
 
+# The theme's style (RiceEditor -> Themes / bar skin / workspaces): the glass
+# panel is then drawn by lib/wscard.py, like the login lock card
+WSCARD="$HOME/.config/bspwm/lib/wscard.py"
+LOCK_STYLE=$(python3 "$WSCARD" style 2>/dev/null)
+
 save_current_keymap() {
     setxkbmap -query | awk '/layout:/ {print $2}' > "$TEMP_LAYOUT"
     setxkbmap -query | awk '/options:/ {print $2}' > "${TEMP_LAYOUT}_options"
@@ -121,9 +126,10 @@ hex_rgba() { # "#rrggbb" alpha(0-1) -> rgba(r,g,b,a)
 # Render (or reuse) the lock image for a wallpaper. Prints its path.
 render_lock_image() {
     local wall=$1 key out tmp
-    # "v2": bump when the render below changes so old caches are not reused
-    key=$(printf 'v2|%s|%s|%s|%s|%s|%s|%s|%s|%s' "$wall" "$(stat -c %Y "$wall")" \
-        "$resolution" "$LOCK_BLUR" "$LOCK_DIM" "$LOCK_POS" "$LOCK_GLASS" "$L_BG" "$L_ACCENT" | md5sum)
+    # "v4": bump when the render below changes so old caches are not reused
+    key=$(printf 'v4|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s' "$wall" "$(stat -c %Y "$wall")" \
+        "$resolution" "$LOCK_BLUR" "$LOCK_DIM" "$LOCK_POS" "$LOCK_GLASS" "$L_BG" "$L_ACCENT" \
+        "$LOCK_STYLE" | md5sum)
     out="$CACHE_DIR/lock-${key%% *}.png"
 
     if [ ! -f "$out" ]; then
@@ -132,7 +138,16 @@ render_lock_image() {
         [ "$LOCK_BLUR" -gt 0 ] 2>/dev/null && set -- "$@" -blur "0x$LOCK_BLUR"
         [ "$LOCK_DIM" -gt 0 ] 2>/dev/null && set -- "$@" -fill black -colorize "$LOCK_DIM%"
 
-        if [ "$LOCK_GLASS" = "true" ]; then
+        if [ "$LOCK_GLASS" = "true" ] && [ -n "$LOCK_STYLE" ]; then
+            # themed panel: wallpaper first, then wscard frosts + frames it
+            magick "$@" -define png:compression-level=1 "$tmp" &&
+                python3 "$WSCARD" panel "$tmp" "$tmp" "$PANEL_X" "$PANEL_Y" "$PANEL_W" "$PANEL_H" \
+                    "$SCALE" "$L_BG" "$LOCK_STYLE" && mv -f "$tmp" "$out" || {
+                rm -f "$tmp"
+                return 1
+            }
+            set --
+        elif [ "$LOCK_GLASS" = "true" ]; then
             local geo="${PANEL_W}x${PANEL_H}+${PANEL_X}+${PANEL_Y}"
             local rect="roundrectangle 0,0,$((PANEL_W - 1)),$((PANEL_H - 1)),$PANEL_R,$PANEL_R"
             local x2=$((PANEL_X + PANEL_W - 1)) y2=$((PANEL_Y + PANEL_H - 1))
@@ -152,10 +167,12 @@ render_lock_image() {
                 -draw "roundrectangle $((PANEL_X + PANEL_W / 2 - bar / 2)),$((y2 - 2)),$((PANEL_X + PANEL_W / 2 + bar / 2)),$((y2 + 1)),2,2"
         fi
 
-        magick "$@" -define png:compression-level=1 "$tmp" && mv -f "$tmp" "$out" || {
-            rm -f "$tmp"
-            return 1
-        }
+        if [ $# -gt 0 ]; then
+            magick "$@" -define png:compression-level=1 "$tmp" && mv -f "$tmp" "$out" || {
+                rm -f "$tmp"
+                return 1
+            }
+        fi
         # Keep only the most recent renders
         ls -1t "$CACHE_DIR"/lock-*.png 2>/dev/null | tail -n +6 | xargs -r rm -f
     fi
