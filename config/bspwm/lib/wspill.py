@@ -2,9 +2,10 @@
 # Author:  TechOGR
 # Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
 #
-# wspill - the workspace "pill" of the bar, drawn with cairo in ten
-# styles (Glassmorphism, Neon Cyberpunk, Minimal Dark, Gradient Pop,
-# Pixel, macOS, Liquid, HUD, Fire, Nature). Shared by bin/WorkspacePill
+# wspill - the workspace "pill" of the bar, drawn with cairo in many
+# styles (Glassmorphism, Neon Cyberpunk, Minimal Dark, Pixel, Liquid,
+# HUD, Fire, Nature, ... and lib/wsthree.py: Storm, Venom, Butterflies,
+# Snakes, plus the themed icons of every style). Shared by bin/WorkspacePill
 # (the live widget over polybar) and RiceEditor (the style previews), so
 # a preview is exactly what the bar shows.
 #   focused desktop = pac-man · occupied = ghost · empty = dot
@@ -27,9 +28,7 @@ STYLES = [
     ('glass', 'Glassmorphism', 'modern and clean'),
     ('cyber', 'Neon Cyberpunk', 'futuristic and striking'),
     ('minimal', 'Minimal Dark', 'elegant and discreet'),
-    ('gradient', 'Gradient Pop', 'modern and creative'),
     ('pixel', 'Pixel', 'retro and classic'),
-    ('macos', 'macOS', 'simple and elegant'),
     ('liquid', 'Liquid', 'fluid and original'),
     ('hud', 'HUD', 'tech and professional'),
     ('fire', 'Fire', 'intense and different'),
@@ -57,8 +56,8 @@ import colorsys  # noqa: E402
 
 _TINT = [None]   # (native hue, target hue, target saturation, target rgb)
 NATIVE = {
-    'glass': '#6fa8ff', 'cyber': '#19e6ff', 'minimal': '#a9c2ff', 'gradient': '#6a3cf5',
-    'pixel': '#1f5bff', 'macos': '#5b8cff', 'liquid': '#3b6bff', 'hud': '#2d8cff',
+    'glass': '#6fa8ff', 'cyber': '#19e6ff', 'minimal': '#a9c2ff',
+    'pixel': '#1f5bff', 'liquid': '#3b6bff', 'hud': '#2d8cff',
     'fire': '#ff6a00', 'nature': '#2ee06f', 'sketch': '#d6d6d6', 'crystal': '#2f8cff',
     'lava': '#ff6a00', 'neon': '#2f6bff', 'holo': '#6a3cff',
 }
@@ -156,9 +155,7 @@ COLORS = {
     'glass': ('#7fdcff', '#ffa3c8', ['#4fb4ff', '#3f9bff', '#8f7dff', '#e98bff']),
     'cyber': ('#28d9ff', '#ff2bd6', ['#a24dff', '#b43cff', '#d23cf0', '#ff2bd6']),
     'minimal': ('#a9c8ff', '#efe3cf', ['#9fb8ff', '#a9c2ff', '#b5c8ff', '#e8ecff']),
-    'gradient': ('#6ff0ff', '#ffb8dc', ['#8fb4ff', '#a3adff', '#d6a6ff', '#ffe0f4']),
     'pixel': ('#1ea0ff', '#ffd21e', ['#ffffff', '#ffffff', '#ffffff', '#ffffff']),
-    'macos': ('#c9f3ff', '#ffc2cf', ['#3d8bff', '#3f6dff', '#9c5cff', '#ff8ad8']),
     'liquid': ('#0b5cff', '#ff8fd0', ['#1235e0', '#1a2fd8', '#3a24c8', '#ff7ad9']),
     'hud': ('#39d0ff', '#ffb3c7', ['#7fc6ff', '#8fd0ff', '#9fd8ff', '#ffe3f0']),
     'fire': ('#ff8a1f', '#ffb300', ['#ff9a2e', '#ff9a2e', '#ff9a2e', '#ffa53a']),
@@ -456,32 +453,6 @@ def frame_minimal(cr, m):
     cr.stroke()
 
 
-def frame_gradient(cr, m):
-    px, py, pw, ph = pill_rect(m)
-    path = lambda: rounded(cr, px, py, pw, ph, ph / 2)  # noqa: E731
-    for extra, a in ((12, 0.05), (7, 0.10), (3, 0.18)):
-        path()
-        cr.set_line_width(extra)
-        g = cairo.LinearGradient(px, 0, px + pw, 0)
-        g.add_color_stop_rgba(0, *rgb('#2f6bff'), a)
-        g.add_color_stop_rgba(1, *rgb('#e040fb'), a)
-        cr.set_source(g)
-        cr.stroke()
-    path()
-    g = cairo.LinearGradient(px, 0, px + pw, 0)
-    g.add_color_stop_rgb(0, *rgb('#2462ff'))
-    g.add_color_stop_rgb(0.5, *rgb('#6a3cf5'))
-    g.add_color_stop_rgb(1, *rgb('#d63cf5'))
-    cr.set_source(g)
-    cr.fill()
-    rounded(cr, px + 3, py + 2, pw - 6, ph * 0.46, ph * 0.23)
-    gl = cairo.LinearGradient(0, py, 0, py + ph * 0.5)
-    gl.add_color_stop_rgba(0, 1, 1, 1, 0.28)
-    gl.add_color_stop_rgba(1, 1, 1, 1, 0)
-    cr.set_source(gl)
-    cr.fill()
-
-
 def frame_pixel(cr, m):
     px, py, pw, ph = pill_rect(m)
     W, cy = m['win_w'], m['win_h'] / 2
@@ -532,33 +503,6 @@ def frame_pixel(cr, m):
             cr.rectangle(x, yy, q, q)
             cr.set_source_rgba(*light, max(0.08, 0.7 - i * 0.09))
             cr.fill()
-
-
-def frame_macos(cr, m):
-    px, py, pw, ph = pill_rect(m)
-    W, cy = m['win_w'], m['win_h'] / 2
-    line = rgb('#4a5272')
-    hline(cr, 0, px - 4, cy, line, 0, 0.6)
-    hline(cr, px + pw + 4, W, cy, line, 0.6, 0)
-    for i, a in enumerate((0.10, 0.07, 0.04)):
-        rounded(cr, px - i, py + 2 + i, pw + 2 * i, ph, ph / 2 + i)
-        cr.set_source_rgba(0, 0, 0, a)
-        cr.fill()
-    rounded(cr, px, py, pw, ph, ph / 2)
-    g = cairo.LinearGradient(0, py, 0, py + ph)
-    g.add_color_stop_rgba(0, *rgb('#454d6c'), 0.92)
-    g.add_color_stop_rgba(1, *rgb('#2a3048'), 0.92)
-    cr.set_source(g)
-    cr.fill_preserve()
-    cr.set_source_rgba(1, 1, 1, 0.22)
-    cr.set_line_width(1)
-    cr.stroke()
-    rounded(cr, px + 1.5, py + 1.2, pw - 3, ph * 0.5, ph * 0.25)
-    gl = cairo.LinearGradient(0, py, 0, py + ph * 0.5)
-    gl.add_color_stop_rgba(0, 1, 1, 1, 0.10)
-    gl.add_color_stop_rgba(1, 1, 1, 1, 0)
-    cr.set_source(gl)
-    cr.fill()
 
 
 def frame_liquid(cr, m):
@@ -787,9 +731,9 @@ def frame_nature(cr, m):
 
 
 FRAMES = {'glass': frame_glass, 'cyber': frame_cyber, 'minimal': frame_minimal,
-          'gradient': frame_gradient, 'pixel': frame_pixel, 'macos': frame_macos,
+          'pixel': frame_pixel,
           'liquid': frame_liquid, 'hud': frame_hud, 'fire': frame_fire, 'nature': frame_nature}
-GLOW = {'glass': 0.35, 'cyber': 0.5, 'gradient': 0.3, 'macos': 0.25, 'liquid': 0.3, 'hud': 0.45,
+GLOW = {'glass': 0.35, 'cyber': 0.5, 'liquid': 0.3, 'hud': 0.45,
         'fire': 0.5, 'nature': 0.45, 'minimal': 0.12, 'pixel': 0}
 
 
@@ -862,7 +806,7 @@ def paint(cr, style, m, states, pal=None):
         elif st in ('occupied', 'urgent'):
             ghost(cr, x, y, s * 0.95, c)
         else:
-            dot(cr, x, y, s * (1.1 if style in ('gradient', 'macos', 'liquid') else 0.95), c)
+            dot(cr, x, y, s * (1.1 if style == 'liquid' else 0.95), c)
     return centers
 
 
@@ -992,31 +936,6 @@ def bar_minimal(cr, x, y, w, h, cy):
     cr.stroke()
 
 
-def bar_gradient(cr, x, y, w, h, cy):
-    path = lambda: _capsule(cr, x, y, w, h)  # noqa: E731
-    for extra, a in ((10, 0.05), (5, 0.10)):
-        path()
-        cr.set_line_width(extra)
-        g = cairo.LinearGradient(x, 0, x + w, 0)
-        g.add_color_stop_rgba(0, *rgb('#2f6bff'), a)
-        g.add_color_stop_rgba(1, *rgb('#e040fb'), a)
-        cr.set_source(g)
-        cr.stroke()
-    path()
-    g = cairo.LinearGradient(x, 0, x + w, 0)
-    g.add_color_stop_rgba(0, *rgb('#1b3bc8'), 0.94)
-    g.add_color_stop_rgba(0.5, *rgb('#4a22b8'), 0.94)
-    g.add_color_stop_rgba(1, *rgb('#9a22b8'), 0.94)
-    cr.set_source(g)
-    cr.fill()
-    rounded(cr, x + 4, y + 2, w - 8, h * 0.45, h * 0.22)
-    gl = cairo.LinearGradient(0, y, 0, y + h * 0.5)
-    gl.add_color_stop_rgba(0, 1, 1, 1, 0.18)
-    gl.add_color_stop_rgba(1, 1, 1, 1, 0)
-    cr.set_source(gl)
-    cr.fill()
-
-
 def bar_pixel(cr, x, y, w, h, cy):
     q = max(2, round(h / 10))
     x0, y0 = round(x), round(y)
@@ -1051,28 +970,6 @@ def bar_pixel(cr, x, y, w, h, cy):
     for i in range(int(ww / (6 * q))):
         cr.rectangle(x0 + 4 * q + i * 6 * q, y0 + hh - 3 * q, q, q)
     cr.set_source_rgba(*rgb('#1f5bff'), 0.35)
-    cr.fill()
-
-
-def bar_macos(cr, x, y, w, h, cy):
-    for i, a in enumerate((0.12, 0.08, 0.05, 0.03)):
-        _capsule(cr, x - i, y + 2 + i, w + 2 * i, h)
-        cr.set_source_rgba(0, 0, 0, a)
-        cr.fill()
-    _capsule(cr, x, y, w, h)
-    g = cairo.LinearGradient(0, y, 0, y + h)
-    g.add_color_stop_rgba(0, *rgb('#3c4462'), 0.88)
-    g.add_color_stop_rgba(1, *rgb('#252a40'), 0.88)
-    cr.set_source(g)
-    cr.fill_preserve()
-    cr.set_source_rgba(1, 1, 1, 0.20)
-    cr.set_line_width(1)
-    cr.stroke()
-    rounded(cr, x + 2, y + 1.2, w - 4, h * 0.5, h * 0.25)
-    gl = cairo.LinearGradient(0, y, 0, y + h * 0.5)
-    gl.add_color_stop_rgba(0, 1, 1, 1, 0.08)
-    gl.add_color_stop_rgba(1, 1, 1, 1, 0)
-    cr.set_source(gl)
     cr.fill()
 
 
@@ -1219,8 +1116,8 @@ def bar_nature(cr, x, y, w, h, cy):
         vx += rnd.uniform(60, 120)
 
 
-BAR_SKINS = {'glass': bar_glass, 'cyber': bar_cyber, 'minimal': bar_minimal, 'gradient': bar_gradient,
-             'pixel': bar_pixel, 'macos': bar_macos, 'liquid': bar_liquid, 'hud': bar_hud,
+BAR_SKINS = {'glass': bar_glass, 'cyber': bar_cyber, 'minimal': bar_minimal,
+             'pixel': bar_pixel, 'liquid': bar_liquid, 'hud': bar_hud,
              'fire': bar_fire, 'nature': bar_nature}
 
 
@@ -1980,13 +1877,15 @@ BAR_SKINS.update({
     'glass': _with_ends(bar_glass, ends_glass),
     'pixel': _with_ends(bar_pixel, ends_pixel),
     'minimal': _with_ends(bar_minimal, _ends_line('#3a4058', 24)),
-    'macos': _with_ends(bar_macos, _ends_line('#4a5272', 24)),
 })
 
 # Minimum side margin of the bar for each skin, so what it draws past the
 # ends (lines, leaves, flames, droplets, rocks, orbits) stays on screen.
 BAR_MARGIN = {
-    'glass': 36, 'cyber': 46, 'minimal': 28, 'gradient': 14, 'pixel': 36, 'macos': 28,
+    'glass': 36, 'cyber': 46, 'minimal': 28, 'pixel': 36,
     'liquid': 30, 'hud': 46, 'fire': 34, 'nature': 52, 'sketch': 36, 'crystal': 16,
     'lava': 38, 'neon': 16, 'holo': 42,
 }
+
+# the third set of styles and the themed icons of all of them
+import wsthree  # noqa: E402,F401

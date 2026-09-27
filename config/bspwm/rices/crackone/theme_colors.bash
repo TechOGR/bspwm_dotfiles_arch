@@ -224,31 +224,6 @@ cargar_minimal_dark() {
     gtk_themeb="TokyoNight-zk"
 }
 
-# Gradient Pop (modern and creative) -- RiceEditor -> Themes
-cargar_gradient_pop() {
-    bg="#120f2e"
-    fg="#f5edff"
-    black="#1b1640"
-    red="#ff5c9a"
-    green="#5ef0c0"
-    yellow="#ffcf6b"
-    blue="#4f7dff"
-    magenta="#d63cf5"
-    cyan="#5fe1ff"
-    white="#d6ccff"
-    blackb="#453a7a"
-    redb="#ff5c9a"
-    greenb="#5ef0c0"
-    yellowb="#ffcf6b"
-    blueb="#4f7dff"
-    magentab="#d63cf5"
-    cyanb="#5fe1ff"
-    whiteb="#f5edff"
-    accent_color="#231c55"
-    arch_icon="#b06bff"
-    gtk_themeb="TokyoNight-zk"
-}
-
 # Pixel (retro and classic) -- RiceEditor -> Themes
 cargar_pixel_retro() {
     bg="#050a1f"
@@ -271,31 +246,6 @@ cargar_pixel_retro() {
     whiteb="#f2f5ff"
     accent_color="#0c1a4d"
     arch_icon="#ffd21e"
-    gtk_themeb="TokyoNight-zk"
-}
-
-# macOS (simple and elegant) -- RiceEditor -> Themes
-cargar_macos() {
-    bg="#1c1f2b"
-    fg="#eceff7"
-    black="#252a3a"
-    red="#ff6b6b"
-    green="#6cd48a"
-    yellow="#f5c86b"
-    blue="#5b8cff"
-    magenta="#b58cff"
-    cyan="#7fd4ff"
-    white="#c4c9d8"
-    blackb="#4a5272"
-    redb="#ff6b6b"
-    greenb="#6cd48a"
-    yellowb="#f5c86b"
-    blueb="#5b8cff"
-    magentab="#b58cff"
-    cyanb="#7fd4ff"
-    whiteb="#eceff7"
-    accent_color="#2a3048"
-    arch_icon="#c9f3ff"
     gtk_themeb="TokyoNight-zk"
 }
 
@@ -521,5 +471,105 @@ cargar_holographic() {
     whiteb="#f4efff"
     accent_color="#1a1545"
     arch_icon="#ff8ae0"
+    gtk_themeb="TokyoNight-zk"
+}
+
+# Storm (lightning, pure energy) -- RiceEditor -> Themes
+cargar_storm() {
+    bg="#060b1c"
+    fg="#e6f0ff"
+    black="#0a1230"
+    red="#ff5a7a"
+    green="#5affc8"
+    yellow="#fff27a"
+    blue="#3d8bff"
+    magenta="#9f7bff"
+    cyan="#7fd8ff"
+    white="#cfe0ff"
+    blackb="#2a3a70"
+    redb="#ff5a7a"
+    greenb="#5affc8"
+    yellowb="#fff27a"
+    blueb="#3d8bff"
+    magentab="#9f7bff"
+    cyanb="#7fd8ff"
+    whiteb="#e6f0ff"
+    accent_color="#0e1a40"
+    arch_icon="#7fd8ff"
+    gtk_themeb="TokyoNight-zk"
+}
+
+# Venom (moving shadows, venom) -- RiceEditor -> Themes
+cargar_venom() {
+    bg="#0a0405"
+    fg="#ffe6e6"
+    black="#140608"
+    red="#ff1a2e"
+    green="#ff8a5a"
+    yellow="#ffb04a"
+    blue="#ff2a3a"
+    magenta="#d0103a"
+    cyan="#ff6a6a"
+    white="#e8c0c0"
+    blackb="#3a1014"
+    redb="#ff1a2e"
+    greenb="#ff8a5a"
+    yellowb="#ffb04a"
+    blueb="#ff2a3a"
+    magentab="#d0103a"
+    cyanb="#ff6a6a"
+    whiteb="#ffe6e6"
+    accent_color="#1c0709"
+    arch_icon="#ff2a3a"
+    gtk_themeb="TokyoNight-zk"
+}
+
+# Butterflies (delicate, free, magic) -- RiceEditor -> Themes
+cargar_butterflies() {
+    bg="#120a24"
+    fg="#fbeaff"
+    black="#1a0f33"
+    red="#ff6ab0"
+    green="#9affd0"
+    yellow="#ffe08a"
+    blue="#c77dff"
+    magenta="#ff7ae0"
+    cyan="#9fb8ff"
+    white="#e8d6ff"
+    blackb="#4a2a70"
+    redb="#ff6ab0"
+    greenb="#9affd0"
+    yellowb="#ffe08a"
+    blueb="#c77dff"
+    magentab="#ff7ae0"
+    cyanb="#9fb8ff"
+    whiteb="#fbeaff"
+    accent_color="#22123f"
+    arch_icon="#ff9ae8"
+    gtk_themeb="TokyoNight-zk"
+}
+
+# Snakes (power, mystery, scales) -- RiceEditor -> Themes
+cargar_snakes() {
+    bg="#040f06"
+    fg="#e8ffe0"
+    black="#08180a"
+    red="#ff6a4a"
+    green="#7dff2e"
+    yellow="#e8ff5a"
+    blue="#5aff7a"
+    magenta="#b8ff3a"
+    cyan="#3affc8"
+    white="#c8f0c0"
+    blackb="#1f4a22"
+    redb="#ff6a4a"
+    greenb="#7dff2e"
+    yellowb="#e8ff5a"
+    blueb="#5aff7a"
+    magentab="#b8ff3a"
+    cyanb="#3affc8"
+    whiteb="#e8ffe0"
+    accent_color="#0a2410"
+    arch_icon="#9dff3a"
     gtk_themeb="TokyoNight-zk"
 }

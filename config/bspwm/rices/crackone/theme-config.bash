@@ -24,11 +24,7 @@ cargar_tokyo_night
 
 #cargar_minimal_dark
 
-#cargar_gradient_pop
-
 #cargar_pixel_retro
-
-#cargar_macos
 
 #cargar_liquid
 
@@ -47,6 +43,14 @@ cargar_tokyo_night
 #cargar_solid_neon
 
 #cargar_holographic
+
+#cargar_storm
+
+#cargar_venom
+
+#cargar_butterflies
+
+#cargar_snakes
 
 
 # Bspwm options

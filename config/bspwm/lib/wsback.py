@@ -22,7 +22,7 @@ import cairo
 import wspill as ws
 from wspill import PI, rgb
 
-VERSION = 2
+VERSION = 3
 CACHE = os.path.join(os.path.expanduser('~/.cache'), 'rice-backdrops')
 
 
@@ -595,27 +595,6 @@ def bg_crystal(cr, w, h, rnd):
         ws.sparkle(cr, rnd.uniform(0, w), rnd.uniform(0, h), rnd.uniform(3, 8), (1, 1, 1), 0.45)
 
 
-def bg_gradient(cr, w, h, rnd):
-    g = cairo.LinearGradient(0, 0, w, h)
-    for t, col in ((0, '#10236a'), (0.5, '#2a1466'), (1, '#4a1060')):
-        g.add_color_stop_rgb(t, *rgb(col))
-    cr.set_source(g)
-    cr.paint()
-    for _ in range(6):   # mesh-like colour blobs
-        halo(cr, rnd.uniform(0, w), rnd.uniform(0, h), rnd.uniform(0.35, 0.6) * max(w, h),
-             rgb(rnd.choice(['#2f6bff', '#8b3dff', '#e040fb', '#5fe1ff'])), rnd.uniform(0.15, 0.3))
-    for k in range(5):   # silky ribbons
-        y0 = h * rnd.uniform(0.1, 0.9)
-        cr.move_to(-20, y0)
-        cr.curve_to(w * 0.3, y0 - 120, w * 0.6, y0 + 120, w + 20, y0 + rnd.uniform(-60, 60))
-        cr.set_line_width(rnd.uniform(20, 60))
-        cr.set_source_rgba(1, 1, 1, 0.025)
-        cr.stroke()
-    grain(cr, w, h, 0.10, seed=51)
-    reading_shade(cr, w, h, 0.36)
-    vignette(cr, w, h, 0.4)
-
-
 def bg_neon(cr, w, h, rnd):
     base(cr, w, h, ['#0b0e26', '#080a1c', '#05060f'])
     bw, bh = 64, 26   # a dark brick wall
@@ -648,26 +627,6 @@ def bg_neon(cr, w, h, rnd):
         halo(cr, w * fx, h * fy, max(w, h) * 0.45, rgb(col), 0.14)
     reading_shade(cr, w, h, 0.4)
     vignette(cr, w, h, 0.45)
-
-
-def bg_macos(cr, w, h, rnd):
-    base(cr, w, h, ['#2a3150', '#20253a', '#161a28'])
-    for k, (col, a) in enumerate((('#5b8cff', 0.20), ('#b58cff', 0.16), ('#ff8ad8', 0.12))):   # Big Sur waves
-        y0 = h * (0.45 + k * 0.15)
-        cr.move_to(0, h)
-        cr.line_to(0, y0)
-        cr.curve_to(w * 0.3, y0 - 90, w * 0.6, y0 + 80, w, y0 - 40)
-        cr.line_to(w, h)
-        cr.close_path()
-        g = cairo.LinearGradient(0, y0 - 90, 0, h)
-        g.add_color_stop_rgba(0, *rgb(col), a)
-        g.add_color_stop_rgba(1, *rgb(col), a * 0.3)
-        cr.set_source(g)
-        cr.fill()
-    halo(cr, w / 2, 0, w * 0.7, (1, 1, 1), 0.06)
-    grain(cr, w, h, 0.06, seed=71)
-    reading_shade(cr, w, h, 0.3)
-    vignette(cr, w, h, 0.35)
 
 
 def bg_minimal(cr, w, h, rnd):
@@ -729,8 +688,120 @@ def bg_sketch(cr, w, h, rnd):
 
 SCENES = {'lava': bg_lava, 'liquid': bg_liquid, 'nature': bg_nature, 'fire': bg_fire, 'hud': bg_hud,
           'cyber': bg_cyber, 'neon': bg_neon, 'glass': bg_glass, 'crystal': bg_crystal,
-          'gradient': bg_gradient, 'pixel': bg_pixel, 'macos': bg_macos, 'minimal': bg_minimal,
+          'pixel': bg_pixel, 'minimal': bg_minimal,
           'sketch': bg_sketch, 'holo': bg_holo}
+
+
+# ─────────────────────────────── Storm, Venom, Butterflies, Snakes
+def bg_storm(cr, w, h, rnd):
+    import wsthree as w3
+    base(cr, w, h, ['#0c1636', '#070d24', '#03060f'])
+    for _ in range(int(w * h / 40000) + 6):   # heavy clouds, lit from inside
+        cx, cy = rnd.uniform(-0.1, 1.1) * w, rnd.uniform(-0.15, 0.35) * h
+        halo(cr, cx, cy, rnd.uniform(80, 240), rgb(rnd.choice(('#1a2a5a', '#22367a', '#101c40'))), 0.35)
+    for fx, fy in ((0.8, 0.12), (0.15, 0.2)):
+        halo(cr, w * fx, h * fy, max(w, h) * 0.35, rgb('#3d8bff'), 0.18)
+    cr.set_line_width(0.8)   # rain
+    for _ in range(int(w * h / 2500)):
+        x, y, L = rnd.uniform(0, w), rnd.uniform(0, h), rnd.uniform(8, 22)
+        cr.move_to(x, y)
+        cr.line_to(x - L * 0.25, y + L)
+    cr.set_source_rgba(*rgb('#9fc8ff'), 0.07)
+    cr.stroke()
+    blue = rgb('#4f9dff')
+    for fx in (0.08, 0.86, 0.62):   # the bolts, from the clouds down to the edges
+        x0 = w * fx
+        w3.bolt(cr, rnd, x0, -10, x0 + rnd.uniform(-0.15, 0.15) * w, h * rnd.uniform(0.55, 1.05),
+                2.2, blue, 4, 0.22, 0.75)
+    grain(cr, w, h, 0.08, seed=51)
+    reading_shade(cr, w, h, 0.45)
+    vignette(cr, w, h, 0.5)
+
+
+def bg_venom(cr, w, h, rnd):
+    import wsthree as w3
+    base(cr, w, h, ['#1a0508', '#0c0305', '#050102'])
+    halo(cr, w * 0.85, h * 0.2, max(w, h) * 0.45, rgb('#8a0014'), 0.22)
+    halo(cr, w * 0.1, h * 0.9, max(w, h) * 0.4, rgb('#6a0010'), 0.2)
+    red, black, rim = rgb('#ff1a2e'), rgb('#070203'), rgb('#ff3a3a')
+    for i in range(9):   # tentacles reaching in from the edges
+        edge = rnd.choice(('l', 'r', 't', 'b'))
+        if edge in 'lr':
+            bx, by = (-20 if edge == 'l' else w + 20), rnd.uniform(0, h)
+            ang = (0 if edge == 'l' else PI) + rnd.uniform(-0.6, 0.6)
+        else:
+            bx, by = rnd.uniform(0, w), (-20 if edge == 't' else h + 20)
+            ang = (PI / 2 if edge == 't' else -PI / 2) + rnd.uniform(-0.6, 0.6)
+        L = rnd.uniform(0.25, 0.5) * min(w, h) + 80
+        wd = rnd.uniform(14, 30)
+        pts = [(bx + math.cos(ang) * L * t / 39 + math.sin(t / 5 + i) * 18 * t / 39,
+                by + math.sin(ang) * L * t / 39 + math.cos(t / 4 + i) * 18 * t / 39) for t in range(40)]
+        w3.tube(cr, pts, [wd * (1 - t / 42) + 1 for t in range(40)], black, rim, red, 0.25)
+    for _ in range(int(w / 70)):   # drops of venom
+        w3.drip(cr, rnd.uniform(0, w), rnd.uniform(-5, 0), rnd.uniform(10, 50), rnd.uniform(1.5, 3.5), red, 0.6)
+    bokeh(cr, rnd, w, h, int(w * h / 30000), ['#ff1a2e', '#ff4a3a'], 2, 8, (0.05, 0.14))
+    grain(cr, w, h, 0.09, seed=53)
+    reading_shade(cr, w, h, 0.5)
+    vignette(cr, w, h, 0.55)
+
+
+def bg_butterfly(cr, w, h, rnd):
+    import wsthree as w3
+    base(cr, w, h, ['#241040', '#160a2c', '#0b0618'])
+    for fx, fy, col in ((0.9, 0.1, '#c77dff'), (0.1, 0.85, '#ff7ae0'), (0.5, 0.5, '#6a4dff')):
+        halo(cr, w * fx, h * fy, max(w, h) * 0.45, rgb(col), 0.14)
+    bokeh(cr, rnd, w, h, int(w * h / 12000), ['#ff9ae8', '#c77dff', '#9fb8ff'], 3, 16, (0.03, 0.1))
+    pink, violet, blue = rgb('#ff7ae0'), rgb('#b07cff'), rgb('#8fb8ff')
+    for (cx, cy, ang0) in ((0, 0, 0.6), (w, h, PI + 0.6), (w, 0, PI - 0.5), (0, h, -0.5)):   # glowing vines
+        for k in range(3):
+            pts, a, x, y = [], ang0 + rnd.uniform(-0.4, 0.4), cx, cy
+            for t in range(60):
+                a += math.sin(t / 6 + k) * 0.08
+                x += math.cos(a) * 6
+                y += math.sin(a) * 6
+                pts.append((x, y))
+            col = rnd.choice((pink, violet))
+            glow_line(cr, pts, col, 1.4, layers=((8, 0.05), (4, 0.12)))
+            for i in range(6, len(pts), 9):
+                w3.flower(cr, *pts[i], rnd.uniform(4, 8), rnd.choice((pink, violet, blue)), a=0.8,
+                          rot=rnd.uniform(0, 1))
+    for _ in range(int(w * h / 60000) + 4):
+        w3.butterfly(cr, rnd.uniform(0, w), rnd.uniform(0, h), rnd.uniform(8, 20), rnd.uniform(-0.6, 0.6),
+                     rnd.choice((pink, violet, blue)), rnd.choice((pink, violet)), 0.55)
+    ws.stars(cr, (0, 0, w, h), int(w * h / 3000), 57, colors=('#ffb8f0', '#e0c8ff', '#ffffff'))
+    grain(cr, w, h, 0.07, seed=55)
+    reading_shade(cr, w, h, 0.45)
+    vignette(cr, w, h, 0.5)
+
+
+def bg_snake(cr, w, h, rnd):
+    import wsthree as w3
+    base(cr, w, h, ['#0a2410', '#061408', '#020803'])
+    halo(cr, w * 0.8, h * 0.8, max(w, h) * 0.45, rgb('#1f6a10'), 0.2)
+    r = 26   # snakeskin: rows of overlapping scales
+    for row in range(-1, int(h / (r * 0.8)) + 2):
+        for col in range(-1, int(w / (r * 1.6)) + 2):
+            x = col * r * 1.6 + (row % 2) * r * 0.8
+            y = row * r * 0.8
+            cr.new_path()
+            cr.arc(x, y, r, 0.1, PI - 0.1)
+            cr.set_line_width(1.2)
+            cr.set_source_rgba(*rgb('#3aff2e'), 0.035 + 0.02 * rnd.random())
+            cr.stroke()
+    lime, dark = rgb('#7dff2e'), rgb('#0c1a0c')
+    pts = []   # a snake winding across the bottom right
+    for t in range(90):
+        f = t / 89
+        pts.append((w * (0.35 + 0.7 * f), h * (0.95 - 0.35 * f) + math.sin(f * 9) * h * 0.08))
+    w3.snake_body(cr, pts[::-1], 26, dark, lime, lime, head=False)
+    pts = [(w * (-0.05 + 0.6 * t / 59), h * (0.3 - 0.25 * t / 59) + math.sin(t / 6) * 30) for t in range(60)]
+    w3.snake_body(cr, pts, 16, dark, lime, lime)
+    grain(cr, w, h, 0.08, seed=59)
+    reading_shade(cr, w, h, 0.5)
+    vignette(cr, w, h, 0.55)
+
+
+SCENES.update({'storm': bg_storm, 'venom': bg_venom, 'butterfly': bg_butterfly, 'snake': bg_snake})
 
 
 def render(style, w, h, tint=None):

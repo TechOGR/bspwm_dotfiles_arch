@@ -31,7 +31,7 @@ def halo(cr, x, y, r, c, a):
 _FRAME = [False]
 _RADIUS = [None]
 
-RADIUS = {'glass': 26, 'minimal': 16, 'gradient': 26, 'macos': 22, 'liquid': 30, 'fire': 22,
+RADIUS = {'glass': 26, 'minimal': 16, 'liquid': 30, 'fire': 22,
           'nature': 26, 'sketch': 20, 'crystal': 28, 'lava': 20, 'neon': 24, 'holo': 28}
 CHAMFER = {'cyber': 24, 'hud': 16}
 
@@ -272,26 +272,6 @@ def card_minimal(cr, p, x, y, w, h, cx, cy, s):
     cr.stroke()
 
 
-def card_gradient(cr, p, x, y, w, h, cx, cy, s):
-    cr.save(); p(); cr.clip()  # noqa: E702
-    if _FRAME[0]:
-        cr.new_path()
-        cr.rectangle(0, 0, 0, 0)
-        cr.clip()
-    g = cairo.LinearGradient(x, y, x + w, y + h)
-    for t, col, a in ((0, '#2462ff', 0.40), (0.5, '#6a3cf5', 0.32), (1, '#d63cf5', 0.40)):
-        g.add_color_stop_rgba(t, *rgb(col), a)
-    cr.set_source(g)
-    cr.paint()
-    _gloss(cr, x, y, w, h, s, 0.22)
-    cr.restore()
-    for extra, a in ((16 * s, 0.05), (8 * s, 0.12), (0, 1)):
-        p()
-        cr.set_line_width(2.4 * s + extra)
-        cr.set_source(neon_grad(x, x + w, ['#2f6bff', '#8b3dff', '#e040fb'], a))
-        cr.stroke()
-
-
 def card_pixel(cr, p, x, y, w, h, cx, cy, s):
     q = max(3, round(4 * s))
     x0, y0 = round(x), round(y)
@@ -312,15 +292,6 @@ def card_pixel(cr, p, x, y, w, h, cx, cy, s):
             cr.rectangle(bx + side * (2 + i * 2) * q - (q if side < 0 else 0), cy, q, q)
             cr.set_source_rgba(*rgb('#4f86ff'), max(0.1, 0.8 - i * 0.1))
             cr.fill()
-
-
-def card_macos(cr, p, x, y, w, h, cx, cy, s):
-    _tint(cr, p, '#2a3048', 0.35)
-    cr.save(); p(); cr.clip(); _gloss(cr, x, y, w, h, s, 0.10); cr.restore()  # noqa: E702
-    p()
-    cr.set_source_rgba(1, 1, 1, 0.22)
-    cr.set_line_width(1.2 * s)
-    cr.stroke()
 
 
 def card_liquid(cr, p, x, y, w, h, cx, cy, s):
@@ -628,8 +599,8 @@ def card_holo(cr, p, x, y, w, h, cx, cy, s):
                 source=neon_grad(x, x + w, ['#8fe6ff', '#ffffff', '#ffb8f0'], 0.9))
 
 
-CARDS = {'glass': card_glass, 'cyber': card_cyber, 'minimal': card_minimal, 'gradient': card_gradient,
-         'pixel': card_pixel, 'macos': card_macos, 'liquid': card_liquid, 'hud': card_hud, 'fire': card_fire,
+CARDS = {'glass': card_glass, 'cyber': card_cyber, 'minimal': card_minimal,
+         'pixel': card_pixel, 'liquid': card_liquid, 'hud': card_hud, 'fire': card_fire,
          'nature': card_nature, 'sketch': card_sketch, 'crystal': card_crystal, 'lava': card_lava,
          'neon': card_neon, 'holo': card_holo}
 
@@ -637,7 +608,7 @@ CARDS = {'glass': card_glass, 'cyber': card_cyber, 'minimal': card_minimal, 'gra
 # ─────────────────────────────────────────────────── password field
 FIELD = {
     'glass': ('#6fa8ff', '#ffffff'), 'cyber': ('#19e6ff', '#ff2bd6'), 'minimal': ('#3a4058', '#5a6385'),
-    'gradient': ('#2f6bff', '#e040fb'), 'pixel': ('#1f5bff', '#4f86ff'), 'macos': ('#5b8cff', '#ffffff'),
+    'pixel': ('#1f5bff', '#4f86ff'),
     'liquid': ('#34dcff', '#b37cff'), 'hud': ('#2d8cff', '#7fc6ff'), 'fire': ('#ff6a00', '#ffc400'),
     'nature': ('#2ee06f', '#9be07a'), 'sketch': ('#d6d6d6', '#d6d6d6'), 'crystal': ('#bfe6ff', '#ffffff'),
     'lava': ('#ff6a00', '#ffd23a'), 'neon': ('#19d4ff', '#ff3fd8'), 'holo': ('#4fd8ff', '#ff8ae0'),
@@ -664,7 +635,7 @@ def _paint_field(cr, style, x, y, w, h, s):
     if style == 'sketch':
         ws.sketch_stroke(cr, p, rgb(a), passes=3, jitter=1 * s, width=1.1 * s, alpha=0.7, seed=12)
         return
-    glow = style in ('cyber', 'neon', 'gradient', 'liquid', 'hud', 'fire', 'nature', 'lava', 'holo', 'crystal')
+    glow = style not in ('glass', 'minimal', 'pixel')
     for extra, al in (((8 * s, 0.08), (4 * s, 0.16)) if glow else ()):
         p()
         cr.set_line_width(1.6 * s + extra)
@@ -674,6 +645,126 @@ def _paint_field(cr, style, x, y, w, h, s):
     cr.set_line_width(1.6 * s)
     cr.set_source(neon_grad(x, x + w, [a, b], 0.95))
     cr.stroke()
+
+
+# ─────────────────────────────── Storm, Venom, Butterflies, Snakes
+import wsthree as w3  # noqa: E402
+
+
+def _ring(x, y, w, h, s, key, step=3.0):
+    r = _RADIUS[0] if _RADIUS[0] is not None else RADIUS[key] * s
+    return rrect_points(x, y, w, h, max(r, 4), step)
+
+
+def card_storm(cr, p, x, y, w, h, cx, cy, s):
+    blue = rgb('#4f9dff')
+    rnd = random.Random(31)
+    halo(cr, cx, cy, w * 0.8, rgb('#1d3fd6'), 0.25)
+    _tint(cr, p, '#060b1c', 0.55)
+    pts = _ring(x, y, w, h, s, 'storm')
+    reach = (70 if _far() else 34) * s
+    for (bx, by), (dx, dy) in (((x, y), (-1, -1)), ((x + w, y), (1, -1)), ((x, y + h), (-1, 1)),
+                               ((x + w, y + h), (1, 1))):   # bolts off the corners
+        for _ in range(2):
+            w3.bolt(cr, rnd, bx - dx * 6 * s, by - dy * 6 * s, bx + dx * rnd.uniform(0.5, 1) * reach,
+                    by + dy * rnd.uniform(0.3, 1) * reach, 1.3 * s, blue, 1)
+    for px_, py_, nx, ny in pts[::23]:   # small arcs crackling out of the edges
+        if rnd.random() < 0.45:
+            L = rnd.uniform(8, 18) * s
+            w3.bolt(cr, rnd, px_, py_, px_ + nx * L + rnd.uniform(-6, 6) * s, py_ + ny * L + rnd.uniform(-6, 6) * s,
+                    0.8 * s, blue, 0, a=0.85)
+    for extra, a in ((12 * s, 0.07), (6 * s, 0.16), (3 * s, 0.4)):
+        ws.jagged(cr, pts, random.Random(5), 1.8 * s, smooth=0)
+        cr.set_line_width(1.6 * s + extra)
+        cr.set_source_rgba(*blue, a)
+        cr.stroke()
+    ws.jagged(cr, pts, random.Random(5), 1.8 * s, smooth=0)
+    cr.set_line_width(1.4 * s)
+    cr.set_source_rgba(0.9, 0.96, 1, 1)
+    cr.stroke()
+
+
+def card_venom(cr, p, x, y, w, h, cx, cy, s):
+    red, black, rim = rgb('#ff1a2e'), rgb('#0a0406'), rgb('#ff3a3a')
+    rnd = random.Random(37)
+    halo(cr, cx, cy, w * 0.8, rgb('#6a0010'), 0.3)
+    _tint(cr, p, '#0b0305', 0.55)
+    r = _RADIUS[0] if _RADIUS[0] is not None else RADIUS['venom'] * s
+    for k, (amp, wd, seed) in enumerate(((3.2, 5.0, 3), (2.4, 3.4, 9))):   # twisting tentacles on the frame
+        ring = [(px, py) for px, py, _a, _b in wavy(x, y, w, h, max(r, 4), amp * s, seed)]
+        w3.tube(cr, ring + ring[:1], [wd * s] * (len(ring) + 1), black, rim, red, 0.3)
+    reach = (80 if _far() else 40) * s
+    for (bx, by), base in (((x, y), -3 * PI / 4), ((x + w, y), -PI / 4), ((x, y + h), 3 * PI / 4),
+                           ((x + w, y + h), PI / 4)):   # tentacles curling out of the corners
+        for i in range(3):
+            ang = base + rnd.uniform(-0.6, 0.6)
+            L = rnd.uniform(0.5, 1) * reach
+            pts = [(bx + math.cos(ang) * L * t / 19 + math.sin(t / 3 + i) * 5 * s * t / 19,
+                    by + math.sin(ang) * L * t / 19 + math.cos(t / 3 + i) * 5 * s * t / 19) for t in range(20)]
+            w3.tube(cr, pts, [(5.5 * (1 - t / 20) + 0.5) * s for t in range(20)], black, rim, red, 0.25)
+    for _ in range(int(w / (90 * s)) + 1):   # venom dripping from the bottom
+        w3.drip(cr, rnd.uniform(x + r, x + w - r), y + h + 1, rnd.uniform(6, 18 if _far() else 12) * s, 2 * s, red, 0.95)
+    if _far():   # the jaws on the right side
+        w3.maw(cr, x + w - 6 * s, cy, 2.4 * s, black, rim, red)
+
+def card_butterfly(cr, p, x, y, w, h, cx, cy, s):
+    pink, violet, blue = rgb('#ff7ae0'), rgb('#b07cff'), rgb('#8fb8ff')
+    rnd = random.Random(41)
+    halo(cr, x, y, w * 0.6, violet, 0.22)
+    halo(cr, x + w, y + h, w * 0.6, pink, 0.22)
+    _tint(cr, p, '#120824', 0.5)
+    r = _RADIUS[0] if _RADIUS[0] is not None else RADIUS['butterfly'] * s
+    for amp, seed, col in ((2.6, 4, pink), (3.0, 8, violet)):   # glowing vines
+        ring = wavy(x, y, w, h, max(r, 4), amp * s, seed)
+        for extra, a in ((7 * s, 0.1), (3 * s, 0.25), (0, 0.95)):
+            poly(cr, ring)
+            cr.set_line_width(1.3 * s + extra)
+            cr.set_source_rgba(*col, a)
+            cr.stroke()
+    for px_, py_, _nx, _ny in rrect_points(x, y, w, h, max(r, 4), 40 * s):   # blossoms on the vine
+        if rnd.random() < 0.45:
+            w3.flower(cr, px_, py_, rnd.uniform(3, 5) * s, rnd.choice((pink, violet)), a=0.95, rot=rnd.uniform(0, 1))
+    big = (34 if _far() else 20) * s
+    w3.butterfly(cr, x + 4 * s, y + 4 * s, big, -0.4, pink, blue)
+    w3.butterfly(cr, x + w - 4 * s, y + h - 4 * s, big * 0.9, 0.4, violet, pink)
+    w3.butterfly(cr, x + w - 10 * s, y - 6 * s, big * 0.45, 0.3, blue, pink, 0.85)
+    w3.butterfly(cr, x + 12 * s, y + h + 6 * s, big * 0.4, -0.3, pink, violet, 0.85)
+    if _far():
+        for _ in range(5):
+            ang = rnd.uniform(0, 2 * PI)
+            w3.butterfly(cr, cx + math.cos(ang) * (w / 2 + rnd.uniform(30, 90) * s),
+                         cy + math.sin(ang) * (h / 2 + rnd.uniform(20, 60) * s), rnd.uniform(6, 11) * s,
+                         rnd.uniform(-0.5, 0.5), rnd.choice((pink, violet, blue)), pink, 0.8)
+        ws.stars(cr, (x - 100 * s, y - 80 * s, w + 200 * s, h + 160 * s), 70, 43,
+                 colors=('#ffb8f0', '#e0c8ff', '#ffffff'))
+    else:
+        ws.stars(cr, (x - 6, y - 6, w + 12, 12), int(w / 50), 43, colors=('#ffb8f0', '#e0c8ff'))
+
+
+def card_snake(cr, p, x, y, w, h, cx, cy, s):
+    lime, base = rgb('#7dff2e'), rgb('#0c1a0c')
+    halo(cr, cx, cy, w * 0.8, rgb('#1f6a10'), 0.25)
+    _tint(cr, p, '#040d05', 0.55)
+    pts = _ring(x, y, w, h, s, 'snake', 5 * s)
+    n = len(pts)
+    # the body goes round the frame from the top right corner and the head
+    # rests on the top edge, tail tapering before it
+    start = int(n * 0.02)
+    body = [(px + nx * 1.5 * s, py + ny * 1.5 * s) for px, py, nx, ny in pts[start:] + pts[:start]]
+    body = body[:int(n * 0.93)]
+    body = body[::-1]
+    ex, ey = body[-1]
+    body += [(ex - i * 3 * s, ey - math.sin(i / 9 * PI * 0.5) * 12 * s) for i in range(1, 10)]   # the neck rises
+    w3.snake_body(cr, body, 7 * s, base, lime, lime, head_k=2.2)
+    if _far():   # a second, smaller snake around the corner
+        seg = [(x - 26 * s + math.sin(t / 3) * 6 * s, y + h * 0.6 + t * 4 * s) for t in range(18)]
+        w3.snake_body(cr, seg, 5 * s, base, lime, lime)
+
+
+RADIUS.update({'storm': 20, 'venom': 22, 'butterfly': 28, 'snake': 22})
+CARDS.update({'storm': card_storm, 'venom': card_venom, 'butterfly': card_butterfly, 'snake': card_snake})
+FIELD.update({'storm': ('#4f9dff', '#dff0ff'), 'venom': ('#ff1a2e', '#ff6a3a'),
+              'butterfly': ('#ff7ae0', '#b07cff'), 'snake': ('#7dff2e', '#e8ff5a')})
 
 
 # ═══════════════════════════════════════════ command line (ScreenLocker)
@@ -919,17 +1010,6 @@ def bg_crystal(cr, w, h, rnd):
         ws.sparkle(cr, rnd.uniform(0, w), rnd.uniform(0, h), rnd.uniform(3, 7), (1, 1, 1), 0.35)
 
 
-def bg_gradient(cr, w, h, rnd):
-    g = cairo.LinearGradient(0, 0, w, h)
-    for t, col in ((0, '#10205e'), (0.5, '#221450'), (1, '#3a1050')):
-        g.add_color_stop_rgb(t, *rgb(col))
-    cr.set_source(g)
-    cr.paint()
-    halo(cr, w * 0.1, h * 0.1, max(w, h) * 0.5, rgb('#2f6bff'), 0.25)
-    halo(cr, w * 0.9, h * 0.9, max(w, h) * 0.5, rgb('#e040fb'), 0.22)
-    _vignette(cr, w, h, 0.4)
-
-
 def bg_pixel(cr, w, h, rnd):
     _bg_base(cr, w, h, '#071030', '#040818')
     for x in range(0, int(w), 16):
@@ -943,12 +1023,6 @@ def bg_pixel(cr, w, h, rnd):
         cr.rectangle(x, y, q, q)
         cr.set_source_rgba(*rgb(rnd.choice(['#ffffff', '#ffd21e', '#4f86ff'])), rnd.uniform(0.2, 0.6))
         cr.fill()
-
-
-def bg_macos(cr, w, h, rnd):
-    _bg_base(cr, w, h, '#2a3048', '#1c1f2b')
-    halo(cr, w / 2, 0, w * 0.7, (1, 1, 1), 0.05)
-    _vignette(cr, w, h, 0.3)
 
 
 def bg_minimal(cr, w, h, rnd):
@@ -989,23 +1063,24 @@ def bg_holo(cr, w, h, rnd):
 
 BACKDROPS = {'lava': bg_lava, 'liquid': bg_liquid, 'nature': bg_nature, 'fire': bg_fire, 'hud': bg_hud,
              'cyber': bg_cyber, 'neon': bg_neon, 'glass': bg_glass, 'crystal': bg_crystal,
-             'gradient': bg_gradient, 'pixel': bg_pixel, 'macos': bg_macos, 'minimal': bg_minimal,
+             'pixel': bg_pixel, 'minimal': bg_minimal,
              'sketch': bg_sketch, 'holo': bg_holo}
 
 
 def paint_backdrop(cr, style, w, h, radius=0):
     """The themed background of a window, w x h, corners rounded like it."""
+    import wsback   # the detailed scenes (cached renders)
     fn = BACKDROPS.get(style)
-    if not fn:
+    if not fn and style not in wsback.SCENES:
         return
     cr.save()
     rounded(cr, 0, 0, w, h, max(0, radius))
     cr.clip()
     try:
-        import wsback   # the detailed scenes (cached renders)
         cr.set_source_surface(wsback.render(style, w, h, ws.tint_target('windows')), 0, 0)
         cr.paint()
     except Exception:
-        with ws.tinted(style, ws.tint_target('windows')):
-            fn(cr, w, h, random.Random(1234))
+        if fn:
+            with ws.tinted(style, ws.tint_target('windows')):
+                fn(cr, w, h, random.Random(1234))
     cr.restore()

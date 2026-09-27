@@ -3,8 +3,9 @@
 # Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
 #
 # ricekit - whole-rice themes built on the workspace styles of
-# lib/wspill.py (Glassmorphism, Neon Cyberpunk, Minimal Dark, Gradient
-# Pop, Pixel, macOS, Liquid, HUD, Fire, Nature). A theme is made of
+# lib/wspill.py (Glassmorphism, Neon Cyberpunk, Minimal Dark, Pixel,
+# Liquid, HUD, Fire, Nature, Pencil, Crystal, Lava, Solid Neon,
+# Holographic, Storm, Venom, Butterflies, Snakes). A theme is made of
 # parts that can be applied together or one by one:
 #   colors      palette -> terminals, rofi, dunst, GTK, lockscreen, bar
 #               text, RiceEditor itself (theme_colors.bash cargar_*)
@@ -48,21 +49,11 @@ KITS = {
         win=dict(BORDER_WIDTH=1, FOCUSED_BC='#5a6385', NORMAL_BC='#1e222e', P_CORNER_R=10, gap=6,
                  SHADOW_C='#000000', P_BLUR='false', P_ACTIVE_OPACITY='1.0', P_INACTIVE_OPACITY='0.95'),
         dunst_r=10),
-    'gradient': dict(
-        name='Gradient Pop', tagline='modern and creative', palette='cargar_gradient_pop',
-        win=dict(BORDER_WIDTH=2, FOCUSED_BC='#b06bff', NORMAL_BC='#2d2760', P_CORNER_R=14, gap=10,
-                 SHADOW_C='#6a3cf5', P_BLUR='false', P_ACTIVE_OPACITY='0.97', P_INACTIVE_OPACITY='0.90'),
-        dunst_r=16),
     'pixel': dict(
         name='Pixel', tagline='retro and classic', palette='cargar_pixel_retro',
         win=dict(BORDER_WIDTH=3, FOCUSED_BC='#1f5bff', NORMAL_BC='#0c1a4d', P_CORNER_R=0, gap=8,
                  SHADOW_C='#000000', P_BLUR='false', P_ACTIVE_OPACITY='1.0', P_INACTIVE_OPACITY='0.94'),
         dunst_r=0),
-    'macos': dict(
-        name='macOS', tagline='simple and elegant', palette='cargar_macos',
-        win=dict(BORDER_WIDTH=0, FOCUSED_BC='#5b8cff', NORMAL_BC='#2a3048', P_CORNER_R=12, gap=12,
-                 SHADOW_C='#000000', P_BLUR='true', P_ACTIVE_OPACITY='0.98', P_INACTIVE_OPACITY='0.92'),
-        dunst_r=14),
     'liquid': dict(
         name='Liquid', tagline='fluid and original', palette='cargar_liquid',
         win=dict(BORDER_WIDTH=2, FOCUSED_BC='#34dcff', NORMAL_BC='#23305a', P_CORNER_R=18, gap=12,
@@ -110,9 +101,29 @@ KITS.update({
         win=dict(BORDER_WIDTH=2, FOCUSED_BC='#c77dff', NORMAL_BC='#2a2458', P_CORNER_R=16, gap=12,
                  SHADOW_C='#7b4dff', P_BLUR='true', P_ACTIVE_OPACITY='0.95', P_INACTIVE_OPACITY='0.88'),
         dunst_r=16),
+    'storm': dict(
+        name='Storm', tagline='lightning, pure energy', palette='cargar_storm',
+        win=dict(BORDER_WIDTH=2, FOCUSED_BC='#7fd8ff', NORMAL_BC='#1a2a5a', P_CORNER_R=12, gap=10,
+                 SHADOW_C='#3d8bff', P_BLUR='false', P_ACTIVE_OPACITY='0.97', P_INACTIVE_OPACITY='0.90'),
+        dunst_r=12),
+    'venom': dict(
+        name='Venom', tagline='moving shadows, venom', palette='cargar_venom',
+        win=dict(BORDER_WIDTH=2, FOCUSED_BC='#ff1a2e', NORMAL_BC='#2a0a0e', P_CORNER_R=14, gap=10,
+                 SHADOW_C='#ff0020', P_BLUR='false', P_ACTIVE_OPACITY='0.97', P_INACTIVE_OPACITY='0.90'),
+        dunst_r=14),
+    'butterfly': dict(
+        name='Butterflies', tagline='delicate, free, magic', palette='cargar_butterflies',
+        win=dict(BORDER_WIDTH=2, FOCUSED_BC='#ff9ae8', NORMAL_BC='#2e1a52', P_CORNER_R=18, gap=12,
+                 SHADOW_C='#c77dff', P_BLUR='true', P_ACTIVE_OPACITY='0.95', P_INACTIVE_OPACITY='0.88'),
+        dunst_r=18),
+    'snake': dict(
+        name='Snakes', tagline='power, mystery, scales', palette='cargar_snakes',
+        win=dict(BORDER_WIDTH=2, FOCUSED_BC='#7dff2e', NORMAL_BC='#12301a', P_CORNER_R=12, gap=10,
+                 SHADOW_C='#3aff2e', P_BLUR='false', P_ACTIVE_OPACITY='0.97', P_INACTIVE_OPACITY='0.90'),
+        dunst_r=12),
 })
-ORDER = ['glass', 'cyber', 'minimal', 'gradient', 'pixel', 'macos', 'liquid', 'hud', 'fire', 'nature',
-         'sketch', 'crystal', 'lava', 'neon', 'holo']
+ORDER = ['glass', 'cyber', 'minimal', 'pixel', 'liquid', 'hud', 'fire', 'nature',
+         'sketch', 'crystal', 'lava', 'neon', 'holo', 'storm', 'venom', 'butterfly', 'snake']
 
 # Bar geometry per theme: the side margins come from the skin (what it
 # draws past the bar's ends must stay on screen)
@@ -132,12 +143,8 @@ PALETTES = {
               '#ff2bd6', '#19e6ff', '#c9b8ff', '#1a0f33', '#19e6ff'),
     'minimal': ('#0e1016', '#d8dce6', '#151821', '#3a4058', '#e27d8b', '#9cc9a0', '#e6d3a3', '#a9c2ff',
                 '#c3b1e1', '#a3d4e6', '#b8bfcc', '#1a1d27', '#a9c2ff'),
-    'gradient': ('#120f2e', '#f5edff', '#1b1640', '#453a7a', '#ff5c9a', '#5ef0c0', '#ffcf6b', '#4f7dff',
-                 '#d63cf5', '#5fe1ff', '#d6ccff', '#231c55', '#b06bff'),
     'pixel': ('#050a1f', '#f2f5ff', '#0a1433', '#1f3a8a', '#ff3b3b', '#3bff6e', '#ffd21e', '#1f5bff',
               '#ff7ad9', '#1ea0ff', '#c8d4ff', '#0c1a4d', '#ffd21e'),
-    'macos': ('#1c1f2b', '#eceff7', '#252a3a', '#4a5272', '#ff6b6b', '#6cd48a', '#f5c86b', '#5b8cff',
-              '#b58cff', '#7fd4ff', '#c4c9d8', '#2a3048', '#c9f3ff'),
     'liquid': ('#0b1030', '#eaf2ff', '#121a45', '#34408a', '#ff6fb5', '#4fe3d0', '#ffd27a', '#3b6bff',
                '#b37cff', '#34dcff', '#c8d6ff', '#18225e', '#34dcff'),
     'hud': ('#050c18', '#d6ecff', '#08162a', '#16304f', '#ff5c7a', '#3fe0a8', '#ffd166', '#2d8cff',
@@ -156,6 +163,14 @@ PALETTES = {
              '#d946ef', '#1ec8ff', '#c8ccff', '#12163a', '#1ec8ff'),
     'holo': ('#0a0820', '#f4efff', '#120f30', '#3d3570', '#ff6ab0', '#5ff0e0', '#ffd98a', '#6aa8ff',
              '#c77dff', '#4fd8ff', '#d4ccff', '#1a1545', '#ff8ae0'),
+    'storm': ('#060b1c', '#e6f0ff', '#0a1230', '#2a3a70', '#ff5a7a', '#5affc8', '#fff27a', '#3d8bff',
+              '#9f7bff', '#7fd8ff', '#cfe0ff', '#0e1a40', '#7fd8ff'),
+    'venom': ('#0a0405', '#ffe6e6', '#140608', '#3a1014', '#ff1a2e', '#ff8a5a', '#ffb04a', '#ff2a3a',
+              '#d0103a', '#ff6a6a', '#e8c0c0', '#1c0709', '#ff2a3a'),
+    'butterfly': ('#120a24', '#fbeaff', '#1a0f33', '#4a2a70', '#ff6ab0', '#9affd0', '#ffe08a', '#c77dff',
+                  '#ff7ae0', '#9fb8ff', '#e8d6ff', '#22123f', '#ff9ae8'),
+    'snake': ('#040f06', '#e8ffe0', '#08180a', '#1f4a22', '#ff6a4a', '#7dff2e', '#e8ff5a', '#5aff7a',
+              '#b8ff3a', '#3affc8', '#c8f0c0', '#0a2410', '#9dff3a'),
 }
 PAL_KEYS = ['bg', 'fg', 'black', 'blackb', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white',
             'accent_color', 'arch_icon']

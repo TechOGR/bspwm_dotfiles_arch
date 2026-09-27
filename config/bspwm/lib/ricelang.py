@@ -98,8 +98,8 @@ ES = {
         'Todo se vuelve a aplicar en vivo: barra, ventanas, terminales, menús',
     'in use': 'en uso', 'Apply': 'Aplicar', 'Pick at least one part': 'Elige al menos una parte',
     'modern and clean': 'moderno y limpio', 'futuristic and striking': 'futurista y llamativo',
-    'elegant and discreet': 'elegante y discreto', 'modern and creative': 'moderno y creativo',
-    'retro and classic': 'retro y clásico', 'simple and elegant': 'sencillo y elegante',
+    'elegant and discreet': 'elegante y discreto',
+    'retro and classic': 'retro y clásico',
     'fluid and original': 'fluido y original', 'tech and professional': 'tecnológico y profesional',
     'intense and different': 'intenso y diferente', 'calm and fresh': 'tranquilo y fresco',
     'hand drawn in graphite': 'dibujado a mano en grafito', 'frosted glass and light': 'vidrio esmerilado y luz',
@@ -108,6 +108,9 @@ ES = {
         'iconos de polybar, colores de la paleta',
     'Pencil': 'Lápiz', 'Crystal': 'Cristal', 'Lava': 'Lava', 'Solid Neon': 'Neón sólido', 'Holographic': 'Holográfico',
     'Fire': 'Fuego', 'Nature': 'Naturaleza', 'Liquid': 'Líquido',
+    'Storm': 'Tormenta', 'Venom': 'Veneno', 'Butterflies': 'Mariposas', 'Snakes': 'Serpientes',
+    'lightning, pure energy': 'rayos, energía pura', 'moving shadows, venom': 'sombras en movimiento, veneno',
+    'delicate, free, magic': 'delicado, libre, mágico', 'power, mystery, scales': 'poder, misterio, escamas',
 
     # ── palette
     'click to apply · the editor re-themes too': 'clic para aplicar · el editor también cambia',
