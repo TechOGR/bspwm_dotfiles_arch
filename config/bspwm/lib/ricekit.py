@@ -305,7 +305,6 @@ def _apply(kit, parts, run):
         conf = bc.load()
         if 'bar' in parts:
             conf['bar_skin'] = kit
-            conf['style'] = 'capsule'
             conf['border'] = False
             conf.update(BAR_GEOMETRY.get(kit, {}))
         if 'workspaces' in parts:

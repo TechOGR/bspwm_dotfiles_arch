@@ -74,7 +74,8 @@ def main():
     import gi
     gi.require_version('Gtk', '3.0')
     gi.require_version('Gdk', '3.0')
-    from gi.repository import Gtk, Gdk, GLib
+    gi.require_version('GdkX11', '3.0')
+    from gi.repository import Gtk, Gdk, GLib, GdkX11
     import cairo
     import riceui as ui
     _lock = ui.single_instance('workspacepill')  # noqa: F841  writes LOCK
@@ -110,8 +111,10 @@ def main():
     win.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.SCROLL_MASK)
     # the bar's background in the style: under polybar, which is transparent
     skin_win = popup() if skin else None
-    off_y = int(conf['offset_y'])
+    bar_style = conf.get('style', 'capsule')
+    off_y = 0 if bar_style == 'strip' else int(conf['offset_y'])
     skin_h = off_y + H + 8
+    groups = {'list': None}   # islands / cyber: (x, w) of each module group
     if skin_win:
         skin_win.set_size_request(geo.width, skin_h)
         skin_win.move(geo.x, geo.y if conf['position'] != 'bottom' else geo.y + geo.height - skin_h)
@@ -121,11 +124,64 @@ def main():
             cr.set_source_rgba(0, 0, 0, 0)
             cr.paint()
             cr.set_operator(cairo.OPERATOR_OVER)
-            mx = bc.margin(conf)
             y = off_y if conf['position'] != 'bottom' else skin_h - off_y - H
-            with wspill.tinted(skin, wspill.tint_target('bar')):
-                wspill.paint_bar(cr, skin, geo.width, (mx, y, geo.width - 2 * mx, H))
+            if bar_style in ('islands', 'cyber'):
+                # one skin under each group of modules (found in sample_groups)
+                rects = [(gx, y, gw, H) for gx, gw in groups['list'] or []]
+            else:
+                mx = bc.margin(conf)
+                rects = [(mx, y, geo.width - 2 * mx, H)]
+            shape = {'cyber': 'chamfer', 'strip': 'square'}.get(bar_style, 'capsule')
+            with wspill.tinted(skin, wspill.tint_target('bar')), wspill.bar_shape(shape):
+                for r in rects:
+                    wspill.paint_bar(cr, skin, geo.width, r)
+                if bar_style == 'strip':   # the strip's neon line along its inner edge
+                    ly = y + H if conf['position'] != 'bottom' else y
+                    col = wspill.rgb(wspill.NATIVE.get(skin, '#6fa8ff'))
+                    for lw, a in ((6, 0.12), (3, 0.3), (1.5, 1)):
+                        cr.move_to(0, ly)
+                        cr.line_to(geo.width, ly)
+                        cr.set_line_width(lw)
+                        cr.set_source_rgba(*col, a)
+                        cr.stroke()
             return True
+
+        def sample_groups():
+            """Where polybar drew its pods (alpha 1/255 over a skin): one
+            row of the bar window, runs of non-transparent pixels."""
+            bars = polybar_windows()
+            if not bars or not skin_win.get_visible():
+                return True
+            try:
+                fw = GdkX11.X11Window.foreign_new_for_display(display, int(bars[0]))
+                _ok, bx, _by = fw.get_origin()
+                bw_, bh_ = fw.get_width(), fw.get_height()
+                pb = Gdk.pixbuf_get_from_window(fw, 0, bh_ // 2, bw_, 1)
+            except Exception:
+                return True
+            if pb is None or pb.get_n_channels() != 4:
+                return True
+            px = pb.get_pixels()
+            runs, start, last = [], None, -99
+            for x in range(bw_):
+                if px[x * 4 + 3] > 0:
+                    if start is None or x - last > 8:   # a gap: a new group
+                        if start is not None:
+                            runs.append((start, last + 1))
+                        start = x
+                    last = x
+            if start is not None:
+                runs.append((start, last + 1))
+            found = [(bx - geo.x + a, b - a) for a, b in runs if b - a >= 12]
+            old = groups['list'] or []
+            if len(found) != len(old) or any(abs(a[0] - b[0]) > 2 or abs(a[1] - b[1]) > 2
+                                             for a, b in zip(found, old)):
+                groups['list'] = found
+                skin_win.queue_draw()
+            return True
+        if bar_style in ('islands', 'cyber'):
+            GLib.timeout_add(800, lambda: (sample_groups(), False)[1])
+            GLib.timeout_add(1500, sample_groups)
         skin_win.connect('draw', draw_skin)
         skin_win.connect('realize', lambda w: w.get_window().input_shape_combine_region(cairo.Region(), 0, 0))
 

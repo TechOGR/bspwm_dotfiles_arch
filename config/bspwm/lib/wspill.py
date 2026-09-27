@@ -876,8 +876,36 @@ def paint_bar(cr, style, W, rect, pal=None):
     BAR_SKINS.get(style, bar_minimal)(cr, x, y, w, h, cy)
 
 
+_SHAPE = ['capsule']   # capsule | chamfer (Cyber bar style) | square (Strip)
+
+
 def _capsule(cr, x, y, w, h, r=None):
-    rounded(cr, x, y, w, h, h / 2 if r is None else r)
+    if _SHAPE[0] == 'square':
+        rounded(cr, x, y, w, h, 2)
+    elif _SHAPE[0] == 'chamfer':
+        c = h * 0.45
+        cr.new_path()
+        cr.move_to(x + c, y)
+        cr.line_to(x + w, y)
+        cr.line_to(x + w - c, y + h)
+        cr.line_to(x, y + h)
+        cr.close_path()
+    else:
+        rounded(cr, x, y, w, h, h / 2 if r is None else r)
+
+
+class bar_shape:
+    """with bar_shape('chamfer'): the skins' capsules become that shape."""
+
+    def __init__(self, shape):
+        self.shape = shape
+
+    def __enter__(self):
+        self.prev, _SHAPE[0] = _SHAPE[0], self.shape
+
+    def __exit__(self, *_):
+        _SHAPE[0] = self.prev
+        return False
 
 
 def bar_glass(cr, x, y, w, h, cy):

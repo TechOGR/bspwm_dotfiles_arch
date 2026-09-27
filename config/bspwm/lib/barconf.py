@@ -242,6 +242,8 @@ def skin_on(conf):
 def margin(conf):
     """Side margin of the bar: never less than its skin needs."""
     m = int(conf['margin_x'])
+    if conf.get('style') == 'strip':
+        return 0
     if skin_on(conf):
         import wspill
         m = max(m, wspill.BAR_MARGIN.get(conf['bar_skin'], 0))
@@ -272,7 +274,11 @@ def render(conf=None, pal=None):
     bottom = conf['position'] == 'bottom'
 
     skin = skin_on(conf)
-    if skin:
+    if skin and pill:
+        # islands / cyber over a skin: the pods are invisible (alpha 1/255)
+        # but bin/WorkspacePill reads them to draw the skin under each group
+        bar_bg, pod = '#00000000', '#01000000'
+    elif skin:
         # the skin drawn by bin/WorkspacePill shows through the whole bar
         bar_bg = pod = '#00000000'
     elif pill:
