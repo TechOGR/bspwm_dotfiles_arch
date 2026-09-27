@@ -465,7 +465,7 @@ install_packages() {
         papirus-icon-theme
         xss-lock
         rsync thunar tumbler gvfs eza bat
-        python-gobject python-cairo python-pillow ffmpeg
+        python-gobject python-cairo python-pillow python-numpy ffmpeg
         # HUD tools (Dock, AppLauncher, RiceEditor, UserCard, MusicPlayer,
         # ScreenShoTer, PowerMenu, AvatarForge, BarCtl auto-hide) are GTK3
         gtk3

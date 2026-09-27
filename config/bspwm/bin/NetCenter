@@ -1,0 +1,1019 @@
+#!/usr/bin/env python3
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# NetCenter - the network center of the rice, in the theme's style:
+#   ✔ every interface (Ethernet, Wi-Fi, VPN, bridges...) with its state,
+#     address and a live traffic trace
+#   ✔ the selected one in detail: download / upload graph (60 s), rates,
+#     totals, MAC, IPv4 / IPv6, gateway, DNS, MTU, link speed, driver
+#   ✔ connect / disconnect it, autoconnect, IPv4 automatic (DHCP) or
+#     manual (address, gateway, DNS), custom DNS over DHCP, MTU
+#   ✔ Wi-Fi: scan, signal and security of each network, connect (with
+#     password), forget, share a hotspot
+#   ✔ saved connections: activate, deactivate, forget
+#   ✔ networking, Wi-Fi and airplane mode switches, connectivity check
+# Everything goes through NetworkManager (nmcli), in the background: the
+# window never freezes. The frame of the window is the theme's
+# (RoundBorders), the background its scene, the graph its colors.
+#
+# Usage: NetCenter   (a second launch closes it) - polybar network click
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+import os
+import re
+import sys
+import time
+import socket
+import threading
+import subprocess
+from collections import deque
+
+sys.path.insert(0, os.path.expanduser('~/.config/bspwm/lib'))
+import riceui as ui  # noqa: E402
+from riceui import Gtk, Gdk, GLib, Pango, cairo  # noqa: E402
+
+HIST = 60   # seconds of traffic kept per interface
+
+G = {   # Material Design Icons
+    'ethernet': '\U000f0200', 'wifi': '\U000f0928', 'wifi3': '\U000f0925', 'wifi2': '\U000f0922',
+    'wifi1': '\U000f091f', 'wifi0': '\U000f092f', 'wifi_off': '\U000f05aa', 'vpn': '\U000f0582',
+    'bridge': '\U000f0317', 'loopback': '\U000f0450', 'lock': '\U000f033e', 'open': '\U000f0fc6',
+    'down': '\U000f072e', 'up': '\U000f0737', 'refresh': '\U000f0450', 'airplane': '\U000f001d',
+    'net': '\U000f06f3', 'net_off': '\U000f0c9b', 'web': '\U000f059f', 'check': '\U000f05e0',
+    'close': '\U000f0159', 'cog': '\U000f0493', 'hotspot': '\U000f0002', 'saved': '\U000f0318',
+    'speed': '\U000f04c5', 'ip': '\U000f0a60', 'dns': '\U000f01d6', 'other': '\U000f06f3',
+    'modem': '\U000f08be', 'bluetooth': '\U000f00af',
+}
+TYPE_GLYPH = {'ethernet': 'ethernet', 'wifi': 'wifi', 'wireguard': 'vpn', 'vpn': 'vpn', 'tun': 'vpn',
+              'bridge': 'bridge', 'bond': 'bridge', 'loopback': 'loopback', 'gsm': 'modem', 'bt': 'bluetooth'}
+
+ES = {
+    'Network center': 'Centro de red', 'Interfaces': 'Interfaces', 'Saved connections': 'Conexiones guardadas',
+    'Networking': 'Redes', 'Wi-Fi': 'Wi-Fi', 'Airplane mode': 'Modo avión', 'Online': 'En línea',
+    'Limited': 'Limitada', 'Offline': 'Sin conexión', 'Checking…': 'Comprobando…', 'Connect': 'Conectar',
+    'Disconnect': 'Desconectar', 'Download': 'Bajada', 'Upload': 'Subida', 'Received': 'Recibido',
+    'Sent': 'Enviado', 'Details': 'Detalles', 'IP settings': 'Configuración IP',
+    'Automatic (DHCP)': 'Automática (DHCP)', 'Manual': 'Manual', 'Address': 'Dirección',
+    'Prefix': 'Prefijo', 'Gateway': 'Puerta de enlace', 'DNS servers': 'Servidores DNS',
+    'Connect automatically': 'Conectar automáticamente', 'Apply': 'Aplicar',
+    'Networks around': 'Redes cercanas', 'Scan': 'Buscar', 'Password': 'Contraseña', 'Forget': 'Olvidar',
+    'Hotspot': 'Punto de acceso', 'Share': 'Compartir', 'Name': 'Nombre', 'Activate': 'Activar',
+    'Deactivate': 'Desactivar', 'connected': 'conectado', 'disconnected': 'desconectado',
+    'unavailable': 'no disponible', 'connecting': 'conectando', 'unmanaged': 'sin gestionar',
+    'No interface selected': 'Ninguna interfaz seleccionada', 'Saved': 'Guardada',
+    'separated by spaces': 'separados por espacios', 'Done': 'Hecho', 'Failed': 'Falló',
+    'No networks found': 'No se encontraron redes', 'Scanning…': 'Buscando…', 'Link': 'Enlace',
+    'Driver': 'Controlador', 'no connection profile': 'sin perfil de conexión', 'Signal': 'Señal',
+    'Open network': 'Red abierta', 'Active': 'Activa', 'blank = automatic': 'vacío = automático',
+}
+
+
+def lang_es():
+    try:
+        import ricelang
+        return ricelang.get_lang() == 'es'
+    except Exception:
+        return True
+
+
+LANG_ES = lang_es()
+
+
+def T(s):
+    return ES.get(s, s) if LANG_ES else s
+
+
+# ─────────────────────────────────────────────────────────── nmcli
+def nm(*args, timeout=25):
+    try:
+        p = subprocess.run(['nmcli', *args], capture_output=True, text=True, timeout=timeout,
+                           env={**os.environ, 'LC_ALL': 'C'})
+        return p.returncode, p.stdout, p.stderr.strip()
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return 1, '', str(e)
+
+
+def terse(line):
+    """Split a nmcli -t line on ':' that are not escaped."""
+    out, cur, esc = [], '', False
+    for ch in line:
+        if esc:
+            cur += ch
+            esc = False
+        elif ch == '\\':
+            esc = True
+        elif ch == ':':
+            out.append(cur)
+            cur = ''
+        else:
+            cur += ch
+    out.append(cur)
+    return out
+
+
+def show(*args):
+    """nmcli -t ... show: {key: value} (repeated keys joined by ', ')."""
+    _rc, out, _err = nm('-t', *args)
+    d = {}
+    for ln in out.splitlines():
+        k, _, v = ln.partition(':')
+        k = re.sub(r'\[\d+\]$', '', k)
+        if v:
+            d[k] = f'{d[k]}, {v}' if k in d else v
+    return d
+
+
+def human(n, rate=False):
+    units = ['B', 'KB', 'MB', 'GB', 'TB']
+    i = 0
+    n = float(n)
+    while n >= 1024 and i < len(units) - 1:
+        n /= 1024
+        i += 1
+    s = f'{n:.0f}' if i == 0 or n >= 100 else f'{n:.1f}'
+    return f'{s} {units[i]}{"/s" if rate else ""}'
+
+
+def counters(iface):
+    try:
+        base = f'/sys/class/net/{iface}/statistics/'
+        return int(open(base + 'rx_bytes').read()), int(open(base + 'tx_bytes').read())
+    except (OSError, ValueError):
+        return None
+
+
+def run_bg(fn, done=None):
+    """fn() in a thread, done(result) back in the GTK loop."""
+    def work():
+        try:
+            r = fn()
+        except Exception as e:   # noqa: BLE001 - shown to the user
+            r = e
+        if done:
+            GLib.idle_add(lambda: (done(r), False)[1])
+    threading.Thread(target=work, daemon=True).start()
+
+
+# ─────────────────────────────────────────────────────────── widgets
+def label(text, cls=None, xalign=0.0, wrap=False, ellipsize=False):
+    lb = Gtk.Label(label=text, xalign=xalign)
+    if cls:
+        for c in cls.split():
+            lb.get_style_context().add_class(c)
+    if wrap:
+        lb.set_line_wrap(True)
+    if ellipsize and not wrap:
+        lb.set_ellipsize(Pango.EllipsizeMode.END)
+    return lb
+
+
+def button(text, cb, cls='nbtn', glyph=None):
+    b = Gtk.Button()
+    box = Gtk.Box(spacing=8)
+    if glyph:
+        box.pack_start(label(glyph, 'bglyph'), False, False, 0)
+    if text:
+        box.pack_start(label(text), False, False, 0)
+    box.set_halign(Gtk.Align.CENTER)
+    b.add(box)
+    for c in cls.split():
+        b.get_style_context().add_class(c)
+    b.connect('clicked', lambda *_: cb())
+    return b
+
+
+def section(title, glyph=None):
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+    box.get_style_context().add_class('card')
+    head = Gtk.Box(spacing=8)
+    if glyph:
+        head.pack_start(label(glyph, 'sglyph'), False, False, 0)
+    head.pack_start(label(title.upper(), 'stitle'), False, False, 0)
+    box.pack_start(head, False, False, 0)
+    box.head = head
+    return box
+
+
+class Graph(Gtk.DrawingArea):
+    """Download / upload of the last minute in the style's colors."""
+
+    def __init__(self, app):
+        super().__init__()
+        self.app = app
+        self.set_size_request(-1, 170)
+        self.connect('draw', self.on_draw)
+
+    def on_draw(self, _w, cr):
+        app = self.app
+        W, H = self.get_allocated_width(), self.get_allocated_height()
+        ui.rounded(cr, 0.5, 0.5, W - 1, H - 1, 14)
+        cr.set_source_rgba(0, 0, 0, 0.35)
+        cr.fill_preserve()
+        cr.set_source_rgba(*app.acc, 0.25)
+        cr.set_line_width(1)
+        cr.stroke()
+        hist = app.hist.get(app.cur, deque())
+        rx = [h[0] for h in hist]
+        tx = [h[1] for h in hist]
+        top = max([1024] + rx + tx) * 1.15
+        pad = 12
+        for k in range(1, 4):   # grid
+            y = pad + (H - 2 * pad) * k / 4
+            cr.move_to(pad, y)
+            cr.line_to(W - pad, y)
+        cr.set_source_rgba(*app.fg, 0.06)
+        cr.set_line_width(1)
+        cr.stroke()
+        ui.text(cr, human(top, True), W - pad, pad - 2, 7, (*app.fg, 0.35), align='right')
+
+        def trace(vals, col, fill):
+            if len(vals) < 2:
+                return None
+            n = HIST - 1
+            pts = [(pad + (W - 2 * pad) * (n - (len(vals) - 1 - i)) / n, H - pad - (H - 2 * pad) * v / top)
+                   for i, v in enumerate(vals)]
+            cr.move_to(*pts[0])
+            for p in pts[1:]:
+                cr.line_to(*p)
+            if fill:
+                cr.line_to(pts[-1][0], H - pad)
+                cr.line_to(pts[0][0], H - pad)
+                cr.close_path()
+                g = cairo.LinearGradient(0, pad, 0, H - pad)
+                g.add_color_stop_rgba(0, *col, 0.45)
+                g.add_color_stop_rgba(1, *col, 0.02)
+                cr.set_source(g)
+                cr.fill()
+                cr.move_to(*pts[0])
+                for p in pts[1:]:
+                    cr.line_to(*p)
+            for lw, a in ((6, 0.12), (3, 0.25), (1.6, 1)):
+                cr.set_line_width(lw)
+                cr.set_source_rgba(*col, a)
+                cr.stroke_preserve()
+            cr.new_path()
+            return pts[-1]
+        end = trace(rx, app.acc, True)
+        trace(tx, app.acc2, False)
+        if end:   # the style's own dot riding the download trace
+            ws = app.ws
+            if ws and app.style in ws.ICON_PAINTERS:
+                with ws.tinted(app.style, ws.tint_target('windows')):
+                    ws.halo(cr, *end, 18, app.acc, 0.5)
+                    ws.ICON_PAINTERS[app.style](cr, 'dot', *end, 20, app.acc)
+            else:
+                cr.arc(*end, 4, 0, 6.3)
+                cr.set_source_rgb(*app.acc)
+                cr.fill()
+        return True
+
+
+class Spark(Gtk.DrawingArea):
+    """A small trace of an interface in the list."""
+
+    def __init__(self, app, iface):
+        super().__init__()
+        self.app, self.iface = app, iface
+        self.set_size_request(60, 22)
+        self.connect('draw', self.on_draw)
+
+    def on_draw(self, _w, cr):
+        W, H = self.get_allocated_width(), self.get_allocated_height()
+        vals = [a + b for a, b in self.app.hist.get(self.iface, [])]
+        if len(vals) < 2:
+            return True
+        top = max(vals + [1024])
+        cr.move_to(0, H)
+        for i, v in enumerate(vals):
+            cr.line_to(W * (HIST - len(vals) + i) / (HIST - 1), H - 2 - (H - 4) * v / top)
+        cr.set_source_rgba(*self.app.acc, 0.9)
+        cr.set_line_width(1.2)
+        cr.stroke()
+        return True
+
+
+# ─────────────────────────────────────────────────────────── window
+class NetCenter(Gtk.Window):
+    def __init__(self):
+        super().__init__(title=T('Network center'))
+        self.pal = ui.load_palette()
+        self.c = ui.rgb_palette(self.pal)
+        self.fg = self.c['fg']
+        self.style = ui.theme_style()
+        try:
+            import wspill as ws
+            self.ws = ws
+        except Exception:
+            self.ws = None
+        self.acc = ui.style_accent(self.style, self.pal) if self.style else self.c['blue']
+        self.acc2 = self.accent2()
+        self.bg = None
+        self.devices = []
+        self.cur = None
+        self.hist = {}
+        self.last = {}
+        self.dev_rows = {}
+        self.busy = False
+        self.wifi_cache = {}
+        self.set_default_size(1200, 780)
+        self.install_css()
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        root.get_style_context().add_class('ncroot')
+        root.set_border_width(26)
+        self.add(root)
+        root.pack_start(self.build_header(), False, False, 0)
+        body = Gtk.Box(spacing=16)
+        root.pack_start(body, True, True, 0)
+        body.pack_start(self.build_side(), False, False, 0)
+        self.main_scroll = Gtk.ScrolledWindow()
+        self.main_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.main = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        self.main_scroll.add(self.main)
+        body.pack_start(self.main_scroll, True, True, 0)
+        self.status = label('', 'status')
+        root.pack_start(self.status, False, False, 0)
+
+        self.connect('draw', self.on_draw)
+        self.connect('key-press-event', self.on_key)
+        self.connect('destroy', Gtk.main_quit)
+        self.connect('configure-event', lambda *_: setattr(self, 'bg', None) if self.bg and (
+            self.bg.get_width(), self.bg.get_height()) != (self.get_allocated_width(),
+                                                           self.get_allocated_height()) else None)
+        self.tick()
+        self.refresh_all()
+        GLib.timeout_add(1000, self.tick)
+        GLib.timeout_add_seconds(4, lambda: (self.refresh_devices(), True)[1])
+
+    def accent2(self):
+        try:
+            import wscard
+            ws = wscard.ws
+            with ws.tinted(self.style, ws.tint_target('windows')):
+                return ws.rgb(wscard.FIELD.get(self.style, ('', self.pal['magenta']))[1])
+        except Exception:
+            return self.c['magenta']
+
+    # ── look
+    def install_css(self):
+        hexa = '#%02x%02x%02x' % tuple(int(v * 255) for v in self.acc)
+        hexb = '#%02x%02x%02x' % tuple(int(v * 255) for v in self.acc2)
+        css = Gtk.CssProvider()
+        css.load_from_data((ui.hud_css(self.pal) + f'''
+@define-color acc {hexa};
+@define-color acc2 {hexb};
+window, .ncroot {{ background: transparent; }}
+.ncroot, .ncroot label {{ font-family: "{ui.FONT}"; color: @fg; }}
+.title {{ font-size: 17pt; font-weight: 800; letter-spacing: 3px; }}
+.sub {{ font-size: 8pt; color: alpha(@fg, 0.55); letter-spacing: 1px; }}
+.hglyph {{ font-family: "{ui.ICON_FONT}"; font-size: 28pt; color: @acc; }}
+.sglyph, .bglyph, .rglyph {{ font-family: "{ui.ICON_FONT}"; color: @acc; }}
+.sglyph {{ font-size: 13pt; }}
+.bglyph {{ font-size: 11pt; }}
+.rglyph {{ font-size: 16pt; }}
+.stitle {{ font-size: 8pt; font-weight: 800; letter-spacing: 3px; color: alpha(@fg, 0.75); }}
+.card {{ background-color: alpha(@bg, 0.55); border: 1px solid alpha(@acc, 0.22);
+    border-radius: 16px; padding: 16px 18px; }}
+.chip {{ font-size: 8pt; font-weight: 800; letter-spacing: 1px; padding: 3px 10px; border-radius: 10px;
+    background-color: alpha(@acc, 0.16); color: @acc; }}
+.chip.bad {{ background-color: alpha(@red, 0.16); color: @red; }}
+.chip.mid {{ background-color: alpha(@yellow, 0.16); color: @yellow; }}
+.key {{ font-size: 8pt; color: alpha(@fg, 0.5); letter-spacing: 1px; }}
+.val {{ font-size: 9pt; font-weight: 700; }}
+.big {{ font-size: 15pt; font-weight: 800; }}
+.big.up {{ color: @acc2; }}
+.big.down {{ color: @acc; }}
+.status {{ font-size: 8pt; color: alpha(@fg, 0.6); letter-spacing: 1px; }}
+.status.bad {{ color: @red; }}
+button.nbtn, button.dev, button.net {{ background-image: none; box-shadow: none; text-shadow: none;
+    background-color: alpha(@black, 0.55); border: 1px solid alpha(@acc, 0.3); border-radius: 12px;
+    padding: 7px 14px; color: @fg; transition: all 140ms ease; }}
+button.nbtn:hover, button.net:hover {{ border-color: @acc; background-color: alpha(@acc, 0.14); }}
+button.nbtn.accent {{ background-color: alpha(@acc, 0.22); border-color: @acc; }}
+button.nbtn.danger {{ border-color: alpha(@red, 0.6); }}
+button.nbtn.danger:hover {{ background-color: alpha(@red, 0.18); }}
+button.dev {{ padding: 10px 12px; border-radius: 14px; border-color: alpha(@acc, 0.12); }}
+button.dev:hover {{ background-color: alpha(@acc, 0.1); }}
+button.dev.sel {{ background-color: alpha(@acc, 0.18); border-color: @acc;
+    box-shadow: 0 0 18px alpha(@acc, 0.25); }}
+button.net {{ padding: 8px 12px; }}
+button.net.active {{ border-color: @acc; background-color: alpha(@acc, 0.16); }}
+entry {{ background-image: none; background-color: alpha(@black, 0.7); color: @fg; caret-color: @acc;
+    border: 1px solid alpha(@acc, 0.3); border-radius: 10px; padding: 6px 10px; box-shadow: none; }}
+entry:focus {{ border-color: @acc; }}
+switch {{ background-image: none; background-color: alpha(@black, 0.7); border: 1px solid alpha(@acc, 0.35);
+    border-radius: 14px; }}
+switch:checked {{ background-color: alpha(@acc, 0.55); }}
+switch slider {{ background-image: none; background-color: @fg; border-radius: 12px; border: none;
+    box-shadow: none; min-width: 20px; min-height: 20px; }}
+combobox button {{ background-image: none; background-color: alpha(@black, 0.7); color: @fg;
+    border: 1px solid alpha(@acc, 0.3); border-radius: 10px; box-shadow: none; }}
+scrolledwindow, viewport {{ background: transparent; border: none; }}
+''').encode())
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css,
+                                                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+    def on_draw(self, _w, cr):
+        W, H = self.get_allocated_width(), self.get_allocated_height()
+        if self.bg is None or (self.bg.get_width(), self.bg.get_height()) != (W, H):
+            self.bg = cairo.ImageSurface(cairo.FORMAT_RGB24, W, H)
+            bc = cairo.Context(self.bg)
+            try:
+                if not self.style:
+                    raise ValueError
+                import wsback
+                import wscard
+                bc.set_source_surface(wsback.render(self.style, W, H, wscard.ws.tint_target('windows')), 0, 0)
+                bc.paint()
+                bc.set_source_rgba(*self.c['bg'], 0.64)
+                bc.paint()
+            except Exception:
+                bc.set_source_rgb(*self.c['bg'])
+                bc.paint()
+        cr.set_source_surface(self.bg, 0, 0)
+        cr.paint()
+        return False
+
+    # ── header
+    def build_header(self):
+        box = Gtk.Box(spacing=14)
+        emblem = G['net']
+        try:
+            import barconf
+            import baricons
+            emblem = baricons.icons(barconf.icon_style())['emblem']
+        except Exception:
+            pass
+        box.pack_start(label(emblem, 'hglyph'), False, False, 0)
+        titles = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        titles.set_valign(Gtk.Align.CENTER)
+        titles.pack_start(label(T('Network center').upper(), 'title'), False, False, 0)
+        self.host = label(socket.gethostname(), 'sub')
+        titles.pack_start(self.host, False, False, 0)
+        box.pack_start(titles, False, False, 0)
+        self.conn_chip = label(T('Checking…'), 'chip')
+        self.conn_chip.set_valign(Gtk.Align.CENTER)
+        box.pack_start(self.conn_chip, False, False, 6)
+        box.pack_start(Gtk.Box(), True, True, 0)
+        self.switches = {}
+        for key, glyph, text in (('networking', G['net'], T('Networking')), ('wifi', G['wifi'], T('Wi-Fi')),
+                                 ('airplane', G['airplane'], T('Airplane mode'))):
+            v = Gtk.Box(spacing=8)
+            v.set_valign(Gtk.Align.CENTER)
+            v.pack_start(label(glyph, 'bglyph'), False, False, 0)
+            v.pack_start(label(text, 'key'), False, False, 0)
+            sw = Gtk.Switch()
+            sw.set_valign(Gtk.Align.CENTER)
+            sw.handler = sw.connect('state-set', lambda s, on, k=key: self.on_switch(k, on))
+            v.pack_start(sw, False, False, 0)
+            self.switches[key] = sw
+            box.pack_start(v, False, False, 8)
+        return box
+
+    def set_switch(self, key, on):
+        sw = self.switches[key]
+        sw.handler_block(sw.handler)
+        sw.set_active(on)
+        sw.set_state(on)
+        sw.handler_unblock(sw.handler)
+
+    def on_switch(self, key, on):
+        if key == 'networking':
+            cmd = ['networking', 'on' if on else 'off']
+        elif key == 'wifi':
+            cmd = ['radio', 'wifi', 'on' if on else 'off']
+        else:   # airplane: every radio off
+            cmd = ['radio', 'all', 'off' if on else 'on']
+        self.action(cmd, refresh=True)
+        return False
+
+    # ── side: interfaces + saved connections
+    def build_side(self):
+        side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        side.set_size_request(270, -1)
+        side.pack_start(label(T('Interfaces').upper(), 'stitle'), False, False, 0)
+        self.dev_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        side.pack_start(self.dev_box, False, False, 0)
+        side.pack_start(Gtk.Box(), True, True, 0)
+        self.saved_btn = button(T('Saved connections'), self.show_saved, 'nbtn', G['saved'])
+        side.pack_start(self.saved_btn, False, False, 0)
+        return side
+
+    def fill_devices(self):
+        for ch in self.dev_box.get_children():
+            ch.destroy()
+        self.dev_rows = {}
+        for d in self.devices:
+            b = Gtk.Button()
+            b.get_style_context().add_class('dev')
+            row = Gtk.Box(spacing=10)
+            row.pack_start(label(self.dev_glyph(d), 'rglyph'), False, False, 0)
+            txt = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            txt.pack_start(label(d['iface'], 'val', ellipsize=True), False, False, 0)
+            txt.pack_start(label(d['conn'] or T(d['state_word']), 'key', ellipsize=True), False, False, 0)
+            row.pack_start(txt, True, True, 0)
+            spark = Spark(self, d['iface'])
+            row.pack_start(spark, False, False, 0)
+            b.add(row)
+            b.spark = spark
+            b.connect('clicked', lambda _b, i=d['iface']: self.select(i))
+            if d['iface'] == self.cur:
+                b.get_style_context().add_class('sel')
+            self.dev_box.pack_start(b, False, False, 0)
+            self.dev_rows[d['iface']] = b
+        self.dev_box.show_all()
+
+    def dev_glyph(self, d):
+        if d['type'] == 'wifi':
+            sig = self.wifi_cache.get(d['iface'], {}).get('signal')
+            if d['state'] != 'connected':
+                return G['wifi_off'] if d['state'] == 'unavailable' else G['wifi0']
+            if sig is not None:
+                return G['wifi'] if sig > 75 else G['wifi3'] if sig > 50 else G['wifi2'] if sig > 25 else G['wifi1']
+        return G.get(TYPE_GLYPH.get(d['type'], 'other'), G['other'])
+
+    # ── data
+    def refresh_all(self):
+        self.refresh_devices()
+        run_bg(self.read_general, self.show_general)
+
+    def read_general(self):
+        _rc, out, _e = nm('-t', '-f', 'CONNECTIVITY', 'general')
+        _rc, net, _e = nm('-t', 'networking')
+        _rc, radio, _e = nm('-t', '-f', 'WIFI-HW,WIFI,WWAN-HW,WWAN', 'radio')
+        r = terse(radio.strip()) + ['', '', '', '']
+        return dict(conn=out.strip(), net=net.strip() == 'enabled', wifi=r[1] == 'enabled',
+                    wwan=r[3] == 'enabled', wifi_hw=r[0] == 'enabled')
+
+    def show_general(self, g):
+        if isinstance(g, Exception):
+            return
+        word = {'full': 'Online', 'limited': 'Limited', 'portal': 'Limited'}.get(g['conn'], 'Offline')
+        self.conn_chip.set_text(f'{G["web"] if word == "Online" else G["net_off"]}  {T(word)}')
+        ctx = self.conn_chip.get_style_context()
+        ctx.remove_class('bad')
+        ctx.remove_class('mid')
+        if word != 'Online':
+            ctx.add_class('mid' if word == 'Limited' else 'bad')
+        self.set_switch('networking', g['net'])
+        self.set_switch('wifi', g['wifi'])
+        self.set_switch('airplane', not g['wifi'] and not g['wwan'])
+        self.switches['wifi'].set_sensitive(g['wifi_hw'])
+
+    def refresh_devices(self):
+        def read():
+            _rc, out, _e = nm('-t', '-f', 'DEVICE,TYPE,STATE,CONNECTION', 'device')
+            devs = []
+            for ln in out.splitlines():
+                f = terse(ln) + ['', '', '', '']
+                if f[1] == 'loopback' or f[1].startswith('wifi-p2p'):
+                    continue
+                state = f[2].split(' ')[0]
+                devs.append(dict(iface=f[0], type=f[1], state=state, conn=f[3] if f[3] != '--' else '',
+                                 state_word=state if state in ES else 'disconnected'))
+            return devs
+
+        def done(devs):
+            if isinstance(devs, Exception):
+                return
+            key = [(d['iface'], d['state'], d['conn']) for d in devs]
+            if key == [(d['iface'], d['state'], d['conn']) for d in self.devices] and self.dev_rows:
+                return
+            self.devices = devs
+            if self.cur not in [d['iface'] for d in devs]:
+                pick = next((d for d in devs if d['state'] == 'connected'), devs[0] if devs else None)
+                self.cur = pick['iface'] if pick else None
+            self.fill_devices()
+            if not self.busy:
+                self.select(self.cur, force=True)
+        run_bg(read, done)
+        run_bg(self.read_general, self.show_general)
+
+    def tick(self):
+        now = time.monotonic()
+        for iface in os.listdir('/sys/class/net'):
+            c = counters(iface)
+            if c is None:
+                continue
+            prev = self.last.get(iface)
+            self.last[iface] = (now, *c)
+            if prev:
+                dt = max(0.2, now - prev[0])
+                h = self.hist.setdefault(iface, deque(maxlen=HIST))
+                h.append((max(0, (c[0] - prev[1]) / dt), max(0, (c[1] - prev[2]) / dt)))
+        if hasattr(self, 'graph') and self.graph.get_mapped():
+            self.graph.queue_draw()
+            h = self.hist.get(self.cur)
+            c = counters(self.cur) if self.cur else None
+            if h and c:
+                self.rate_down.set_text(human(h[-1][0], True))
+                self.rate_up.set_text(human(h[-1][1], True))
+                self.tot_down.set_text(human(c[0]))
+                self.tot_up.set_text(human(c[1]))
+        for b in self.dev_rows.values():
+            b.spark.queue_draw()
+        return True
+
+    # ── pages
+    def clear_main(self):
+        for ch in self.main.get_children():
+            ch.destroy()
+
+    def select(self, iface, force=False):
+        if iface == self.cur and not force and self.main.get_children():
+            return
+        self.cur = iface
+        for i, b in self.dev_rows.items():
+            (b.get_style_context().add_class if i == iface else b.get_style_context().remove_class)('sel')
+        self.saved_btn.get_style_context().remove_class('accent')
+        if not iface:
+            self.clear_main()
+            self.main.pack_start(label(T('No interface selected'), 'sub'), False, False, 0)
+            self.main.show_all()
+            return
+        dev = next((d for d in self.devices if d['iface'] == iface), None)
+
+        def read():
+            info = show('device', 'show', iface)
+            prof = {}
+            uuid = info.get('GENERAL.CON-UUID', '')
+            if not uuid and info.get('GENERAL.CONNECTION'):
+                _rc, out, _e = nm('-t', '-g', 'GENERAL.UUID', 'connection', 'show', 'id',
+                                  info['GENERAL.CONNECTION'])
+                uuid = out.strip()
+            if uuid:
+                prof = show('-s', 'connection', 'show', uuid)
+                prof['uuid'] = uuid
+            speed = ''
+            try:
+                s = int(open(f'/sys/class/net/{iface}/speed').read())
+                speed = f'{s} Mb/s' if s > 0 else ''
+            except (OSError, ValueError):
+                pass
+            drv = ''
+            try:
+                drv = os.path.basename(os.readlink(f'/sys/class/net/{iface}/device/driver'))
+            except OSError:
+                pass
+            return info, prof, speed, drv
+
+        run_bg(read, lambda r: None if isinstance(r, Exception) or self.cur != iface
+               else self.build_device(dev, *r))
+
+    def build_device(self, dev, info, prof, speed, drv):
+        self.clear_main()
+        m = self.main
+        connected = dev and dev['state'] == 'connected'
+        # title
+        top = Gtk.Box(spacing=12)
+        top.pack_start(label(self.dev_glyph(dev) if dev else G['net'], 'hglyph'), False, False, 0)
+        tt = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        tt.set_valign(Gtk.Align.CENTER)
+        tt.pack_start(label(f'{dev["iface"]}  ·  {dev["type"]}' if dev else self.cur, 'big'), False, False, 0)
+        tt.pack_start(label(dev['conn'] if dev and dev['conn'] else T('no connection profile'), 'sub'),
+                      False, False, 0)
+        top.pack_start(tt, True, True, 0)
+        chip = label(T(dev['state_word']) if dev else '', 'chip' if connected else 'chip bad')
+        chip.set_valign(Gtk.Align.CENTER)
+        top.pack_start(chip, False, False, 0)
+        act = button(T('Disconnect') if connected else T('Connect'),
+                     lambda: self.action(['device', 'disconnect' if connected else 'connect', dev['iface']],
+                                         refresh=True), 'nbtn danger' if connected else 'nbtn accent',
+                     G['close'] if connected else G['check'])
+        act.set_valign(Gtk.Align.CENTER)
+        top.pack_start(act, False, False, 0)
+        m.pack_start(top, False, False, 0)
+
+        # traffic
+        card = section(T('Download') + ' / ' + T('Upload'), G['speed'])
+        self.graph = Graph(self)
+        card.pack_start(self.graph, False, False, 0)
+        stats = Gtk.Box(spacing=26, homogeneous=True)
+        self.rate_down, self.rate_up = label('—', 'big down'), label('—', 'big up')
+        self.tot_down, self.tot_up = label('—', 'val'), label('—', 'val')
+        for glyph, key, big, tot, tkey in ((G['down'], 'Download', self.rate_down, self.tot_down, 'Received'),
+                                          (G['up'], 'Upload', self.rate_up, self.tot_up, 'Sent')):
+            col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            h = Gtk.Box(spacing=6)
+            h.pack_start(label(glyph, 'bglyph'), False, False, 0)
+            h.pack_start(label(T(key).upper(), 'key'), False, False, 0)
+            col.pack_start(h, False, False, 0)
+            col.pack_start(big, False, False, 0)
+            t = Gtk.Box(spacing=6)
+            t.pack_start(label(T(tkey), 'key'), False, False, 0)
+            t.pack_start(tot, False, False, 0)
+            col.pack_start(t, False, False, 0)
+            stats.pack_start(col, True, True, 0)
+        card.pack_start(stats, False, False, 0)
+        m.pack_start(card, False, False, 0)
+
+        # details
+        det = section(T('Details'), G['ip'])
+        grid = Gtk.Grid(column_spacing=22, row_spacing=8)
+        rows = [('MAC', info.get('GENERAL.HWADDR', '')), ('MTU', info.get('GENERAL.MTU', '')),
+                ('IPv4', info.get('IP4.ADDRESS', '')), (T('Gateway'), info.get('IP4.GATEWAY', '')),
+                ('DNS', info.get('IP4.DNS', '')), ('IPv6', info.get('IP6.ADDRESS', '')),
+                (T('Link'), speed), (T('Driver'), drv)]
+        rows = [(k, v) for k, v in rows if v and v != '--']
+        for i, (k, v) in enumerate(rows):
+            r, c = divmod(i, 2)
+            grid.attach(label(k, 'key'), c * 2, r, 1, 1)
+            vl = label(v, 'val', ellipsize=True)
+            vl.set_selectable(True)
+            vl.set_hexpand(True)
+            grid.attach(vl, c * 2 + 1, r, 1, 1)
+        det.pack_start(grid, False, False, 0)
+        m.pack_start(det, False, False, 0)
+
+        if dev and dev['type'] == 'wifi':
+            m.pack_start(self.build_wifi(dev), False, False, 0)
+        if prof.get('uuid'):
+            m.pack_start(self.build_ip(prof), False, False, 0)
+        m.show_all()
+
+    def build_ip(self, prof):
+        card = section(T('IP settings'), G['cog'])
+        uuid = prof['uuid']
+        grid = Gtk.Grid(column_spacing=14, row_spacing=10)
+        method = Gtk.ComboBoxText()
+        method.append('auto', T('Automatic (DHCP)'))
+        method.append('manual', T('Manual'))
+        method.set_active_id('manual' if prof.get('ipv4.method') == 'manual' else 'auto')
+        addr_raw = prof.get('ipv4.addresses', '').split(',')[0].strip()
+        addr, _, prefix = addr_raw.partition('/')
+        e_addr, e_pref, e_gw = Gtk.Entry(text=addr), Gtk.Entry(text=prefix or '24'), Gtk.Entry(
+            text=prof.get('ipv4.gateway', '').replace('--', ''))
+        e_dns = Gtk.Entry(text=prof.get('ipv4.dns', '').replace(',', ' ').replace('--', ''))
+        e_dns.set_placeholder_text(f'1.1.1.1 8.8.8.8  ({T("separated by spaces")})')
+        e_mtu = Gtk.Entry(text=prof.get('802-3-ethernet.mtu', prof.get('802-11-wireless.mtu', '')).replace(
+            'auto', ''))
+        e_mtu.set_placeholder_text(T('blank = automatic'))
+        e_pref.set_width_chars(4)
+        auto = Gtk.Switch(active=prof.get('connection.autoconnect', 'yes') == 'yes')
+        auto.set_halign(Gtk.Align.START)
+        rows = [('', method), (T('Address'), e_addr), (T('Prefix'), e_pref), (T('Gateway'), e_gw),
+                (T('DNS servers'), e_dns), ('MTU', e_mtu), (T('Connect automatically'), auto)]
+        for r, (k, w) in enumerate(rows):
+            grid.attach(label(k, 'key'), 0, r, 1, 1)
+            w.set_hexpand(True)
+            grid.attach(w, 1, r, 1, 1)
+        manual_widgets = (e_addr, e_pref, e_gw)
+
+        def sync(*_):
+            for w in manual_widgets:
+                w.set_sensitive(method.get_active_id() == 'manual')
+        method.connect('changed', sync)
+        sync()
+        card.pack_start(grid, False, False, 0)
+
+        def apply():
+            args = ['connection', 'modify', uuid]
+            dns = ' '.join(e_dns.get_text().replace(',', ' ').split())
+            if method.get_active_id() == 'manual':
+                a = e_addr.get_text().strip()
+                if not a:
+                    self.say(T('Address') + ' ?', True)
+                    return
+                args += ['ipv4.method', 'manual', 'ipv4.addresses', f'{a}/{e_pref.get_text().strip() or "24"}',
+                         'ipv4.gateway', e_gw.get_text().strip()]
+            else:
+                args += ['ipv4.method', 'auto', 'ipv4.addresses', '', 'ipv4.gateway', '']
+            args += ['ipv4.dns', dns, 'ipv4.ignore-auto-dns', 'yes' if dns else 'no',
+                     'connection.autoconnect', 'yes' if auto.get_active() else 'no']
+            mtu = e_mtu.get_text().strip() or 'auto'
+            ctype = prof.get('connection.type', '')
+            if ctype in ('802-3-ethernet', '802-11-wireless'):
+                args += [f'{ctype}.mtu', mtu]
+            self.action(args, then=['connection', 'up', uuid], refresh=True)
+        btn = button(T('Apply'), apply, 'nbtn accent', G['check'])
+        btn.set_halign(Gtk.Align.END)
+        card.pack_start(btn, False, False, 0)
+        return card
+
+    def build_wifi(self, dev):
+        card = section(T('Networks around'), G['wifi'])
+        scan = button(T('Scan'), lambda: self.scan(dev['iface'], box, True), 'nbtn', G['refresh'])
+        card.head.pack_end(scan, False, False, 0)
+        hs = button(T('Hotspot'), lambda: self.hotspot_form(dev['iface'], box), 'nbtn', G['hotspot'])
+        card.head.pack_end(hs, False, False, 6)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.pack_start(label(T('Scanning…'), 'sub'), False, False, 0)
+        card.pack_start(box, False, False, 0)
+        self.scan(dev['iface'], box, False)
+        return card
+
+    def scan(self, iface, box, rescan):
+        def read():
+            _rc, out, _e = nm('-t', '-f', 'IN-USE,SSID,BSSID,SIGNAL,SECURITY,CHAN', 'device', 'wifi', 'list',
+                              'ifname', iface, '--rescan', 'yes' if rescan else 'auto', timeout=40)
+            _rc, saved, _e = nm('-t', '-f', 'NAME,TYPE', 'connection', 'show')
+            known = {terse(s)[0] for s in saved.splitlines() if terse(s)[-1] == '802-11-wireless'}
+            nets = {}
+            for ln in out.splitlines():
+                f = terse(ln) + [''] * 6
+                ssid = f[1]
+                if not ssid:
+                    continue
+                n = dict(active=f[0] == '*', ssid=ssid, signal=int(f[3] or 0), sec=f[4] if f[4] != '--' else '',
+                         chan=f[5], known=ssid in known)
+                if ssid not in nets or n['signal'] > nets[ssid]['signal'] or n['active']:
+                    nets[ssid] = n
+            return sorted(nets.values(), key=lambda n: (not n['active'], -n['signal']))
+
+        def done(nets):
+            for ch in box.get_children():
+                ch.destroy()
+            if isinstance(nets, Exception) or not nets:
+                box.pack_start(label(T('No networks found'), 'sub'), False, False, 0)
+                box.show_all()
+                return
+            act = next((n for n in nets if n['active']), None)
+            if act:
+                self.wifi_cache[iface] = {'signal': act['signal']}
+            for n in nets[:24]:
+                box.pack_start(self.net_row(iface, n, box), False, False, 0)
+            box.show_all()
+        if rescan:
+            for ch in box.get_children():
+                ch.destroy()
+            box.pack_start(label(T('Scanning…'), 'sub'), False, False, 0)
+            box.show_all()
+        run_bg(read, done)
+
+    def net_row(self, iface, n, box):
+        wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        b = Gtk.Button()
+        b.get_style_context().add_class('net')
+        if n['active']:
+            b.get_style_context().add_class('active')
+        row = Gtk.Box(spacing=10)
+        s = n['signal']
+        row.pack_start(label(G['wifi'] if s > 75 else G['wifi3'] if s > 50 else G['wifi2'] if s > 25
+                             else G['wifi1'], 'rglyph'), False, False, 0)
+        row.pack_start(label(n['ssid'], 'val', ellipsize=True), True, True, 0)
+        if n['known']:
+            row.pack_start(label(T('Saved'), 'chip'), False, False, 0)
+        if n['active']:
+            row.pack_start(label(T('Active'), 'chip'), False, False, 0)
+        row.pack_start(label(f'{s}%', 'key'), False, False, 0)
+        row.pack_start(label(G['lock'] if n['sec'] else G['open'], 'bglyph'), False, False, 0)
+        b.add(row)
+        wrap.pack_start(b, False, False, 0)
+        form = Gtk.Box(spacing=8)
+        form.set_no_show_all(True)
+        wrap.pack_start(form, False, False, 0)
+
+        def open_form():
+            for ch in form.get_children():
+                ch.destroy()
+            if n['active']:
+                form.pack_start(button(T('Disconnect'), lambda: self.action(
+                    ['device', 'disconnect', iface], refresh=True), 'nbtn danger', G['close']), False, False, 0)
+            elif n['known'] or not n['sec']:
+                form.pack_start(button(T('Connect'), lambda: self.action(
+                    ['connection', 'up', 'id', n['ssid']] if n['known'] else
+                    ['device', 'wifi', 'connect', n['ssid'], 'ifname', iface], refresh=True),
+                    'nbtn accent', G['check']), False, False, 0)
+            if not n['known'] and n['sec'] and not n['active']:
+                pw = Gtk.Entry()
+                pw.set_visibility(False)
+                pw.set_placeholder_text(T('Password'))
+                pw.set_hexpand(True)
+
+                def go(*_):
+                    self.action(['device', 'wifi', 'connect', n['ssid'], 'password', pw.get_text(),
+                                 'ifname', iface], refresh=True, secret=True)
+                pw.connect('activate', go)
+                form.pack_start(pw, True, True, 0)
+                form.pack_start(button(T('Connect'), go, 'nbtn accent', G['check']), False, False, 0)
+                GLib.idle_add(pw.grab_focus)
+            if n['known']:
+                form.pack_start(button(T('Forget'), lambda: self.action(
+                    ['connection', 'delete', 'id', n['ssid']], refresh=True), 'nbtn danger', G['close']),
+                    False, False, 0)
+            form.set_no_show_all(False)
+            form.show_all()
+        b.connect('clicked', lambda *_: form.hide() if form.get_visible() else open_form())
+        return wrap
+
+    def hotspot_form(self, iface, box):
+        for ch in box.get_children():
+            ch.destroy()
+        grid = Gtk.Grid(column_spacing=12, row_spacing=8)
+        name = Gtk.Entry(text=f'{socket.gethostname()}-hotspot')
+        pw = Gtk.Entry()
+        pw.set_placeholder_text('8+')
+        grid.attach(label(T('Name'), 'key'), 0, 0, 1, 1)
+        grid.attach(name, 1, 0, 1, 1)
+        grid.attach(label(T('Password'), 'key'), 0, 1, 1, 1)
+        grid.attach(pw, 1, 1, 1, 1)
+        name.set_hexpand(True)
+        box.pack_start(grid, False, False, 0)
+        box.pack_start(button(T('Share'), lambda: self.action(
+            ['device', 'wifi', 'hotspot', 'ifname', iface, 'ssid', name.get_text(), 'password', pw.get_text()],
+            refresh=True, secret=True), 'nbtn accent', G['hotspot']), False, False, 0)
+        box.show_all()
+
+    def show_saved(self):
+        self.cur = None
+        for b in self.dev_rows.values():
+            b.get_style_context().remove_class('sel')
+        self.saved_btn.get_style_context().add_class('accent')
+
+        def read():
+            _rc, out, _e = nm('-t', '-f', 'NAME,UUID,TYPE,DEVICE,AUTOCONNECT,ACTIVE', 'connection', 'show')
+            return [terse(ln) + [''] * 6 for ln in out.splitlines()]
+
+        def done(rows):
+            self.clear_main()
+            card = section(T('Saved connections'), G['saved'])
+            for name, uuid, typ, dev, autoc, active, *_ in rows if not isinstance(rows, Exception) else []:
+                if typ == 'loopback':
+                    continue
+                r = Gtk.Box(spacing=10)
+                kind = {'802-3-ethernet': 'ethernet', '802-11-wireless': 'wifi', 'wireguard': 'vpn',
+                        'vpn': 'vpn', 'bridge': 'bridge'}.get(typ, 'other')
+                r.pack_start(label(G.get(kind, G['other']), 'rglyph'), False, False, 0)
+                t = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+                t.pack_start(label(name, 'val'), False, False, 0)
+                t.pack_start(label(f'{typ}  ·  auto: {autoc}' + (f'  ·  {dev}' if dev and dev != '--' else ''),
+                                   'key'), False, False, 0)
+                r.pack_start(t, True, True, 0)
+                on = active == 'yes'
+                if on:
+                    r.pack_start(label(T('Active'), 'chip'), False, False, 0)
+                r.pack_start(button(T('Deactivate') if on else T('Activate'),
+                                    lambda u=uuid, o=on: self.action(['connection', 'down' if o else 'up', u],
+                                                                     refresh=True, then_saved=True),
+                                    'nbtn' if on else 'nbtn accent'), False, False, 0)
+                r.pack_start(button('', lambda u=uuid: self.action(['connection', 'delete', u], refresh=True,
+                                                                   then_saved=True), 'nbtn danger', G['close']),
+                             False, False, 0)
+                card.pack_start(r, False, False, 0)
+            self.main.pack_start(card, False, False, 0)
+            self.main.show_all()
+        run_bg(read, done)
+
+    # ── actions
+    def say(self, text, bad=False):
+        self.status.set_text(text)
+        ctx = self.status.get_style_context()
+        (ctx.add_class if bad else ctx.remove_class)('bad')
+
+    def action(self, args, then=None, refresh=False, secret=False, then_saved=False):
+        shown = ' '.join(a if not (secret and i > 0 and args[i - 1] == 'password') else '••••'
+                         for i, a in enumerate(args))
+        self.say(f'nmcli {shown} …')
+        self.busy = True
+
+        def work():
+            rc, out, err = nm(*args, timeout=60)
+            if rc == 0 and then:
+                rc, out, err = nm(*then, timeout=60)
+            return rc, out, err
+
+        def done(r):
+            self.busy = False
+            if isinstance(r, Exception):
+                self.say(f'{T("Failed")}: {r}', True)
+                return
+            rc, out, err = r
+            msg = (out.strip().splitlines() or [''])[-1] if rc == 0 else err.splitlines()[-1] if err else ''
+            self.say(f'{T("Done") if rc == 0 else T("Failed")}{": " + msg if msg else ""}', rc != 0)
+            if refresh:
+                self.devices = []
+                self.refresh_all()
+            if then_saved:
+                GLib.timeout_add(600, lambda: (self.show_saved(), False)[1])
+        run_bg(work, done)
+
+    def on_key(self, _w, ev):
+        if Gdk.keyval_name(ev.keyval) == 'Escape':
+            self.destroy()
+            return True
+        if ev.state & Gdk.ModifierType.CONTROL_MASK and Gdk.keyval_name(ev.keyval) in ('r', 'R'):
+            self.devices = []
+            self.refresh_all()
+            return True
+        return False
+
+
+def main():
+    _lock = ui.single_instance('netcenter', toggle=True)  # noqa: F841
+    GLib.set_prgname('NetCenter')
+    # a floating, centered window (the theme frames it like any other)
+    subprocess.run(['bspc', 'rule', '-r', 'NetCenter'], capture_output=True)
+    subprocess.run(['bspc', 'rule', '-a', 'NetCenter', 'state=floating', 'center=on'], capture_output=True)
+    win = NetCenter()
+    ui.quit_on_sigterm(win.destroy)
+    win.show_all()
+    Gtk.main()
+
+
+if __name__ == '__main__':
+    main()

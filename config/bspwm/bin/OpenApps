@@ -24,7 +24,7 @@ case "$1" in
 		Term --checkupdates
 		;;
 	--netmanager)
-		NetManagerDM
+		NetCenter || NetManagerDM
 		;;
 	--pass)
 		RofiPass
