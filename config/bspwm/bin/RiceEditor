@@ -2248,6 +2248,18 @@ class RiceEditor(Gtk.Window):
             self.pal_flow.add(b)
             self.pal_buttons[func] = (b, chip)
         c.pack_start(self.pal_flow, False, False, 6)
+        if wspill and ricekit:
+            parts = self.card('󰸌', 'Apply a palette to', 'the same theme style, in the new colors')
+            self.pal_parts = {}
+            for key, icon, title, desc in self.PAL_PARTS:
+                sw = Gtk.Switch()
+                sw.set_active(True)
+                self.pal_parts[key] = sw
+                parts.pack_start(self.row(f'{icon}  {title}', desc, sw), False, False, 0)
+            parts.pack_start(self.row("Theme's own colors", 'Undo the recolor of bar, workspaces, locks and frames',
+                                      self.button('󰁯  Reset', 'ghost', lambda *_: self.reset_tints())),
+                             False, False, 0)
+            p.pack_start(parts, False, False, 0)
         note = Gtk.Label(label='Palettes live in ' + COLORS_FILE.replace(HOME, '~') +
                          ' — add your own cargar_<name>() function and it shows up here.', xalign=0)
         note.get_style_context().add_class('mono-note')
@@ -2256,7 +2268,22 @@ class RiceEditor(Gtk.Window):
         p.pack_start(c, False, False, 0)
         return p
 
+    PAL_PARTS = [('colors', '󰏘', 'Colors', 'terminals, menus, notifications, GTK, bar text, this editor'),
+                 ('bar', '󱔓', 'Bar', 'the bar drawn in the theme style, in these colors'),
+                 ('workspaces', '󰮯', 'Workspaces', 'the pac-man pill'),
+                 ('locks', '󰌾', 'Lock screens', 'login lock card and quick lock panel'),
+                 ('windows', '󰖲', 'Window frames', 'the styled frames around windows')]
+
     def apply_palette(self, func):
+        parts = [k for k, sw in getattr(self, 'pal_parts', {}).items() if sw.get_active()] or ['colors']
+        deco = [p for p in parts if p != 'colors']
+        if deco and wspill and ricekit:
+            # the same style, in this palette's colors
+            wspill.set_tint(deco, ricekit.palette_accent(func))
+        if 'colors' not in parts:
+            self.refresh_decorations(deco)
+            self.toast(f'{palette_title(func)} → {", ".join(deco)}')
+            return
         self.cfg.set_palette(func)
         for f, (b, chip) in self.pal_buttons.items():
             ctx = b.get_style_context()
@@ -2264,7 +2291,25 @@ class RiceEditor(Gtk.Window):
             chip.set_visible(f == func)
         self.load_colors()
         self.refresh_dashboard_palette()
+        # Theme.sh restarts the bar and re-renders the locks by itself
+        if 'windows' in deco:
+            spawn([os.path.join(BIN, 'RoundBorders'), '--reload'])
         self.full_reload(f'Palette {palette_title(func)} applied')
+
+    def refresh_decorations(self, parts):
+        """Redraw what a tint changed, without re-applying the whole rice."""
+        if 'bar' in parts or 'workspaces' in parts:
+            spawn([os.path.join(BIN, 'WorkspacePill'), '--restart'])
+        if 'windows' in parts:
+            spawn([os.path.join(BIN, 'RoundBorders'), '--reload'])
+        if 'locks' in parts:
+            spawn(f'"{BIN}/ScreenLocker" --prepare; nice -n 19 "{BIN}/BetterLock" --prepare', shell=True)
+
+    def reset_tints(self):
+        if wspill:
+            wspill.set_tint(wspill.TINT_PARTS, None)
+            self.refresh_decorations(wspill.TINT_PARTS)
+            self.toast("Back to the theme's own colors")
 
     # ───────────────────────────────────────────────────────── windows
     WIN_STYLES = [
@@ -2368,6 +2413,14 @@ class RiceEditor(Gtk.Window):
                      False, False, 0)
         p.pack_start(c, False, False, 0)
 
+        if wspill:
+            c = self.card('󰸌', 'Window frames', 'the theme style around every window')
+            frames = [('', 'None (plain border)')] + [(k, n) for k, n, _t in wspill.STYLES if k != 'classic']
+            c.pack_start(self.row('Frame style', 'Liquid glass, leaves, flames, HUD brackets… drawn around each '
+                                  'window (unfocused ones dimmed)',
+                                  self.combo(frames, cfg.raw('WIN_SKIN', ''), self.set_win_skin)), False, False, 0)
+            p.pack_start(c, False, False, 0)
+
         c = self.card('󰙵', 'Behaviour', 'bspwmrc')
         sc, lab = self.scale(0.3, 0.7, 0.01, bspc('config', 'split_ratio') or bspwmrc_get('split_ratio', '0.5'), 2,
                              lambda v: self.set_bspwm('split_ratio', f'{v:.2f}', 'Split ratio'))
@@ -2389,6 +2442,11 @@ class RiceEditor(Gtk.Window):
                      False, False, 0)
         p.pack_start(c, False, False, 0)
         return p
+
+    def set_win_skin(self, v):
+        self.cfg.set('WIN_SKIN', v or '')
+        spawn([os.path.join(BIN, 'RoundBorders'), '--reload'])
+        self.toast(f'Window frames → {v or "none"}')
 
     def set_border_width(self, v):
         self.cfg.set('WIN_STYLE', 'custom')

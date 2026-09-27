@@ -248,6 +248,19 @@ def set_gap(gap):
     subprocess.run(['bspc', 'config', 'window_gap', str(gap)], capture_output=True)
 
 
+def palette_accent(func):
+    """The color a palette recolors the theme's decorations to: a theme's
+    palette gives that theme's own accent, others their blue."""
+    import wspill
+    for k, kit in KITS.items():
+        if kit['palette'] == func:
+            return wspill.NATIVE[k]
+    text = open(os.path.join(bc.rice_dir(), 'theme_colors.bash')).read()
+    m = re.search(rf'^{re.escape(func)}\s*\(\)\s*\{{(.*?)^\}}', text, re.M | re.S)
+    blue = re.search(r'\bblue="(#[0-9A-Fa-f]{6})"', m.group(1)) if m else None
+    return blue.group(1).lower() if blue else None
+
+
 def current():
     return get_var('RICE_KIT', '')
 
@@ -258,6 +271,9 @@ def apply(kit, parts, run=True):
     k = KITS[kit]
     parts = [p for p, *_ in PARTS if p in parts]
     ensure_palettes()
+    # a theme brings its own colors back to what it applies
+    import wspill
+    wspill.set_tint([{'colors': 'locks'}.get(p, p) for p in parts], None)
     if 'colors' in parts:
         set_palette(k['palette'])
         pal = palette(kit)
@@ -270,6 +286,7 @@ def apply(kit, parts, run=True):
             else:
                 set_var(name, value)
         set_var('P_SHADOWS', 'true')
+        set_var('WIN_SKIN', kit)   # styled frames around the windows (bin/RoundBorders)
         set_var('dunst_corner_radius', k['dunst_r'])
     if 'bar' in parts or 'workspaces' in parts:
         conf = bc.load()

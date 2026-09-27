@@ -18,7 +18,18 @@ import random
 import cairo
 
 import wspill as ws
-from wspill import PI, rgb, rounded, halo, hline, neon_grad, glow_stroke
+from wspill import PI, rgb, rounded, hline, neon_grad, glow_stroke
+
+
+def halo(cr, x, y, r, c, a):
+    if _FRAME[0] and r > 40:   # a card-sized glow would tint the window
+        return
+    ws.halo(cr, x, y, r, c, a)
+
+# window frames (paint_window): no interior, no long protrusions, the
+# corner radius of picom
+_FRAME = [False]
+_RADIUS = [None]
 
 RADIUS = {'glass': 26, 'minimal': 16, 'gradient': 26, 'macos': 22, 'liquid': 30, 'fire': 22,
           'nature': 26, 'sketch': 20, 'crystal': 28, 'lava': 20, 'neon': 24, 'holo': 28}
@@ -123,11 +134,13 @@ def shape(cr, style, x, y, w, h, s):
         q = max(3, round(4 * s))
         notched(cr, round(x), round(y), round(w / q) * q, round(h / q) * q, q)
     elif style == 'liquid':
-        poly(cr, wavy(x, y, w, h, RADIUS['liquid'] * s, 3 * s, 7))
+        r = _RADIUS[0] if _RADIUS[0] is not None else RADIUS['liquid'] * s
+        poly(cr, wavy(x, y, w, h, max(r, 4), 3 * s, 7))
     elif style == 'lava':
         ws.jagged(cr, rrect_points(x, y, w, h, RADIUS['lava'] * s, 3), random.Random(3), 2.2 * s, smooth=1)
     else:
-        rounded(cr, x, y, w, h, RADIUS.get(style, 24) * s)
+        r = _RADIUS[0] if _RADIUS[0] is not None else RADIUS.get(style, 24) * s
+        rounded(cr, x, y, w, h, r)
 
 
 def card_mask(style, w, h, s):
@@ -142,28 +155,69 @@ def card_mask(style, w, h, s):
 
 
 # ─────────────────────────────────────────────────────────── card
-def paint_card(cr, style, x, y, w, h, s):
+def paint_card(cr, style, x, y, w, h, s, part='locks'):
     """Frame, tint and decorations of the card (the frost is under it)."""
     p = lambda: shape(cr, style, x, y, w, h, s)  # noqa: E731
     cx, cy = x + w / 2, y + h / 2
     fn = CARDS.get(style)
     if fn:
-        fn(cr, p, x, y, w, h, cx, cy, s)
+        with ws.tinted(style, ws.tint_target(part)):
+            fn(cr, p, x, y, w, h, cx, cy, s)
+
+
+WINDOW_SCALE = 0.8   # decorations of a window frame vs a lock card
+WINDOW_REACH = 44     # px they may draw outside the window (overlay margin)
+
+
+def paint_window(cr, style, x, y, w, h, radius, focused):
+    """The frame of a window in the style (bin/RoundBorders draws it right
+    above the window): the card's frame and ornaments without its inside,
+    dimmed when the window has no focus."""
+    _FRAME[0], _RADIUS[0] = True, float(radius)
+    try:
+        cr.push_group()
+        # a soft inner glow along the frame gives it depth
+        with ws.tinted(style, ws.tint_target('windows')):
+            glow = ws.rgb(ws.NATIVE.get(style, '#6fa8ff'))
+        cr.save()
+        shape(cr, style, x, y, w, h, WINDOW_SCALE)
+        cr.clip()
+        for width, a in ((22, 0.05), (12, 0.08), (5, 0.12)):
+            shape(cr, style, x, y, w, h, WINDOW_SCALE)
+            cr.set_line_width(width)
+            cr.set_source_rgba(*glow, a)
+            cr.stroke()
+        cr.restore()
+        paint_card(cr, style, x, y, w, h, WINDOW_SCALE, part='windows')
+        cr.pop_group_to_source()
+        cr.paint_with_alpha(1.0 if focused else 0.45)
+    finally:
+        _FRAME[0], _RADIUS[0] = False, None
 
 
 def _tint(cr, p, col, a):
+    if _FRAME[0]:
+        return
     p()
     cr.set_source_rgba(*rgb(col), a)
     cr.fill()
 
 
 def _gloss(cr, x, y, w, h, s, a=0.16):
+    if _FRAME[0]:
+        return
     g = cairo.LinearGradient(0, y, 0, y + h * 0.4)
     g.add_color_stop_rgba(0, 1, 1, 1, a)
     g.add_color_stop_rgba(1, 1, 1, 1, 0)
     cr.set_source(g)
     cr.rectangle(x, y, w, h * 0.4)
     cr.fill()
+
+
+def _far(*_a):
+    """Decorations reaching far from the frame: cards only (on a window
+    they would cover the neighbours)."""
+    return not _FRAME[0]
 
 
 def card_glass(cr, p, x, y, w, h, cx, cy, s):
@@ -178,7 +232,7 @@ def card_glass(cr, p, x, y, w, h, cx, cy, s):
     cr.set_source(rim)
     cr.set_line_width(1.6 * s)
     cr.stroke()
-    for dy in (-0.22, 0.22):   # light lines leaving the sides
+    for dy in ((-0.22, 0.22) if _far() else ()):   # light lines leaving the sides
         yy = cy + dy * 60 * s
         hline(cr, x - 90 * s, x, yy, blue, 0, 0.6, 1.2 * s)
         hline(cr, x + w, x + w + 90 * s, yy, blue, 0.6, 0, 1.2 * s)
@@ -205,8 +259,9 @@ def card_cyber(cr, p, x, y, w, h, cx, cy, s):
         cr.set_line_width(1.6 * s)
         cr.set_source_rgba(*col, 0.85)
         cr.stroke()
-    hline(cr, x - 100 * s, x - 12 * s, cy, cyan, 0.05, 0.9, 1.4 * s)
-    hline(cr, x + w + 12 * s, x + w + 100 * s, cy, mag, 0.9, 0.05, 1.4 * s)
+    if _far():
+        hline(cr, x - 100 * s, x - 12 * s, cy, cyan, 0.05, 0.9, 1.4 * s)
+        hline(cr, x + w + 12 * s, x + w + 100 * s, cy, mag, 0.9, 0.05, 1.4 * s)
 
 
 def card_minimal(cr, p, x, y, w, h, cx, cy, s):
@@ -219,6 +274,10 @@ def card_minimal(cr, p, x, y, w, h, cx, cy, s):
 
 def card_gradient(cr, p, x, y, w, h, cx, cy, s):
     cr.save(); p(); cr.clip()  # noqa: E702
+    if _FRAME[0]:
+        cr.new_path()
+        cr.rectangle(0, 0, 0, 0)
+        cr.clip()
     g = cairo.LinearGradient(x, y, x + w, y + h)
     for t, col, a in ((0, '#2462ff', 0.40), (0.5, '#6a3cf5', 0.32), (1, '#d63cf5', 0.40)):
         g.add_color_stop_rgba(t, *rgb(col), a)
@@ -248,7 +307,7 @@ def card_pixel(cr, p, x, y, w, h, cx, cy, s):
         cr.set_source_rgb(*rgb(col))
         cr.fill()
         cr.set_fill_rule(cairo.FILL_RULE_WINDING)
-    for side, bx in ((-1, x0), (1, x0 + ww)):
+    for side, bx in (((-1, x0), (1, x0 + ww)) if _far() else ()):
         for i in range(8):
             cr.rectangle(bx + side * (2 + i * 2) * q - (q if side < 0 else 0), cy, q, q)
             cr.set_source_rgba(*rgb('#4f86ff'), max(0.1, 0.8 - i * 0.1))
@@ -268,6 +327,10 @@ def card_liquid(cr, p, x, y, w, h, cx, cy, s):
     halo(cr, x + w * 0.2, y + h * 0.2, w * 0.7, rgb('#20c8ff'), 0.20)
     halo(cr, x + w * 0.8, y + h * 0.85, w * 0.7, rgb('#a45bff'), 0.20)
     cr.save(); p(); cr.clip()  # noqa: E702
+    if _FRAME[0]:
+        cr.new_path()
+        cr.rectangle(0, 0, 0, 0)
+        cr.clip()
     g = cairo.LinearGradient(x, y, x + w, y + h)
     for t, col, a in ((0, '#34dcff', 0.30), (0.5, '#5c86ff', 0.24), (1, '#b37cff', 0.30)):
         g.add_color_stop_rgba(t, *rgb(col), a)
@@ -307,7 +370,7 @@ def card_hud(cr, p, x, y, w, h, cx, cy, s):
     cr.set_line_width(2 * s)
     cr.set_source_rgba(*soft, 0.85)
     cr.stroke()
-    for side, bx in ((-1, x), (1, x + w)):   # tech lines + node, like the bar ends
+    for side, bx in (((-1, x), (1, x + w)) if _far() else ()):   # tech lines + node, like the bar ends
         x1 = bx + side * 110 * s
         hline(cr, *sorted((bx, x1)), cy, blue, *((0.15, 0.95) if side < 0 else (0.95, 0.15)), 1.3 * s)
         halo(cr, x1, cy, 8 * s, blue, 0.5)
@@ -358,8 +421,9 @@ def card_fire(cr, p, x, y, w, h, cx, cy, s):
     grad.add_color_stop_rgb(0, *rgb('#ffc400'))
     grad.add_color_stop_rgb(1, *orange)
     glow_stroke(cr, p, orange, 2 * s, layers=((12 * s, 0.08), (5 * s, 0.2)), source=grad)
-    for _ in range(40):
-        cr.arc(rnd.uniform(x - 60 * s, x + w + 60 * s), rnd.uniform(y - 60 * s, y + h * 0.6), rnd.uniform(0.8, 2) * s,
+    reach = 60 * s if _far() else 10
+    for _ in range(40 if _far() else int(w / 25)):
+        cr.arc(rnd.uniform(x - reach, x + w + reach), rnd.uniform(y - reach, y + h * 0.6), rnd.uniform(0.8, 2) * s,
                0, 2 * PI)
         cr.set_source_rgba(*rgb(rnd.choice(['#ff7a18', '#ffc400', '#ff3a00'])), rnd.uniform(0.3, 0.85))
         cr.fill()
@@ -388,15 +452,18 @@ def card_sketch(cr, p, x, y, w, h, cx, cy, s):
     ws.sketch_stroke(cr, lambda: shape(cr, 'sketch', x + 6 * s, y + 6 * s, w - 12 * s, h - 12 * s, s), lead,
                      passes=3, jitter=1 * s, width=1 * s, alpha=0.4, seed=6)
     rnd = random.Random(8)
+    k = 1 if _far() else 0.25   # draft lines overshoot less on a window
     for yy in (y - 1, y + h + 1):
-        cr.move_to(x - rnd.uniform(30, 60) * s, yy)
-        cr.line_to(x + w + rnd.uniform(30, 60) * s, yy)
+        cr.move_to(x - rnd.uniform(30, 60) * s * k, yy)
+        cr.line_to(x + w + rnd.uniform(30, 60) * s * k, yy)
     for xx in (x - 1, x + w + 1):
-        cr.move_to(xx, y - rnd.uniform(30, 50) * s)
-        cr.line_to(xx, y + h + rnd.uniform(30, 50) * s)
+        cr.move_to(xx, y - rnd.uniform(30, 50) * s * k)
+        cr.line_to(xx, y + h + rnd.uniform(30, 50) * s * k)
     cr.set_line_width(0.8 * s)
     cr.set_source_rgba(*lead, 0.25)
     cr.stroke()
+    if not _far():
+        return
     kx, ky = x + w + 36 * s, y - 20 * s
     crown = lambda: (cr.new_path(), cr.move_to(kx - 16 * s, ky + 12 * s), cr.line_to(kx - 16 * s, ky - 6 * s),  # noqa
                      cr.line_to(kx - 8 * s, ky + 3 * s), cr.line_to(kx, ky - 12 * s), cr.line_to(kx + 8 * s, ky + 3 * s),
@@ -462,7 +529,7 @@ def card_lava(cr, p, x, y, w, h, cx, cy, s):
     cr.set_line_width(1.3 * s)
     cr.set_source_rgba(*rgb('#ff7a18'), 0.9)
     cr.stroke()
-    for side, bx in ((-1, x - 16 * s), (1, x + w + 16 * s)):
+    for side, bx in (((-1, x - 16 * s), (1, x + w + 16 * s)) if _far() else ()):
         for _ in range(5):
             ws.rock_shard(cr, bx + side * rnd.uniform(0, 60) * s, cy + rnd.uniform(-h / 2, h / 2),
                           rnd.uniform(4, 9) * s, rnd)
@@ -486,12 +553,20 @@ def card_neon(cr, p, x, y, w, h, cx, cy, s):
 
 
 def card_holo(cr, p, x, y, w, h, cx, cy, s):
-    ws.stars(cr, (x - 160 * s, y - 120 * s, w + 320 * s, h + 240 * s), 120, 71)
+    if _far():
+        ws.stars(cr, (x - 160 * s, y - 120 * s, w + 320 * s, h + 240 * s), 120, 71)
+    else:   # a few stars along the frame
+        ws.stars(cr, (x - 6, y - 6, w + 12, 12), int(w / 40), 71)
+        ws.stars(cr, (x - 6, y + h - 6, w + 12, 12), int(w / 40), 72)
     halo(cr, x, y + h * 0.3, w * 0.7, rgb('#3b5bff'), 0.22)
     halo(cr, x + w, y + h * 0.7, w * 0.7, rgb('#c03cff'), 0.22)
-    for dx, dy, rot, a in ((70, 26, -0.18, 0.55), (46, 40, 0.12, 0.35)):
+    for dx, dy, rot, a in (((70, 26, -0.18, 0.55), (46, 40, 0.12, 0.35)) if _far() else ()):
         ws.orbit(cr, cx, cy, w / 2 + dx * s, h / 2 + dy * s * 0.4, rot, a, width=1.4 * s, beads=(dx == 70))
     cr.save(); p(); cr.clip()  # noqa: E702
+    if _FRAME[0]:
+        cr.new_path()
+        cr.rectangle(0, 0, 0, 0)
+        cr.clip()
     g = cairo.LinearGradient(x, y, x + w, y + h)
     for t, col, a in ((0, '#1b3cff', 0.22), (0.5, '#6a3cff', 0.18), (1, '#ff4fd8', 0.22)):
         g.add_color_stop_rgba(t, *rgb(col), a)
@@ -520,6 +595,11 @@ FIELD = {
 
 
 def paint_field(cr, style, x, y, w, h, s):
+    with ws.tinted(style, ws.tint_target('locks')):
+        _paint_field(cr, style, x, y, w, h, s)
+
+
+def _paint_field(cr, style, x, y, w, h, s):
     a, b = FIELD.get(style, ('#6fa8ff', '#bb9af7'))
     if style in CHAMFER:
         p = lambda: chamfer(cr, x, y, w, h, h * 0.35)  # noqa: E731
@@ -571,7 +651,9 @@ if __name__ == '__main__':
     import sys
     args = sys.argv[1:]
     if args[:1] == ['style']:
-        print(style_of() or '')
+        # "style tint": the cache key of ScreenLocker needs both
+        st = style_of() or ''
+        print(st, ws.tint_target('locks') or '' if st else '')
     elif args[:1] == ['panel'] and len(args) == 10:
         src, dst, x, y, w, h, s, bg, style = args[1:]
         h_ = bg.lstrip('#')

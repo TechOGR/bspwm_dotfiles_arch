@@ -3,8 +3,14 @@
 # Author:  TechOGR
 # Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
 #
-# RoundBorders - window borders that follow picom's rounded corners
-# when picom runs on xrender (the "lite" profile, see PerfProfile).
+# RoundBorders - window frames: the theme's style around every window
+# (WIN_SKIN, RiceEditor -> Windows / Themes) and, without a style, borders
+# that follow picom's rounded corners on xrender (the "lite" profile).
+#
+# With a style it draws, right above each window, the frame of that style
+# (lib/wscard.py paint_window: wavy liquid glass, leaves, flames, HUD
+# brackets, lava seam...), dimmed on unfocused windows, recolored by
+# RiceEditor -> Palette ("windows" tint).
 #
 # picom rounds a window by clipping it, border included; its GLX backend
 # then redraws the border along the curve, xrender does not, so the
@@ -85,6 +91,17 @@ def corner_radius():
         return 0
 
 
+def win_skin():
+    """WIN_SKIN of theme-config.bash: the style window frames are drawn in."""
+    try:
+        rice = open(os.path.join(BSPWM, '.rice')).read().strip()
+        text = open(os.path.join(BSPWM, 'rices', rice, 'theme-config.bash')).read()
+    except OSError:
+        return ''
+    m = re.search(r'^WIN_SKIN=["\']?(\w*)', text, re.M)
+    return m.group(1) if m else ''
+
+
 def main():
     cli()
     import gi
@@ -94,6 +111,10 @@ def main():
     import cairo
     sys.path.insert(0, os.path.join(BSPWM, 'lib'))
     import riceui as ui
+    try:
+        import wscard
+    except Exception:
+        wscard = None
     _lock = ui.single_instance('roundborders')  # noqa: F841  writes LOCK
     GLib.set_prgname('RoundBorders')
 
@@ -104,8 +125,12 @@ def main():
         return tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
 
     def read_conf():
+        skin = win_skin()
+        skin = skin if wscard and skin in wscard.CARDS else ''
         st['conf'] = {
-            'on': xrender(),
+            'skin': skin,
+            'tint': wscard and wscard.ws.tint_target('windows'),
+            'xrender': xrender(),
             'r': corner_radius(),
             'bw': int(bspc('config', 'border_width') or 0),
             'focused': hexcolor(bspc('config', 'focused_border_color')),
@@ -115,7 +140,7 @@ def main():
     def wanted():
         """{client id: (frame x, y, w, h, focused)} for the windows on screen."""
         c = st['conf']
-        if not (c['on'] and c['r'] > 0 and c['bw'] > 0):
+        if not (c['skin'] or c['xrender'] and c['r'] > 0 and c['bw'] > 0):
             return {}
         out = {}
         f = bspc('query', '-N', '-n', 'focused.window')
@@ -137,7 +162,7 @@ def main():
                 if cl.get('className') in SQUARE:
                     continue
                 bw = cl.get('borderWidth', c['bw'])
-                if bw <= 0:
+                if bw <= 0 and not c['skin']:
                     continue
                 r = cl['floatingRectangle'] if cl.get('state') == 'floating' else cl['tiledRectangle']
                 out[n['id']] = (r['x'] - bw, r['y'] - bw, r['width'] + 2 * bw, r['height'] + 2 * bw, bw,
@@ -151,6 +176,20 @@ def main():
             reg.union(cairo.RectangleInt(*map(int, rect)))
         return reg
 
+    E = wscard.WINDOW_REACH if wscard else 0   # room for ornaments outside the window
+    INNER, CORNER = 26, 80                     # glow inside the edge / corner ornaments
+
+    def frame_region(w, h):
+        """Bands around the edges (E outside, INNER inside) + corner squares."""
+        reg = cairo.Region()
+        b = E + INNER
+        for rect in ((0, 0, w, b), (0, h - b, w, b), (0, 0, b, h), (w - b, 0, b, h),
+                     (0, 0, E + CORNER, E + CORNER), (w - E - CORNER, 0, E + CORNER, E + CORNER),
+                     (0, h - E - CORNER, E + CORNER, E + CORNER),
+                     (w - E - CORNER, h - E - CORNER, E + CORNER, E + CORNER)):
+            reg.union(cairo.RectangleInt(*map(int, rect)))
+        return reg
+
     def draw(win, cr):
         info = win.info
         w, h, bw = info['w'], info['h'], info['bw']
@@ -158,6 +197,11 @@ def main():
         cr.set_source_rgba(0, 0, 0, 0)
         cr.paint()
         cr.set_operator(cairo.OPERATOR_OVER)
+        if info.get('skin'):
+            fw, fh = w - 2 * E, h - 2 * E
+            wscard.paint_window(cr, info['skin'], E + bw / 2, E + bw / 2, fw - bw, fh - bw,
+                                min(st['conf']['r'], fw / 2, fh / 2), info['focused'])
+            return True
         r = max(0.0, st['conf']['r'] - bw / 2)
         x, y, ww, hh = bw / 2, bw / 2, w - bw, h - bw
         r = min(r, ww / 2, hh / 2)
@@ -184,7 +228,10 @@ def main():
         for cid in list(st['rings']):
             if cid not in want:
                 st['rings'].pop(cid).destroy()
+        skin = st['conf']['skin']
         for cid, (x, y, w, h, bw, foc) in want.items():
+            if skin:   # the overlay reaches E px past the window for ornaments
+                x, y, w, h = x - E, y - E, w + 2 * E, h + 2 * E
             win = st['rings'].get(cid)
             new = win is None
             if new:
@@ -197,7 +244,8 @@ def main():
                 win.info = {}
                 win.connect('draw', draw)
                 st['rings'][cid] = win
-            info = {'x': x, 'y': y, 'w': w, 'h': h, 'bw': bw, 'focused': foc}
+            info = {'x': x, 'y': y, 'w': w, 'h': h, 'bw': bw, 'focused': foc, 'skin': skin,
+                    'tint': st['conf']['tint']}
             if info == win.info and not restack_all:
                 continue
             geometry = (x, y, w, h, bw) != tuple(win.info.get(k) for k in ('x', 'y', 'w', 'h', 'bw'))
@@ -210,7 +258,7 @@ def main():
                 win.realize()
             gw = win.get_window()
             r = min(st['conf']['r'], w // 2, h // 2)
-            gw.shape_combine_region(ring_region(w, h, bw, r), 0, 0)
+            gw.shape_combine_region(frame_region(w, h) if skin else ring_region(w, h, bw, r), 0, 0)
             gw.input_shape_combine_region(cairo.Region(), 0, 0)
             if new:
                 win.show()
@@ -266,7 +314,7 @@ def main():
     def wait_picom():
         # at login Theme.sh (which starts us) runs before PicomStart
         tries['n'] += 1
-        if st['conf']['on']:
+        if st['conf']['xrender'] or st['conf']['skin']:
             return False
         if subprocess.run(['pgrep', '-x', 'picom'], capture_output=True).returncode == 0:
             reload()

@@ -38,9 +38,97 @@ STYLES = [
 STYLE_IDS = [s[0] for s in STYLES]
 
 
-def rgb(h):
+def _parse(h):
     h = h.lstrip('#')
     return tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+
+
+def rgb(h):
+    c = _parse(h)
+    return _recolor(c) if _TINT[0] else c
+
+
+# ─────────────────────────────────────────────────────────── recolor
+# A style drawn with the colors of another palette (RiceEditor -> Palette):
+# every color turns around the style's own accent hue towards the
+# palette's accent, keeping its light and a part of its hue spread, so
+# Nature's greens become Fire's oranges and ambers, leaves included.
+import colorsys  # noqa: E402
+
+_TINT = [None]   # (native hue, target hue, target saturation, target rgb)
+NATIVE = {
+    'glass': '#6fa8ff', 'cyber': '#19e6ff', 'minimal': '#a9c2ff', 'gradient': '#6a3cf5',
+    'pixel': '#1f5bff', 'macos': '#5b8cff', 'liquid': '#3b6bff', 'hud': '#2d8cff',
+    'fire': '#ff6a00', 'nature': '#2ee06f', 'sketch': '#d6d6d6', 'crystal': '#2f8cff',
+    'lava': '#ff6a00', 'neon': '#2f6bff', 'holo': '#6a3cff',
+}
+
+
+def _recolor(c):
+    nh, th, ts, trgb = _TINT[0]
+    h, l, s = colorsys.rgb_to_hls(*c)
+    if s < 0.15 or nh is None:
+        # greys: a hint of the new color, stronger on light lines than on
+        # dark fills (a dark card must stay dark)
+        k = (0.45 if nh is None else 0.25) * min(1.0, l * 1.4)
+        return tuple(a + (b - a) * k for a, b in zip(c, trgb))
+    d = (h - nh + 0.5) % 1.0 - 0.5
+    return colorsys.hls_to_rgb((th + d * 0.4) % 1.0, l, min(1.0, s * 0.45 + ts * 0.55))
+
+
+class tinted:
+    """with tinted(style, '#ff7a18'): paint in that color (None: as is)."""
+
+    def __init__(self, style, target):
+        self.args = None
+        if target and style in NATIVE and target.lower() != NATIVE[style]:
+            nh, _l, ns = colorsys.rgb_to_hls(*_parse(NATIVE[style]))
+            th, _tl, ts = colorsys.rgb_to_hls(*_parse(target))
+            self.args = (nh if ns >= 0.15 else None, th, ts, _parse(target))
+
+    def __enter__(self):
+        self.prev = _TINT[0]
+        _TINT[0] = self.args
+        return self
+
+    def __exit__(self, *_):
+        _TINT[0] = self.prev
+        return False
+
+
+TINT_CONF = __import__('os').path.expanduser('~/.config/bspwm/config/tint.json')
+TINT_PARTS = ['bar', 'workspaces', 'locks', 'windows']
+
+
+def tint_target(part):
+    """'#rrggbb' a part of the theme is recolored to, or None."""
+    import json
+    try:
+        with open(TINT_CONF) as f:
+            v = json.load(f).get(part)
+        return v if isinstance(v, str) and len(v) == 7 and v.startswith('#') else None
+    except (OSError, ValueError):
+        return None
+
+
+def set_tint(parts, target):
+    """Recolor these parts to target ('#hex'), or back to the style's own (None)."""
+    import json
+    import os
+    try:
+        with open(TINT_CONF) as f:
+            conf = json.load(f)
+    except (OSError, ValueError):
+        conf = {}
+    for part in parts:
+        if target:
+            conf[part] = target
+        else:
+            conf.pop(part, None)
+    tmp = TINT_CONF + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(conf, f, indent=2)
+    os.replace(tmp, TINT_CONF)
 
 
 # icon colors of each style: ghost, pac-man, dots (left -> right gradient)

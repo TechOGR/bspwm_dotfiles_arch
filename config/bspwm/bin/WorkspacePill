@@ -123,7 +123,8 @@ def main():
             cr.set_operator(cairo.OPERATOR_OVER)
             mx = bc.margin(conf)
             y = off_y if conf['position'] != 'bottom' else skin_h - off_y - H
-            wspill.paint_bar(cr, skin, geo.width, (mx, y, geo.width - 2 * mx, H))
+            with wspill.tinted(skin, wspill.tint_target('bar')):
+                wspill.paint_bar(cr, skin, geo.width, (mx, y, geo.width - 2 * mx, H))
             return True
         skin_win.connect('draw', draw_skin)
         skin_win.connect('realize', lambda w: w.get_window().input_shape_combine_region(cairo.Region(), 0, 0))
@@ -178,7 +179,8 @@ def main():
         cr.paint()
         cr.set_operator(cairo.OPERATOR_OVER)
         if has_pill and st['m'] and st['desks']:
-            wspill.paint(cr, style, st['m'], [d[1] for d in st['desks']])
+            with wspill.tinted(style, wspill.tint_target('workspaces')):
+                wspill.paint(cr, style, st['m'], [d[1] for d in st['desks']])
         return True
 
     def on_press(_w, ev):

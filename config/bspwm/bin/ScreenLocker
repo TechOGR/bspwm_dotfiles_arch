@@ -45,7 +45,9 @@ LOCK_GREETER=${LOCK_GREETER:-Type the password to Unlock}
 # The theme's style (RiceEditor -> Themes / bar skin / workspaces): the glass
 # panel is then drawn by lib/wscard.py, like the login lock card
 WSCARD="$HOME/.config/bspwm/lib/wscard.py"
-LOCK_STYLE=$(python3 "$WSCARD" style 2>/dev/null)
+read -r LOCK_STYLE LOCK_TINT <<EOF
+$(python3 "$WSCARD" style 2>/dev/null)
+EOF
 
 save_current_keymap() {
     setxkbmap -query | awk '/layout:/ {print $2}' > "$TEMP_LAYOUT"
@@ -129,7 +131,7 @@ render_lock_image() {
     # "v4": bump when the render below changes so old caches are not reused
     key=$(printf 'v4|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s' "$wall" "$(stat -c %Y "$wall")" \
         "$resolution" "$LOCK_BLUR" "$LOCK_DIM" "$LOCK_POS" "$LOCK_GLASS" "$L_BG" "$L_ACCENT" \
-        "$LOCK_STYLE" | md5sum)
+        "$LOCK_STYLE $LOCK_TINT" | md5sum)
     out="$CACHE_DIR/lock-${key%% *}.png"
 
     if [ ! -f "$out" ]; then
