@@ -239,6 +239,15 @@ def skin_on(conf):
     return conf.get('bar_skin', 'none') in getattr(wspill, 'BAR_SKINS', {})
 
 
+def margin(conf):
+    """Side margin of the bar: never less than its skin needs."""
+    m = int(conf['margin_x'])
+    if skin_on(conf):
+        import wspill
+        m = max(m, wspill.BAR_MARGIN.get(conf['bar_skin'], 0))
+    return m
+
+
 def deco_on(conf):
     """bin/WorkspacePill has something to draw."""
     return ws_widget(conf) or skin_on(conf)
@@ -275,8 +284,8 @@ def render(conf=None, pal=None):
     if style == 'strip':
         width, off_x, off_y, radius = '100%', '0', '0', 0
     else:
-        width = f'100%:-{2 * int(conf["margin_x"])}'
-        off_x, off_y, radius = str(int(conf['margin_x'])), str(int(conf['offset_y'])), conf['radius']
+        width = f'100%:-{2 * margin(conf)}'
+        off_x, off_y, radius = str(margin(conf)), str(int(conf['offset_y'])), conf['radius']
     if pill or skin:
         radius = 0
 

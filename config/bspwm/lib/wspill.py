@@ -1741,3 +1741,116 @@ def bar_fire(cr, x, y, w, h, cy):
 
 BAR_SKINS.update({'sketch': bar_sketch, 'crystal': bar_crystal, 'lava': bar_lava, 'neon': bar_neon,
                   'holo': bar_holo, 'liquid': bar_liquid, 'nature': bar_nature, 'fire': bar_fire})
+
+
+# ═══════════════════════════════════════ bar ends: what sticks out
+# Lines, rails and nodes past both ends of the bar, like the pills have.
+def _ends(cr, x, w, cy, draw):
+    for side, bx in ((-1, x), (1, x + w)):
+        draw(side, bx)
+
+
+def ends_hud(cr, x, y, w, h, cy):
+    blue, soft = rgb('#2d8cff'), rgb('#7fc6ff')
+
+    def one(side, bx):
+        L = 40
+        x1 = bx + side * L
+        hline(cr, *sorted((bx, x1)), cy, blue, *((0.15, 0.95) if side < 0 else (0.95, 0.15)), 1.3)
+        cr.move_to(bx + side * 2, cy + 5)
+        cr.line_to(bx + side * 10, cy + 5)
+        cr.line_to(bx + side * 15, cy + 9)
+        cr.line_to(bx + side * 28, cy + 9)
+        cr.set_line_width(1)
+        cr.set_source_rgba(*blue, 0.6)
+        cr.stroke()
+        for i in range(3):
+            cr.rectangle(bx + side * (16 + i * 7) - (4 if side < 0 else 0), cy - 5, 4, 2)
+        cr.set_source_rgba(*soft, 0.7)
+        cr.fill()
+        halo(cr, x1, cy, 6, blue, 0.5)
+        cr.arc(x1, cy, 2, 0, 2 * PI)
+        cr.set_source_rgba(*soft, 1)
+        cr.fill()
+    _ends(cr, x, w, cy, one)
+
+
+def ends_cyber(cr, x, y, w, h, cy):
+    def one(side, bx):
+        col = rgb('#19e6ff') if side < 0 else rgb('#ff2bd6')
+        L = 40
+        hline(cr, *sorted((bx, bx + side * L)), cy, col, *((0.1, 0.9) if side < 0 else (0.9, 0.1)), 1.4)
+        for i in range(3):   # slashes near the outer end
+            sx = bx + side * (24 + i * 5)
+            cr.move_to(sx, cy + 4)
+            cr.line_to(sx + 3, cy - 4)
+        cr.set_line_width(1.4)
+        cr.set_source_rgba(*col, 0.8)
+        cr.stroke()
+        for vy in (-1, 1):   # chevron hugging the tip
+            cr.move_to(bx + side * 4, cy + vy * (h / 2 + 3))
+            cr.line_to(bx + side * 10, cy + vy * 2)
+        cr.set_line_width(1.3)
+        cr.set_source_rgba(*col, 0.75)
+        cr.stroke()
+    _ends(cr, x, w, cy, one)
+
+
+def ends_glass(cr, x, y, w, h, cy):
+    blue = rgb('#6fa8ff')
+
+    def one(side, bx):
+        for dy in (-h * 0.22, h * 0.22):
+            a = (0, 0.6) if side < 0 else (0.6, 0)
+            hline(cr, *sorted((bx, bx + side * 32)), cy + dy, blue, *a)
+    _ends(cr, x, w, cy, one)
+
+
+def ends_pixel(cr, x, y, w, h, cy):
+    q = max(2, round(h / 10))
+    yy = round(cy - q / 2)
+
+    def one(side, bx):
+        cr.rectangle(bx if side > 0 else bx - 3 * q, yy, 3 * q, q)
+        cr.set_source_rgba(*rgb('#1f5bff'), 0.95)
+        cr.fill()
+        for i in range(6):
+            px = bx + side * (4 + i * 2) * q - (q if side < 0 else 0)
+            cr.rectangle(px, yy, q, q)
+            cr.set_source_rgba(*rgb('#4f86ff'), max(0.1, 0.75 - i * 0.12))
+            cr.fill()
+    _ends(cr, x, w, cy, one)
+
+
+def _ends_line(color, length):
+    def ends(cr, x, y, w, h, cy):
+        def one(side, bx):
+            a = (0, 0.7) if side < 0 else (0.7, 0)
+            hline(cr, *sorted((bx, bx + side * length)), cy, rgb(color), *a)
+        _ends(cr, x, w, cy, one)
+    return ends
+
+
+def _with_ends(body, ends):
+    def skin(cr, x, y, w, h, cy):
+        ends(cr, x, y, w, h, cy)
+        body(cr, x, y, w, h, cy)
+    return skin
+
+
+BAR_SKINS.update({
+    'hud': _with_ends(bar_hud, ends_hud),
+    'cyber': _with_ends(bar_cyber, ends_cyber),
+    'glass': _with_ends(bar_glass, ends_glass),
+    'pixel': _with_ends(bar_pixel, ends_pixel),
+    'minimal': _with_ends(bar_minimal, _ends_line('#3a4058', 24)),
+    'macos': _with_ends(bar_macos, _ends_line('#4a5272', 24)),
+})
+
+# Minimum side margin of the bar for each skin, so what it draws past the
+# ends (lines, leaves, flames, droplets, rocks, orbits) stays on screen.
+BAR_MARGIN = {
+    'glass': 36, 'cyber': 46, 'minimal': 28, 'gradient': 14, 'pixel': 36, 'macos': 28,
+    'liquid': 30, 'hud': 46, 'fire': 34, 'nature': 52, 'sketch': 36, 'crystal': 16,
+    'lava': 38, 'neon': 16, 'holo': 42,
+}

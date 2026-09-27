@@ -114,15 +114,14 @@ KITS.update({
 ORDER = ['glass', 'cyber', 'minimal', 'gradient', 'pixel', 'macos', 'liquid', 'hud', 'fire', 'nature',
          'sketch', 'crystal', 'lava', 'neon', 'holo']
 
-# Bar geometry per theme: side margins leave room for what a skin draws
-# past the bar's ends (leaves, flames, droplets, rocks, orbits, doodles)
-BAR_GEOMETRY = {
-    'glass': dict(margin_x=12), 'cyber': dict(margin_x=8), 'minimal': dict(margin_x=10),
-    'gradient': dict(margin_x=14), 'pixel': dict(margin_x=8), 'macos': dict(margin_x=14),
-    'liquid': dict(margin_x=30), 'hud': dict(margin_x=8), 'fire': dict(margin_x=34),
-    'nature': dict(margin_x=52), 'sketch': dict(margin_x=36), 'crystal': dict(margin_x=16),
-    'lava': dict(margin_x=38), 'neon': dict(margin_x=16), 'holo': dict(margin_x=42),
-}
+# Bar geometry per theme: the side margins come from the skin (what it
+# draws past the bar's ends must stay on screen)
+def _bar_geometry():
+    import wspill
+    return {k: dict(margin_x=v) for k, v in wspill.BAR_MARGIN.items()}
+
+
+BAR_GEOMETRY = _bar_geometry()
 
 # The palettes (also written to theme_colors.bash): bg fg black blackb red
 # green yellow blue magenta cyan white accent_color arch_icon

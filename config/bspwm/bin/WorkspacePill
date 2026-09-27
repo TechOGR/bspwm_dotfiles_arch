@@ -121,7 +121,7 @@ def main():
             cr.set_source_rgba(0, 0, 0, 0)
             cr.paint()
             cr.set_operator(cairo.OPERATOR_OVER)
-            mx = int(conf['margin_x'])
+            mx = bc.margin(conf)
             y = off_y if conf['position'] != 'bottom' else skin_h - off_y - H
             wspill.paint_bar(cr, skin, geo.width, (mx, y, geo.width - 2 * mx, H))
             return True

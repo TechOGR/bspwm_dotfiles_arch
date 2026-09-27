@@ -310,12 +310,17 @@ def perf_detect():
         return 'full'
 
 
+# PICOM_RUN ends with "&": what follows is a new command, no ";" needed
+ROUND_RELOAD = f' sleep 1; "{os.path.join(BIN, "RoundBorders")}" --reload'
+
+
 def reload_picom():
-    spawn('pkill -USR1 -x picom; sleep 1.5; pgrep -x picom >/dev/null || ' + PICOM_RUN, shell=True)
+    spawn('pkill -USR1 -x picom; sleep 1.5; pgrep -x picom >/dev/null || ' + PICOM_RUN + ROUND_RELOAD, shell=True)
 
 
 def restart_picom():
-    spawn('pkill -x picom; while pgrep -x picom >/dev/null; do sleep 0.1; done; ' + PICOM_RUN, shell=True)
+    spawn('pkill -x picom; while pgrep -x picom >/dev/null; do sleep 0.1; done; ' + PICOM_RUN +
+          ROUND_RELOAD, shell=True)
 
 
 def bspwmrc_get(key, default=''):
@@ -1725,10 +1730,10 @@ class RiceEditor(Gtk.Window):
         if key == 'lockscreen':
             self.lock_prev.reload()
         if key == 'loginlock' and not self.loading:
-            if os.path.exists(BL_PREVIEW):
-                self.bl_prev.reload()
-            else:
+            if self.bl_preview_stale():
                 self.bl_render()
+            else:
+                self.bl_prev.reload()
         if key == 'dock' and not self.loading:
             self.dock_sync()
         if key == 'polybar' and not self.loading:
@@ -2385,6 +2390,7 @@ class RiceEditor(Gtk.Window):
         self.mark_tiles(self.win_style_btns, 'custom')
         self.cfg.set('BORDER_WIDTH', v)
         bspc('config', 'border_width', v)
+        spawn([os.path.join(BIN, 'RoundBorders'), '--reload'])
         self.toast(f'Border width → {v}px')
 
     def set_border_color(self, var, key, h):
@@ -2392,6 +2398,7 @@ class RiceEditor(Gtk.Window):
         self.mark_tiles(self.win_style_btns, 'custom')
         self.cfg.set(var, h)
         bspc('config', key, h)
+        spawn([os.path.join(BIN, 'RoundBorders'), '--reload'])
         self.toast(f'{var} → {h}')
 
     def set_gap(self, v):
@@ -4237,6 +4244,23 @@ class RiceEditor(Gtk.Window):
                     f.write(f'{var}="${{{ref}}}"\n')
         self.toast('Login lock colors follow the palette — reopen the section to see them')
         self.bl_render()
+
+    def bl_preview_stale(self):
+        """The saved preview is older than something it is made of: theme,
+        palette, avatar, wallpaper or the chosen picture."""
+        try:
+            made = os.path.getmtime(BL_PREVIEW)
+        except OSError:
+            return True
+        inputs = [THEME_CFG, COLORS_FILE, avatar_path(), os.path.join(BSPWM, 'config/avatar.json'),
+                  os.path.join(HOME, '.cache/current_wall'), self.cfg.raw('BL_WALL_PATH')]
+        for path in inputs:
+            try:
+                if path and max(os.path.getmtime(path), os.stat(path, follow_symlinks=False).st_mtime) > made:
+                    return True
+            except OSError:
+                continue
+        return False
 
     def bl_render(self):
         self.bl_prev.busy = True

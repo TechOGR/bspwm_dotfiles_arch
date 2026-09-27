@@ -1,0 +1,282 @@
+#!/usr/bin/env python3
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# RoundBorders - window borders that follow picom's rounded corners
+# when picom runs on xrender (the "lite" profile, see PerfProfile).
+#
+# picom rounds a window by clipping it, border included; its GLX backend
+# then redraws the border along the curve, xrender does not, so the
+# border vanished at every corner. This draws, right above each window,
+# only the border ring (an X shape: 4 strips + the corners) with the same
+# radius, width and colors as bspwm. Redrawn only when bspwm reports a
+# change; with GLX, no border or no corner radius it just waits.
+#
+#   RoundBorders             run (started by config/modules/01-bspwm.sh)
+#   RoundBorders --reload    re-read radius / width / colors now
+#   RoundBorders --restart | --stop
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+import os
+import re
+import sys
+import json
+import time
+import signal
+import subprocess
+
+HOME = os.path.expanduser('~')
+BSPWM = os.path.join(HOME, '.config/bspwm')
+PICOM_CONF = os.path.join(BSPWM, 'config/picom/picom.conf')
+LOCK = os.path.join(HOME, '.cache', os.environ.get('USER', 'user'), '.roundborders.lock')
+# picom-rules.conf gives these square corners: no ring for them
+SQUARE = {'mpv', 'Viewnior', 'retroarch'}
+
+
+def running_pid():
+    try:
+        with open(LOCK) as f:
+            pid = int(f.read().strip() or 0)
+        os.kill(pid, 0)
+        return pid
+    except (OSError, ValueError):
+        return None
+
+
+def cli():
+    arg = sys.argv[1] if len(sys.argv) > 1 else ''
+    pid = running_pid()
+    sig = {'--stop': signal.SIGTERM, '--restart': signal.SIGTERM, '--reload': signal.SIGHUP}.get(arg)
+    if sig and pid:
+        os.kill(pid, sig)
+        if arg == '--restart':
+            for _ in range(40):
+                if running_pid() is None:
+                    break
+                time.sleep(0.05)
+    if arg in ('--stop', '--reload'):
+        sys.exit(0)
+
+
+def bspc(*args):
+    return subprocess.run(['bspc', *args], capture_output=True, text=True).stdout.strip()
+
+
+def xrender():
+    """True when picom runs on xrender (PicomStart adds it in lite)."""
+    out = subprocess.run(['pgrep', '-a', '-x', 'picom'], capture_output=True, text=True).stdout
+    if not out:
+        return False
+    if '--backend xrender' in out or '--backend=xrender' in out:
+        return True
+    m = re.search(r'^backend\s*=\s*"?(\w+)', open(PICOM_CONF).read(), re.M)
+    return bool(m and m.group(1) == 'xrender')
+
+
+def corner_radius():
+    try:
+        m = re.search(r'^corner-radius\s*=\s*(\d+)', open(PICOM_CONF).read(), re.M)
+        return int(m.group(1)) if m else 0
+    except OSError:
+        return 0
+
+
+def main():
+    cli()
+    import gi
+    gi.require_version('Gtk', '3.0')
+    gi.require_version('Gdk', '3.0')
+    from gi.repository import Gtk, Gdk, GLib
+    import cairo
+    sys.path.insert(0, os.path.join(BSPWM, 'lib'))
+    import riceui as ui
+    _lock = ui.single_instance('roundborders')  # noqa: F841  writes LOCK
+    GLib.set_prgname('RoundBorders')
+
+    st = {'conf': None, 'rings': {}, 'timer': None}
+
+    def hexcolor(h):
+        h = (h or '#000000').lstrip('#')[-6:]
+        return tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+
+    def read_conf():
+        st['conf'] = {
+            'on': xrender(),
+            'r': corner_radius(),
+            'bw': int(bspc('config', 'border_width') or 0),
+            'focused': hexcolor(bspc('config', 'focused_border_color')),
+            'normal': hexcolor(bspc('config', 'normal_border_color')),
+        }
+
+    def wanted():
+        """{client id: (frame x, y, w, h, focused)} for the windows on screen."""
+        c = st['conf']
+        if not (c['on'] and c['r'] > 0 and c['bw'] > 0):
+            return {}
+        out = {}
+        f = bspc('query', '-N', '-n', 'focused.window')
+        focused = int(f, 16) if f else None
+        for desk in bspc('query', '-D', '-d', '.active').split():
+            try:
+                tree = json.loads(bspc('query', '-T', '-d', desk) or '{}')
+            except ValueError:
+                continue
+            stack = [tree.get('root')]
+            while stack:
+                n = stack.pop()
+                if not n:
+                    continue
+                stack += [n.get('firstChild'), n.get('secondChild')]
+                cl = n.get('client')
+                if not cl or n.get('hidden') or cl.get('state') == 'fullscreen':
+                    continue
+                if cl.get('className') in SQUARE:
+                    continue
+                bw = cl.get('borderWidth', c['bw'])
+                if bw <= 0:
+                    continue
+                r = cl['floatingRectangle'] if cl.get('state') == 'floating' else cl['tiledRectangle']
+                out[n['id']] = (r['x'] - bw, r['y'] - bw, r['width'] + 2 * bw, r['height'] + 2 * bw, bw,
+                                n['id'] == focused)
+        return out
+
+    def ring_region(w, h, bw, r):
+        reg = cairo.Region()
+        for rect in ((0, 0, w, bw), (0, h - bw, w, bw), (0, 0, bw, h), (w - bw, 0, bw, h),
+                     (0, 0, r, r), (w - r, 0, r, r), (0, h - r, r, r), (w - r, h - r, r, r)):
+            reg.union(cairo.RectangleInt(*map(int, rect)))
+        return reg
+
+    def draw(win, cr):
+        info = win.info
+        w, h, bw = info['w'], info['h'], info['bw']
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+        r = max(0.0, st['conf']['r'] - bw / 2)
+        x, y, ww, hh = bw / 2, bw / 2, w - bw, h - bw
+        r = min(r, ww / 2, hh / 2)
+        cr.new_sub_path()
+        cr.arc(x + ww - r, y + r, r, -1.5708, 0)
+        cr.arc(x + ww - r, y + hh - r, r, 0, 1.5708)
+        cr.arc(x + r, y + hh - r, r, 1.5708, 3.1416)
+        cr.arc(x + r, y + r, r, 3.1416, 4.7124)
+        cr.close_path()
+        cr.set_line_width(bw)
+        cr.set_source_rgb(*st['conf']['focused' if info['focused'] else 'normal'])
+        cr.stroke()
+        return True
+
+    def restack(cid, win):
+        gw = win.get_window()
+        if gw:
+            subprocess.run(['xdo', 'above', '-t', hex(cid), hex(gw.get_xid())],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def sync(restack_all=False):
+        st['timer'] = None
+        want = wanted()
+        for cid in list(st['rings']):
+            if cid not in want:
+                st['rings'].pop(cid).destroy()
+        for cid, (x, y, w, h, bw, foc) in want.items():
+            win = st['rings'].get(cid)
+            new = win is None
+            if new:
+                win = Gtk.Window(type=Gtk.WindowType.POPUP)
+                win.set_title('RoundBorders')
+                win.set_app_paintable(True)
+                vis = win.get_screen().get_rgba_visual()
+                if vis:
+                    win.set_visual(vis)
+                win.info = {}
+                win.connect('draw', draw)
+                st['rings'][cid] = win
+            info = {'x': x, 'y': y, 'w': w, 'h': h, 'bw': bw, 'focused': foc}
+            if info == win.info and not restack_all:
+                continue
+            geometry = (x, y, w, h, bw) != tuple(win.info.get(k) for k in ('x', 'y', 'w', 'h', 'bw'))
+            win.info = info
+            if geometry:
+                win.set_size_request(w, h)
+                win.resize(w, h)
+                win.move(x, y)
+            if new:
+                win.realize()
+            gw = win.get_window()
+            r = min(st['conf']['r'], w // 2, h // 2)
+            gw.shape_combine_region(ring_region(w, h, bw, r), 0, 0)
+            gw.input_shape_combine_region(cairo.Region(), 0, 0)
+            if new:
+                win.show()
+            if new or restack_all:
+                restack(cid, win)
+            win.queue_draw()
+        return False
+
+    def schedule(restack_all=False):
+        if st['timer']:
+            GLib.source_remove(st['timer'])
+        st['timer'] = GLib.timeout_add(25, lambda: sync(restack_all))
+
+    buf = {'data': b''}
+
+    def on_event(fd, _cond):
+        try:
+            chunk = os.read(fd, 65536)
+        except BlockingIOError:
+            return True
+        if not chunk:
+            Gtk.main_quit()
+            return False
+        buf['data'] += chunk
+        *lines, buf['data'] = buf['data'].split(b'\n')
+        restack_all = any(ln.startswith((b'node_stack', b'node_add', b'node_transfer', b'desktop_focus',
+                                         b'node_swap', b'node_state', b'node_flag')) for ln in lines)
+        schedule(restack_all)
+        return True
+
+    def reload():
+        read_conf()
+        for win in st['rings'].values():
+            win.info = {}
+        schedule(True)
+        return True
+
+    read_conf()
+    proc = subprocess.Popen(['bspc', 'subscribe', 'node_add', 'node_remove', 'node_swap', 'node_transfer',
+                             'node_focus', 'node_stack', 'node_geometry', 'node_state', 'node_flag',
+                             'node_layer', 'desktop_focus', 'desktop_layout'],
+                            stdout=subprocess.PIPE, bufsize=0)
+    fd = proc.stdout.fileno()
+    os.set_blocking(fd, False)
+    GLib.unix_fd_add_full(GLib.PRIORITY_HIGH, fd, GLib.IO_IN | GLib.IO_HUP, on_event)
+    GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGHUP, reload)
+    GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGTERM, lambda: (Gtk.main_quit(), False)[1])
+    GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGINT, lambda: (Gtk.main_quit(), False)[1])
+    # border colors / width / radius change without a bspwm event: RiceEditor
+    # and the theme modules send --reload (SIGHUP)
+    tries = {'n': 0}
+
+    def wait_picom():
+        # at login Theme.sh (which starts us) runs before PicomStart
+        tries['n'] += 1
+        if st['conf']['on']:
+            return False
+        if subprocess.run(['pgrep', '-x', 'picom'], capture_output=True).returncode == 0:
+            reload()
+            return False
+        return tries['n'] < 30
+    GLib.timeout_add_seconds(2, wait_picom)
+    schedule(True)
+    Gtk.main()
+    proc.terminate()
+
+
+if __name__ == '__main__':
+    main()
