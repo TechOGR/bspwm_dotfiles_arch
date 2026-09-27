@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# =============================================================
+# DisplayBoot - the resolution saved in RiceEditor -> Display, from boot on
+#
+#   sudo DisplayBoot [USER]    sync from ~USER/.config/bspwm/config/monitors.conf
+#   sudo DisplayBoot --reset   boot menu, TTY and login screen automatic again
+#   (RiceEditor runs it through pkexec: Display -> Boot & login screen)
+#
+# What knows the resolution afterwards:
+#   Boot menu    Limine interface_resolution / GRUB_GFXMODE
+#   TTY, splash  video=OUTPUT:WxH@RATE on the kernel command line
+#                (Limine: /etc/default/limine + limine-update,
+#                 GRUB: /etc/default/grub + grub-mkconfig)
+#   Login screen LightDM display-setup-script applying a root-owned copy
+#                of monitors.conf (/etc/lightdm/techogr-monitors.conf)
+#   Desktop      bin/MonitorSetup (bspwmrc) + bin/ScreenWatch, as before
+#
+# Author: TechOGR
+# Repo:   https://github.com/TechOGR/bspwm_dotfiles_arch
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+set -uo pipefail
+
+MARK='# techogr-display (DisplayBoot, RiceEditor -> Display)'
+LOGIN_CONF=/etc/lightdm/techogr-monitors.conf
+SETUP=/etc/lightdm/techogr-display-setup.sh
+SEAT_DROPIN=/etc/lightdm/lightdm.conf.d/60-techogr-display.conf
+LIMINE_DEFAULT=/etc/default/limine
+GRUB_DEFAULT=/etc/default/grub
+
+say() { printf '\033[1;36m::\033[0m %s\n' "$*"; }
+die() { printf '\033[1;31mDisplayBoot:\033[0m %s\n' "$*" >&2; exit 1; }
+
+[[ $EUID -eq 0 ]] || die "run it as root: sudo $0 ${*:-}"
+
+RESET=0
+if [[ ${1:-} == --reset ]]; then
+    RESET=1
+else
+    USER_NAME=${1:-${SUDO_USER:-}}
+    [[ -z $USER_NAME && -n ${PKEXEC_UID:-} ]] && USER_NAME=$(id -nu "$PKEXEC_UID")
+    [[ -n $USER_NAME ]] || die "which user? sudo $0 USER"
+    HOME_DIR=$(getent passwd "$USER_NAME" | cut -d: -f6)
+    CONF="$HOME_DIR/.config/bspwm/config/monitors.conf"
+fi
+
+# ── what to use: the primary output's fixed mode ───────────────────────
+VIDEO=""     # OUTPUT:WxH[@RATE] for video=
+SIZE=""      # WxH for the boot menu
+if [[ $RESET -eq 0 && -r $CONF ]]; then
+    line=$(awk '{ sub(/#.*/, "") } NF >= 2 && $1 !~ /^[@*]/ && $0 !~ /--off/ {
+                    if ($0 ~ /--primary/) { print; exit } if (!first) first = $0 }
+                END { if (first) print first }' "$CONF" | head -n1)
+    read -r out mode rate _ <<<"$line"
+    if [[ -n ${mode:-} && $mode != - && $mode =~ ^([0-9]+)x([0-9]+) ]]; then
+        SIZE="${BASH_REMATCH[1]}x${BASH_REMATCH[2]}"
+        VIDEO="$out:$SIZE"
+        [[ ${rate:-} =~ ^[0-9]+ ]] && VIDEO="$VIDEO@${BASH_REMATCH[0]}"
+    fi
+fi
+if [[ -n $VIDEO ]]; then say "Boot resolution: $VIDEO"; else say "Boot resolution: automatic"; fi
+
+# ── login screen (LightDM) ─────────────────────────────────────────────
+if [[ -d /etc/lightdm ]]; then
+    if [[ $RESET -eq 0 && -r $CONF ]]; then
+        # only plain xrandr-ish tokens make it into the root-owned copy
+        awk '{ sub(/#.*/, "") } NF && $0 ~ /^[[:space:]]*[A-Za-z0-9@*][A-Za-z0-9@*._:+ -]*$/ &&
+             $1 !~ /^@(dpms|dpi)$/' "$CONF" > "$LOGIN_CONF.tmp"
+        install -m644 -o root -g root "$LOGIN_CONF.tmp" "$LOGIN_CONF"
+        rm -f "$LOGIN_CONF.tmp"
+        cat > "$SETUP" <<'EOF'
+#!/bin/sh
+# LightDM display-setup-script (installed by DisplayBoot): the resolution
+# saved in RiceEditor -> Display on the login screen too. Never fails:
+# a non-zero exit would stop LightDM from showing the greeter.
+CONF=/etc/lightdm/techogr-monitors.conf
+[ -r "$CONF" ] || exit 0
+Q=$(xrandr --query 2>/dev/null) || exit 0
+grep -E '^@mode[[:space:]]' "$CONF" | while read -r _ out w h r _; do
+    set -- $(cvt "$w" "$h" "${r:-60}" 2>/dev/null | sed -n 's/^Modeline //p' | tr -d '"')
+    [ $# -gt 1 ] || continue
+    xrandr --newmode "$@" 2>/dev/null
+    xrandr --addmode "$out" "$1" 2>/dev/null
+done
+args=""
+while read -r out mode rate opts; do
+    case $out in ''|@*|'*') continue ;; esac
+    printf '%s\n' "$Q" | grep -q "^$out connected" || continue
+    case " $opts " in *" --off "*) continue ;; esac   # never blank the login
+    a="--output $out"
+    if [ "$mode" = - ]; then a="$a --auto"; else a="$a --mode $mode"; fi
+    [ "$rate" != - ] && a="$a --rate $rate"
+    args="$args $a $opts"
+done < "$CONF"
+[ -n "$args" ] && { xrandr $args 2>/dev/null || xrandr $(printf '%s' "$args" |
+    sed -E 's/--(pos|left-of|right-of|above|below|same-as) [^ ]+//g') 2>/dev/null; }
+exit 0
+EOF
+        chmod 755 "$SETUP"
+        install -d -m755 "$(dirname "$SEAT_DROPIN")"
+        printf '[Seat:*]\ndisplay-setup-script=%s\n' "$SETUP" > "$SEAT_DROPIN"
+        say "Login screen: $SEAT_DROPIN"
+    else
+        rm -f "$SEAT_DROPIN" "$SETUP" "$LOGIN_CONF"
+        say "Login screen: automatic"
+    fi
+fi
+
+# ── Limine ─────────────────────────────────────────────────────────────
+if [[ -f $LIMINE_DEFAULT ]] && command -v limine-update >/dev/null; then
+    cp -a "$LIMINE_DEFAULT" "$LIMINE_DEFAULT.displayboot.bak"
+    # our block = the marker line + the KERNEL_CMDLINE line under it
+    sed -i "/^# techogr-display/{N;d}" "$LIMINE_DEFAULT"
+    [[ -n $VIDEO ]] && printf '%s\nKERNEL_CMDLINE[default]+=video=%s\n' "$MARK" "$VIDEO" >> "$LIMINE_DEFAULT"
+
+    ESP=$(awk -F= '/^ESP_PATH=/ { gsub(/"/, "", $2); print $2 }' "$LIMINE_DEFAULT")
+    for f in "${ESP:-/boot}/limine.conf" /boot/limine.conf /efi/limine.conf /boot/efi/limine.conf; do
+        [[ -f $f ]] || continue
+        cp -a "$f" "$f.displayboot.bak"
+        sed -i '/^interface_resolution:/d' "$f"
+        [[ -n $SIZE ]] && sed -i "1i interface_resolution: $SIZE" "$f"
+        say "Boot menu: $f"
+        break
+    done
+    # regenerates the entries with the new command line and re-enrolls the
+    # config checksum when verification is on (never edit limine.conf last)
+    say "limine-update (rebuilds the boot entries, takes a moment)…"
+    limine-update || die "limine-update failed; backups: $LIMINE_DEFAULT.displayboot.bak, limine.conf.displayboot.bak"
+fi
+
+# ── GRUB ───────────────────────────────────────────────────────────────
+if [[ -f $GRUB_DEFAULT ]] && command -v grub-mkconfig >/dev/null; then
+    cp -a "$GRUB_DEFAULT" "$GRUB_DEFAULT.displayboot.bak"
+    sed -i -E 's/ ?video=[^ "]*//g' "$GRUB_DEFAULT"
+    sed -i -E '/^GRUB_GFXPAYLOAD_LINUX=/d; /^GRUB_GFXMODE=/d' "$GRUB_DEFAULT"
+    if [[ -n $VIDEO ]]; then
+        sed -i -E "s/^(GRUB_CMDLINE_LINUX_DEFAULT=\"[^\"]*)\"/\1 video=$VIDEO\"/" "$GRUB_DEFAULT"
+        printf 'GRUB_GFXMODE=%s,auto\nGRUB_GFXPAYLOAD_LINUX=keep\n' "$SIZE" >> "$GRUB_DEFAULT"
+    else
+        printf 'GRUB_GFXMODE=auto\nGRUB_GFXPAYLOAD_LINUX=keep\n' >> "$GRUB_DEFAULT"
+    fi
+    grub-mkconfig -o /boot/grub/grub.cfg || die "grub-mkconfig failed; backup: $GRUB_DEFAULT.displayboot.bak"
+fi
+
+say "Done. It applies from the next boot."

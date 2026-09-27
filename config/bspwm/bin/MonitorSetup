@@ -14,6 +14,7 @@
 #   - Only one xrandr probe, and no modeset at all when the screen is
 #     already the way we want it (no black flash at login)
 #   - Dynamic workspace assignment
+#   - `MonitorSetup --check`: exit 1 when a screen is not in its wanted mode
 #
 #   monitors.conf (optional, one line per output, "*" = any output;
 #   written by RiceEditor -> Display):
@@ -40,6 +41,7 @@
 # =============================================================
 
 OVERRIDES="$HOME/.config/bspwm/config/monitors.conf"
+ACTION=${1:-}   # "" or --check (the positional args are reused below)
 
 # Custom modes first, so the probe below lists them
 grep -E '^[[:space:]]*@mode[[:space:]]' "$OVERRIDES" 2>/dev/null |
@@ -56,6 +58,7 @@ XRANDR_OUTPUT=$(xrandr --query 2>/dev/null)
 
 # Per connected output, one line:
 #   name primary(0/1) current_mode current_x current_y wanted_mode wanted_rate extra
+# (current_mode is the "*" mode, "-" when the output is off)
 # wanted = override > preferred ("+") > current ("*") > first listed mode
 # (xrandr lists the biggest first). The rate is the one carrying the
 # marker on that mode's line, else the first one. extra = the saved
@@ -84,7 +87,7 @@ MONITORS=$(printf '%s\n' "$XRANDR_OUTPUT" | awk -v ovf="$OVERRIDES" '
             if (omode[k] != "-") { m = omode[k]; r = (orate[k] == "-" ? "" : orate[k]) }
             x = oextra[k]
         }
-        print name, primary, (cur == "" ? "-" : cur), cx + 0, cy + 0, (m == "" ? "-" : m), (r == "" ? "-" : r), (x == "" ? "-" : x)
+        print name, primary, (cur == "" || cmode == "" ? "-" : cmode), cx + 0, cy + 0, (m == "" ? "-" : m), (r == "" ? "-" : r), (x == "" ? "-" : x)
         name = ""
     }
     /^[^ \t]/ {
@@ -140,6 +143,13 @@ NUM_MONITORS=$#
 field() {   # field <output> <n>
     printf '%s\n' "$MONITORS" | awk -v m="$1" -v n="$2" '$1 == m { print $n; exit }'
 }
+
+# --check: exit 0 when every screen already runs its wanted mode, so
+# ScreenWatch only re-applies what something else (VM autofit) changed
+if [ "$ACTION" = --check ]; then
+    printf '%s\n' "$MONITORS" | awk 'NF && $6 != "-" && $3 != $6 { bad = 1 } END { exit bad }'
+    exit
+fi
 
 PLACE_RE='--(pos|left-of|right-of|above|below|same-as) [^ ]+'
 

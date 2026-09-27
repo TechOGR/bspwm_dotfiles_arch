@@ -8,7 +8,8 @@
 # wallpaper its old scale. This listens to bspwm's monitor_geometry
 # event (no polling, zero CPU while nothing changes) and, once the size
 # settles, restarts polybar and redraws the wallpaper. The dock and the
-# workspace preview re-measure the screen by themselves.
+# workspace preview re-measure the screen by themselves. A resolution
+# saved in monitors.conf is put back when something else changed it.
 # =============================================================
 
 CONFIG_DIR="$HOME/.config/bspwm"
@@ -19,6 +20,10 @@ exec 9>"$STATE.lock"
 flock -n 9 || exit 0
 
 apply() {
+    # A resolution fixed in RiceEditor -> Display (monitors.conf) wins over
+    # VM autofit and other tools; with "-" (automatic) nothing is forced.
+    "$CONFIG_DIR"/bin/MonitorSetup --check 2>/dev/null ||
+        "$CONFIG_DIR"/bin/MonitorSetup >/dev/null 2>&1
     if pgrep -x polybar >/dev/null; then
         polybar-msg cmd restart >/dev/null 2>&1
     fi

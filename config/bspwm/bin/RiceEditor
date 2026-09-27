@@ -116,6 +116,10 @@ def write_file(path, text):
     tmp = f'{path}.rice-editor.tmp'
     with open(tmp, 'w') as f:
         f.write(text)
+    try:
+        shutil.copymode(path, tmp)   # bspwmrc must stay executable
+    except OSError:
+        pass
     os.replace(tmp, path)
 
 
@@ -1889,6 +1893,9 @@ class RiceEditor(Gtk.Window):
 
     def combo(self, items, active, on_change):
         cb = Gtk.ComboBoxText()
+        # drop the list below the button (wrap 0 centers it on the active
+        # item, leaving an empty block above it on long lists)
+        cb.set_wrap_width(1)
         for item_id, label in items:
             cb.append(item_id, label)
         if not cb.set_active_id(active):
@@ -2332,8 +2339,45 @@ class RiceEditor(Gtk.Window):
                               'for HiDPI screens without changing the resolution',
                               self.combo(items, str(dpi), self.set_dpi)), False, False, 0)
         p.pack_start(c, False, False, 0)
+
+        c = self.card('󰒓', 'Boot & login screen', 'DisplayBoot · asks for your password')
+        self.boot_state = Gtk.Label(xalign=0)
+        self.boot_state.get_style_context().add_class('mono-note')
+        self.boot_state.set_line_wrap(True)
+        c.pack_start(self.boot_state, False, False, 2)
+        acts = Gtk.Box(spacing=8)
+        acts.pack_start(self.button('󰄬  Use saved resolution', 'neon', lambda *_: self.display_boot()),
+                        False, False, 0)
+        acts.pack_start(self.button('󰁯  Automatic', 'ghost', lambda *_: self.display_boot(reset=True)),
+                        False, False, 0)
+        c.pack_start(self.row('Resolution before the desktop',
+                              'Boot menu (Limine / GRUB), TTY consoles and the LightDM login screen '
+                              'use the resolution saved here. Applies from the next boot.', acts),
+                     False, False, 0)
+        p.pack_start(c, False, False, 0)
+        self.display_boot_state()
         self.display_scan()
         return p
+
+    def display_boot_state(self):
+        cmd = re.search(r'\bvideo=(\S+)', read_file('/proc/cmdline'))
+        login = os.path.exists('/etc/lightdm/lightdm.conf.d/60-techogr-display.conf')
+        self.boot_state.set_text(f'Now: kernel/TTY {cmd.group(1) if cmd else "automatic"} · '
+                                 f'login screen {"saved resolution" if login else "automatic"}')
+
+    def display_boot(self, reset=False):
+        tool = os.path.join(BIN, 'DisplayBoot')
+        args = ['pkexec', tool, '--reset' if reset else os.environ.get('USER', '')]
+        self.toast('Updating boot + login screen… (password prompt)')
+
+        def done(r):
+            if r is None or r.returncode != 0:
+                err = ((r.stderr or r.stdout or '').strip().splitlines() or ['cancelled'])[-1] if r else 'failed'
+                self.toast(f'DisplayBoot: {err[-90:]}', error=True)
+                return
+            self.display_boot_state()
+            self.toast('Boot + login screen updated (next boot)' if not reset else 'Boot resolution automatic again')
+        run_bg(lambda: subprocess.run(args, capture_output=True, text=True, timeout=600), done)
 
     def display_out(self, name=None):
         name = name or self.disp_sel
@@ -2544,7 +2588,7 @@ class RiceEditor(Gtk.Window):
                     display_primary(old)['name'] != display_primary(new)['name']:
                 # desktops per monitor + bar on the new primary
                 spawn([os.path.join(BIN, 'MonitorSetup')])
-            self.toast('Display layout saved')
+            self.toast('Display layout saved · Boot & login screen: below')
             GLib.timeout_add(1500, lambda: (self.display_scan(), False)[1])
         else:
             self.display_xrandr(old)
