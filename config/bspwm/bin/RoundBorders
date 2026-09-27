@@ -130,7 +130,7 @@ def main():
     GLib.set_prgname('RoundBorders')
 
     st = {'conf': None, 'rings': {}, 'backs': {}, 'back_want': {}, 'timer': None, 'raise': set(),
-          'shaped': {}, 'on_screen': set()}
+          'shaped': {}, 'on_screen': set(), 'rects': {}}
 
     def hexcolor(h):
         h = (h or '#000000').lstrip('#')[-6:]
@@ -180,6 +180,7 @@ def main():
             return {}
         out = {}
         st['on_screen'] = set()
+        st['rects'] = {}
         f = bspc('query', '-N', '-n', 'focused.window')
         focused = int(f, 16) if f else None
         for desk in bspc('query', '-D', '-d', '.active').split():
@@ -196,6 +197,9 @@ def main():
                 cl = n.get('client')
                 if cl:
                     st['on_screen'].add(n['id'])
+                    rr = cl['floatingRectangle'] if cl.get('state') == 'floating' else cl['tiledRectangle']
+                    if not n.get('hidden'):
+                        st['rects'][n['id']] = (rr['x'], rr['y'], rr['width'], rr['height'])
                 if not cl or n.get('hidden') or cl.get('state') == 'fullscreen':
                     continue
                 if cl.get('className') in SQUARE:
@@ -323,19 +327,29 @@ def main():
             except Exception:
                 pass
 
+    def covering(cid):
+        """Is the window over (or under) another one on screen?"""
+        r = st.get('rects', {}).get(cid)
+        if not r:
+            return False
+        x, y, w, h = r
+        return any(o != cid and x < ox + ow and ox < x + w and y < oy + oh and oy < y + h
+                   for o, (ox, oy, ow, oh) in st['rects'].items())
+
     def restack(cid, win, where='above', new=False):
         """Frames go right above their window, through our own X
         connection (in order with everything else we send, no fork).
-        Backgrounds go right under their terminal (never over it: a
-        restack puts them below it, the only way they can move)
-        and follow it when bspwm restacks."""
+        Backgrounds go to the very bottom of the stack, where bspwm never
+        moves windows relative to them (restacking them on every click
+        made the frames flicker). Only a terminal over another window
+        (monocle, a float over a browser) gets its background right
+        under it, so the scene hides what is behind."""
         gw = win.get_window()
         if not gw:
             return
         if where == 'below':
-            # right under its terminal: whatever else is under the terminal
-            # (monocle, a float over a browser) stays hidden by the scene
-            target = foreign_win(cid)
+            win.mode = 'under' if covering(cid) else 'bottom'
+            target = foreign_win(cid) if win.mode == 'under' else None
             if target is not None:
                 try:
                     gw.restack(target, False)
@@ -393,8 +407,10 @@ def main():
                 win.show()
                 restack(cid, win, 'below', True)
             changed = info != win.info
+            mode = 'under' if covering(cid) else 'bottom'
             if not changed:
-                if restack_all or cid in st['raise']:   # the terminal moved in the stack
+                # only a background under its terminal follows it in the stack
+                if mode != getattr(win, 'mode', None) or mode == 'under' and (restack_all or cid in st['raise']):
                     restack(cid, win, 'below')
                 continue
             if (x, y, w, h) != tuple(win.info.get(k) for k in ('x', 'y', 'w', 'h')):
