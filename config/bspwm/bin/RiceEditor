@@ -4253,7 +4253,8 @@ class RiceEditor(Gtk.Window):
         except OSError:
             return True
         inputs = [THEME_CFG, COLORS_FILE, avatar_path(), os.path.join(BSPWM, 'config/avatar.json'),
-                  os.path.join(HOME, '.cache/current_wall'), self.cfg.raw('BL_WALL_PATH')]
+                  os.path.join(HOME, '.cache/current_wall'), self.cfg.raw('BL_WALL_PATH'),
+                  os.path.join(BSPWM, 'config/polybar.json')]   # bar skin / workspaces style
         for path in inputs:
             try:
                 if path and max(os.path.getmtime(path), os.stat(path, follow_symlinks=False).st_mtime) > made:

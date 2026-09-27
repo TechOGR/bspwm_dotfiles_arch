@@ -47,6 +47,11 @@ try:
 except Exception:
     avatar = None
 try:
+    import wscard  # noqa: E402  (the card in the theme's style, lib/wscard.py)
+    import cairo  # noqa: E402
+except Exception:
+    wscard = None
+try:
     import videowall  # noqa: E402  (video wallpapers: frames, filters)
 except Exception:
     videowall = None
@@ -392,6 +397,18 @@ def expr(L, dy, dx=0):
 
 
 # ═══════════════════════════════════════════════════════════ render
+def cairo_rgba(surf):
+    surf.flush()
+    return Image.frombuffer('RGBA', (surf.get_width(), surf.get_height()), bytes(surf.get_data()),
+                            'raw', 'BGRa', surf.get_stride(), 1)
+
+
+def cairo_mask(surf):
+    surf.flush()
+    return Image.frombuffer('L', (surf.get_width(), surf.get_height()), bytes(surf.get_data()),
+                            'raw', 'L', surf.get_stride(), 1)
+
+
 def render(conf, media=True, preview=False, transparent=False):
     """transparent: only the overlay (RGBA), for the video mode."""
     W, H, mons = screen()
@@ -405,6 +422,8 @@ def render(conf, media=True, preview=False, transparent=False):
     user = os.environ.get('USER') or os.path.basename(HOME)
     host = socket.gethostname()
     song = now_playing() if media and on(conf, 'BL_MEDIA') else ''
+    # the theme's style (RiceEditor -> Themes / bar skin / workspaces)
+    style = wscard.style_of() if wscard else None
     av = None
     if on(conf, 'BL_AVATAR') and avatar:
         try:
@@ -419,9 +438,12 @@ def render(conf, media=True, preview=False, transparent=False):
         cw, ch = int(L['card_w']), int(L['card_h'])
         x0, y0 = int(cx - cw / 2), int(cy - ch / 2)
 
+        pw, ph = int(L['pill_w']), int(L['pill_h'])
+        px, py = int(cx - pw / 2), int(cy + L['pill_dy'] - ph / 2)
+
         # ── glass card
         if card:
-            m = rrect_mask(cw, ch, radius)
+            m = cairo_mask(wscard.card_mask(style, cw, ch, s)) if style else rrect_mask(cw, ch, radius)
             # drop shadow
             sh = Image.new('L', (cw + 160, ch + 160), 0)
             sh.paste(m, (80, 80))
@@ -444,6 +466,19 @@ def render(conf, media=True, preview=False, transparent=False):
                 # top light: a faint vertical sheen
                 frost.paste(Image.new('RGB', (cw, ch), (255, 255, 255)), (0, 0), sheen)
                 img.paste(frost, (x0, y0), m)
+        if style:
+            # frame, decorations and password field in the theme's style
+            over = cairo.ImageSurface(cairo.FORMAT_ARGB32, W, H)
+            ocr = cairo.Context(over)
+            if card:
+                wscard.paint_card(ocr, style, x0, y0, cw, ch, s)
+            wscard.paint_field(ocr, style, px, py, pw, ph, s)
+            ov = cairo_rgba(over)
+            if img.mode == 'RGBA':
+                img.alpha_composite(ov)
+            else:
+                img.paste(ov, (0, 0), ov)
+        elif card:
             # border (accent → accent2 gradient)
             b = Image.new('L', (cw * SS, ch * SS), 0)
             ImageDraw.Draw(b).rounded_rectangle((0, 0, cw * SS - 1, ch * SS - 1), radius * SS,
@@ -499,16 +534,15 @@ def render(conf, media=True, preview=False, transparent=False):
         text(img, (cx, cy + L['name_dy']), display_name(conf), int(30 * s), fg)
         text(img, (cx, cy + L['host_dy']), f'󰀄  {user}@{host}', int(14 * s), accent, style='Regular')
 
-        # ── password field
-        pw, ph = int(L['pill_w']), int(L['pill_h'])
-        px, py = int(cx - pw / 2), int(cy + L['pill_dy'] - ph / 2)
-        pm = rrect_mask(pw, ph, ph // 2)
-        img.paste(Image.new('RGB', (pw, ph), rgb(conf['black'])), (px, py), pm.point(lambda v: int(v * 0.6)))
-        po = Image.new('L', (pw * SS, ph * SS), 0)
-        ImageDraw.Draw(po).rounded_rectangle((0, 0, pw * SS - 1, ph * SS - 1), ph * SS // 2,
-                                             outline=255, width=max(2, int(1.3 * s * SS)))
-        po = po.resize((pw, ph), Image.LANCZOS).point(lambda v: int(v * 0.5))
-        img.paste(Image.new('RGB', (pw, ph), accent), (px, py), po)
+        # ── password field (drawn with the card when the theme has a style)
+        if not style:
+            pm = rrect_mask(pw, ph, ph // 2)
+            img.paste(Image.new('RGB', (pw, ph), rgb(conf['black'])), (px, py), pm.point(lambda v: int(v * 0.6)))
+            po = Image.new('L', (pw * SS, ph * SS), 0)
+            ImageDraw.Draw(po).rounded_rectangle((0, 0, pw * SS - 1, ph * SS - 1), ph * SS // 2,
+                                                 outline=255, width=max(2, int(1.3 * s * SS)))
+            po = po.resize((pw, ph), Image.LANCZOS).point(lambda v: int(v * 0.5))
+            img.paste(Image.new('RGB', (pw, ph), accent), (px, py), po)
         mid = cy + L['pill_dy']
         text(img, (px + ph * 0.62, mid), '󰌾', int(18 * s), accent, anchor='mm', shadow=False)
         text(img, (cx + ph * 0.25, mid), conf['BL_GREETER'], int(15 * s), fg, style='Regular',
