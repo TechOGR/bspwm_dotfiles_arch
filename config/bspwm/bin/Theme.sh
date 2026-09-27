@@ -14,6 +14,14 @@
 # Licensed under GPL-3.0 license
 # =============================================================
 
+# One rice apply at a time: two at once (a theme clicked twice) quit and
+# relaunched the bar together, leaving a deadlocked bar or two bars.
+# flock -o holds the lock itself: the bar, daemons... started below must
+# not inherit it (they would keep it forever).
+if [ -z "$THEME_SH_LOCKED" ]; then
+    THEME_SH_LOCKED=1 exec flock -o "${XDG_RUNTIME_DIR:-/tmp}/rice-apply-$(id -u).lock" "$0" "$@"
+fi
+
 # Current Rice
 read -r RICE < "$HOME"/.config/bspwm/.rice
 # Load theme configuration
@@ -32,10 +40,15 @@ wait_for_termination() {
 
 # Kill polybar or eww bars when you switch from the current theme to another
 if pgrep -x polybar >/dev/null 2>&1; then
-    polybar-msg cmd quit >/dev/null 2>&1
+    # a hung bar never answers polybar-msg: never wait for it forever
+    timeout 3 polybar-msg cmd quit >/dev/null 2>&1
     # -x: "pgrep -f polybar" also matched any command line that just
     # mentions polybar (an editor, a script) and waited forever
-    while pgrep -x polybar >/dev/null; do sleep 0.2; done
+    i=0
+    while pgrep -x polybar >/dev/null && [ $i -lt 25 ]; do sleep 0.2; i=$((i + 1)); done
+    pkill -9 -x polybar 2>/dev/null
+    pkill -9 -x polybar-msg 2>/dev/null
+    while pgrep -x polybar >/dev/null; do sleep 0.1; done
 fi
 
 # Kill eww bars

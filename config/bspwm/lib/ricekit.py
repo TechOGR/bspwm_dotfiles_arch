@@ -267,7 +267,17 @@ def current():
 
 def apply(kit, parts, run=True):
     """Write every file the chosen parts touch, then re-apply the rice
-    (Theme.sh when colors/windows changed, BarCtl otherwise)."""
+    (Theme.sh when colors/windows changed, BarCtl otherwise). One at a time."""
+    import fcntl
+    lock = open(os.path.join(os.environ.get('XDG_RUNTIME_DIR', '/tmp'), f'ricekit-{os.getuid()}.lock'), 'w')
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    try:
+        _apply(kit, parts, run)
+    finally:
+        lock.close()
+
+
+def _apply(kit, parts, run):
     k = KITS[kit]
     parts = [p for p, *_ in PARTS if p in parts]
     ensure_palettes()

@@ -24,7 +24,7 @@ reloaded=""
 
 # Reload bars polybar or eww
 if pgrep -x polybar >/dev/null; then
-    polybar-msg cmd restart >/dev/null &&
+    timeout 3 polybar-msg cmd restart >/dev/null &&
     reloaded="${reloaded}• Polybar\n"
 else
     eww_bar_config="$RICES_DIR/$CURRENT_RICE/bar"

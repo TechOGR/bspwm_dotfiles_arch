@@ -54,7 +54,7 @@ toggle_bar() {
             done
         fi
     else
-        polybar-msg cmd "$action"
+        timeout 2 polybar-msg cmd "$action"
         # the styled workspaces (WorkspacePill) follow the bar
         "$HOME"/.config/bspwm/bin/WorkspacePill --"$action" >/dev/null 2>&1
     fi

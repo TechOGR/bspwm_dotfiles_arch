@@ -41,7 +41,10 @@ PICOM_CONF = os.path.join(BSPWM, 'config/picom/picom.conf')
 LOCK = os.path.join(HOME, '.cache', os.environ.get('USER', 'user'), '.roundborders.lock')
 # picom-rules.conf gives these square corners: no ring for them
 SQUARE = {'mpv', 'Viewnior', 'retroarch'}
-# translucent terminals get the theme's background drawn under them
+# translucent terminals get the theme's background drawn under them; they
+# are found by the program behind the window (Term opens them as FloaTerm...)
+TERM_PROCS = {'alacritty', 'kitty', 'ghostty', 'st', 'xterm', 'uxterm', 'urxvt', 'foot', 'wezterm-gui',
+              'xfce4-terminal', 'konsole', 'gnome-terminal-', 'terminator', 'tilix', 'termite', 'sakura'}
 TERMINALS = {'kitty', 'alacritty', 'com.mitchellh.ghostty', 'st', 'st-256color', 'xterm', 'uxterm', 'urxvt',
              'foot', 'wezterm', 'org.wezfurlong.wezterm', 'xfce4-terminal', 'bspwm-scratch'}
 
@@ -145,6 +148,26 @@ def main():
             'normal': hexcolor(bspc('config', 'normal_border_color')),
         }
 
+    term_cache = {}
+
+    def is_terminal(cid, cl):
+        """A terminal window? By its class, else by the process that owns it
+        (read once per window)."""
+        if cid not in term_cache:
+            names = {(cl.get('className') or '').lower(), (cl.get('instanceName') or '').lower()}
+            ok = bool(names & TERMINALS)
+            if not ok:
+                out = subprocess.run(['xprop', '-id', hex(cid), '_NET_WM_PID'], capture_output=True,
+                                     text=True).stdout
+                m = re.search(r'= (\d+)', out)
+                try:
+                    comm = open(f'/proc/{m.group(1)}/comm').read().strip() if m else ''
+                except OSError:
+                    comm = ''
+                ok = comm in TERM_PROCS
+            term_cache[cid] = ok
+        return term_cache[cid]
+
     def wanted():
         """{client id: (frame x, y, w, h, focused)} for the windows on screen
         (and st['back_want']: the terminals that get a themed background)."""
@@ -177,8 +200,7 @@ def main():
                 r = cl['floatingRectangle'] if cl.get('state') == 'floating' else cl['tiledRectangle']
                 out[n['id']] = (r['x'] - bw, r['y'] - bw, r['width'] + 2 * bw, r['height'] + 2 * bw, bw,
                                 n['id'] == focused)
-                names = {(cl.get('className') or '').lower(), (cl.get('instanceName') or '').lower()}
-                if c['backdrop'] and names & TERMINALS:
+                if c['backdrop'] and is_terminal(n['id'], cl):
                     st['back_want'][n['id']] = (r['x'], r['y'], r['width'], r['height'], bw)
         return out
 

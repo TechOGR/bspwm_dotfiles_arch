@@ -2106,11 +2106,16 @@ class RiceEditor(Gtk.Window):
         if not parts:
             self.toast('Pick at least one part', error=True)
             return
+        if getattr(self, 'kit_busy', False):
+            self.toast('A theme is still being applied…', error=True)
+            return
+        self.kit_busy = True
         self.snapshot_create(f'before-{key}', quiet=True)
         name = ricekit.KITS[key]['name']
         self.toast(f'Applying {name}…')
 
         def done(_r):
+            self.kit_busy = False
             if 'colors' in parts:
                 self.load_colors()
                 self.refresh_dashboard_palette()

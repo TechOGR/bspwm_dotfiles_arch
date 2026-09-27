@@ -46,7 +46,11 @@ def bar_running():
 
 def restart_bar():
     if bar_running():
-        quiet(['polybar-msg', 'cmd', 'restart'])
+        # a hung bar never answers: kill it and start a fresh one
+        if quiet(['timeout', '3', 'polybar-msg', 'cmd', 'restart']).returncode != 0:
+            quiet(['pkill', '-9', '-x', 'polybar'])
+            time.sleep(0.3)
+            return restart_bar()
     else:
         rice = bc.rice()
         env = dict(os.environ, RICE=rice)
@@ -122,7 +126,7 @@ def daemon():
         if st['shown'] == v and not force:
             return
         st['shown'] = v
-        quiet(['polybar-msg', 'cmd', 'show' if v else 'hide'])
+        quiet(['timeout', '2', 'polybar-msg', 'cmd', 'show' if v else 'hide'])
         pill('--show' if v else '--hide')
         if v:
             # override-redirect: raise it over whatever got mapped since
@@ -133,7 +137,7 @@ def daemon():
 
     def finish(*_):
         st['shown'] = None
-        quiet(['polybar-msg', 'cmd', 'show'])
+        quiet(['timeout', '2', 'polybar-msg', 'cmd', 'show'])
         pill('--show')
         apply_paddings(bc.load(), autohide=False)
         loop.quit()
