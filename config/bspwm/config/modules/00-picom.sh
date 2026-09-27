@@ -16,7 +16,11 @@ sed -i "$HOME/.config/bspwm/config/picom/picom.conf" \
     -e "s/shadow-color = .*/shadow-color = \"${SHADOW_C}\"/" \
     -e "s/^corner-radius = .*/corner-radius = ${P_CORNER_R}/"
 
+# Terminals over the theme's background keep one opacity (no focus pulse)
+if [ "${WIN_BACKDROP:-false}" = "true" ]; then P_TERM_LOCK=""; else P_TERM_LOCK="#"; fi
+
 sed -i "$HOME/.config/bspwm/config/picom/picom-rules.conf" \
+    -e "/#-term-opacity-lock/s/.*#-/\t\t${P_TERM_LOCK}opacity = 1;\t#-/" \
     -e "/#-shadow-switch/s/.*#-/\t\tshadow = ${P_SHADOWS};\t#-/" \
     -e "/#-fade-switch/s/.*#-/\t\tfade = ${P_FADE};\t#-/" \
     -e "/#-blur-switch/s/.*#-/\t\tblur-background = ${P_BLUR};\t#-/" \

@@ -117,7 +117,8 @@ def main():
     import gi
     gi.require_version('Gtk', '3.0')
     gi.require_version('Gdk', '3.0')
-    from gi.repository import Gtk, Gdk, GLib
+    gi.require_version('GdkX11', '3.0')
+    from gi.repository import Gtk, Gdk, GLib, GdkX11
     import cairo
     sys.path.insert(0, os.path.join(BSPWM, 'lib'))
     import riceui as ui
@@ -252,14 +253,40 @@ def main():
         cr.stroke()
         return True
 
+    foreign = {}
+
     def restack(cid, win, where='above', new=False):
+        """Frames go right above their window, through our own X
+        connection (in order with everything else we send, no fork).
+        Backgrounds go to the very bottom of the stack: bspwm never moves
+        windows relative to them, so they can never end up over a
+        window's text (it did for a frame when focus changed)."""
         gw = win.get_window()
-        if gw:
-            # xdo is another X client: a new window must reach the server
-            # first, or xdo fails and it stays on top (over the text)
-            if new:
-                Gdk.Display.get_default().sync()
-            subprocess.run(['xdo', where, '-t', hex(cid), hex(gw.get_xid())],
+        if not gw:
+            return
+        if where == 'below':
+            gw.lower()
+            # a video wallpaper (VideoWall) sits at the bottom too: go over it
+            vids = subprocess.run(['xdotool', 'search', '--class', '^VideoWall$'], capture_output=True,
+                                  text=True).stdout.split()
+            for v in vids[-1:]:
+                try:
+                    gw.restack(GdkX11.X11Window.foreign_new_for_display(Gdk.Display.get_default(),
+                                                                       int(v)), True)
+                except Exception:
+                    pass
+            return
+        target = foreign.get(cid)
+        if target is None:
+            try:
+                target = GdkX11.X11Window.foreign_new_for_display(Gdk.Display.get_default(), cid)
+            except Exception:
+                target = None
+            foreign[cid] = target
+        if target is not None:
+            gw.restack(target, True)
+        else:
+            subprocess.run(['xdo', 'above', '-t', hex(cid), hex(gw.get_xid())],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def draw_back(win, cr):
@@ -296,10 +323,7 @@ def main():
                 restack(cid, win, 'below', True)
             changed = info != win.info
             if not changed:
-                # same picture: at most put it back under its window
-                if restack_all or cid in st['raise']:
-                    restack(cid, win, 'below')
-                continue
+                continue   # at the bottom of the stack: nothing can cover it wrongly
             if (x, y, w, h) != tuple(win.info.get(k) for k in ('x', 'y', 'w', 'h')):
                 win.set_size_request(w, h)
                 win.resize(w, h)
@@ -312,7 +336,8 @@ def main():
                 win.show()
                 # and once more when everything settled (map, theme reload)
                 GLib.timeout_add(500, lambda w=win, c=cid: (w.get_window() and restack(c, w, 'below', True), False)[1])
-            restack(cid, win, 'below', new)
+            if new:
+                restack(cid, win, 'below', True)
             win.queue_draw()
 
     def sync(restack_all=False):
@@ -325,6 +350,7 @@ def main():
                     st['rings'][cid].hide()
                 else:
                     st['rings'].pop(cid).destroy()
+                    foreign.pop(cid, None)
         skin = st['conf']['skin']
         for cid, (x, y, w, h, bw, foc) in want.items():
             if skin:   # the overlay reaches E px past the window for ornaments
