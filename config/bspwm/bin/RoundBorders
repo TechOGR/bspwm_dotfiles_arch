@@ -128,7 +128,7 @@ def main():
     _lock = ui.single_instance('roundborders')  # noqa: F841  writes LOCK
     GLib.set_prgname('RoundBorders')
 
-    st = {'conf': None, 'rings': {}, 'backs': {}, 'back_want': {}, 'timer': None}
+    st = {'conf': None, 'rings': {}, 'backs': {}, 'back_want': {}, 'timer': None, 'raise': set()}
 
     def hexcolor(h):
         h = (h or '#000000').lstrip('#')[-6:]
@@ -173,6 +173,7 @@ def main():
         (and st['back_want']: the terminals that get a themed background)."""
         c = st['conf']
         st['back_want'] = {}
+        st['alive'] = {int(i, 16) for i in bspc('query', '-N', '-n', '.window').split()}
         if not (c['skin'] or c['xrender'] and c['r'] > 0 and c['bw'] > 0):
             return {}
         out = {}
@@ -251,12 +252,13 @@ def main():
         cr.stroke()
         return True
 
-    def restack(cid, win, where='above'):
+    def restack(cid, win, where='above', new=False):
         gw = win.get_window()
         if gw:
-            # xdo is another X client: our new window must reach the server
+            # xdo is another X client: a new window must reach the server
             # first, or xdo fails and it stays on top (over the text)
-            Gdk.Display.get_default().sync()
+            if new:
+                Gdk.Display.get_default().sync()
             subprocess.run(['xdo', where, '-t', hex(cid), hex(gw.get_xid())],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -270,7 +272,10 @@ def main():
         want = st.get('back_want', {})
         for cid in list(st['backs']):
             if cid not in want:
-                st['backs'].pop(cid).destroy()
+                if cid in st.get('alive', ()):   # on another desktop: keep it, hidden
+                    st['backs'][cid].hide()
+                else:
+                    st['backs'].pop(cid).destroy()
         for cid, (x, y, w, h, bw) in want.items():
             win = st['backs'].get(cid)
             new = win is None
@@ -286,7 +291,14 @@ def main():
                 st['backs'][cid] = win
             info = {'x': x, 'y': y, 'w': w, 'h': h, 'bw': bw, 'skin': st['conf']['skin'],
                     'tint': st['conf']['tint'], 'r': st['conf']['r']}
-            if info == win.info and not restack_all:
+            if not new and not win.get_visible():   # back from another desktop
+                win.show()
+                restack(cid, win, 'below', True)
+            changed = info != win.info
+            if not changed:
+                # same picture: at most put it back under its window
+                if restack_all or cid in st['raise']:
+                    restack(cid, win, 'below')
                 continue
             if (x, y, w, h) != tuple(win.info.get(k) for k in ('x', 'y', 'w', 'h')):
                 win.set_size_request(w, h)
@@ -296,12 +308,11 @@ def main():
             if new:
                 win.realize()
                 win.get_window().input_shape_combine_region(cairo.Region(), 0, 0)
-                win.connect('map-event', lambda w, _e, c=cid: (restack(c, w, 'below'), False)[1])
+                win.connect('map-event', lambda w, _e, c=cid: (restack(c, w, 'below', True), False)[1])
                 win.show()
                 # and once more when everything settled (map, theme reload)
-                GLib.timeout_add(500, lambda w=win, c=cid: (w.get_window() and restack(c, w, 'below'), False)[1])
-            if new or restack_all:
-                restack(cid, win, 'below')
+                GLib.timeout_add(500, lambda w=win, c=cid: (w.get_window() and restack(c, w, 'below', True), False)[1])
+            restack(cid, win, 'below', new)
             win.queue_draw()
 
     def sync(restack_all=False):
@@ -310,7 +321,10 @@ def main():
         sync_backs(restack_all)
         for cid in list(st['rings']):
             if cid not in want:
-                st['rings'].pop(cid).destroy()
+                if cid in st.get('alive', ()):   # on another desktop: keep it, hidden
+                    st['rings'][cid].hide()
+                else:
+                    st['rings'].pop(cid).destroy()
         skin = st['conf']['skin']
         for cid, (x, y, w, h, bw, foc) in want.items():
             if skin:   # the overlay reaches E px past the window for ornaments
@@ -329,7 +343,21 @@ def main():
                 st['rings'][cid] = win
             info = {'x': x, 'y': y, 'w': w, 'h': h, 'bw': bw, 'focused': foc, 'skin': skin,
                     'tint': st['conf']['tint']}
-            if info == win.info and not restack_all:
+            if not new and not win.get_visible():   # back from another desktop
+                win.show()
+                restack(cid, win, 'above', True)
+            if info == win.info:
+                # nothing to redraw (the flicker on every click came from
+                # reshaping + repainting all frames): only put it back on top
+                if restack_all or cid in st['raise']:
+                    restack(cid, win)
+                continue
+            if all(win.info.get(k) == info[k] for k in info if k != 'focused'):
+                # focus moved: same shape and place, just repaint
+                win.info = info
+                win.queue_draw()
+                if cid in st['raise']:
+                    restack(cid, win)
                 continue
             geometry = (x, y, w, h, bw) != tuple(win.info.get(k) for k in ('x', 'y', 'w', 'h', 'bw'))
             win.info = info
@@ -344,18 +372,24 @@ def main():
             gw.shape_combine_region(frame_region(w, h) if skin else ring_region(w, h, bw, r), 0, 0)
             gw.input_shape_combine_region(cairo.Region(), 0, 0)
             if new:
-                win.connect('map-event', lambda w, _e, c=cid: (restack(c, w), False)[1])
+                win.connect('map-event', lambda w, _e, c=cid: (restack(c, w, 'above', True), False)[1])
                 win.show()
-                GLib.timeout_add(500, lambda w=win, c=cid: (w.get_window() and restack(c, w), False)[1])
-            if new or restack_all:
-                restack(cid, win)
+                GLib.timeout_add(500, lambda w=win, c=cid: (w.get_window() and restack(c, w, 'above', True), False)[1])
+            restack(cid, win, 'above', new)
             win.queue_draw()
+        st['raise'] = set()
         return False
 
     def schedule(restack_all=False):
+        # several events within 25 ms: one sync, and a restack if any asked
+        st['pending_restack'] = st.get('pending_restack', False) or restack_all
         if st['timer']:
             GLib.source_remove(st['timer'])
-        st['timer'] = GLib.timeout_add(25, lambda: sync(restack_all))
+
+        def fire():
+            r, st['pending_restack'] = st['pending_restack'], False
+            return sync(r)
+        st['timer'] = GLib.timeout_add(25, fire)
 
     buf = {'data': b''}
 
@@ -369,9 +403,14 @@ def main():
             return False
         buf['data'] += chunk
         *lines, buf['data'] = buf['data'].split(b'\n')
-        # bspwm raises a focused window: its frame must go back over it
-        restack_all = any(ln.startswith((b'node_stack', b'node_add', b'node_transfer', b'desktop_focus', b'node_focus',
+        restack_all = any(ln.startswith((b'node_stack', b'node_add', b'node_transfer', b'desktop_focus',
                                          b'node_swap', b'node_state', b'node_flag')) for ln in lines)
+        for ln in lines:   # bspwm raises a focused window: only its overlays go back over it
+            if ln.startswith(b'node_focus'):
+                try:
+                    st['raise'].add(int(ln.split()[-1], 16))
+                except ValueError:
+                    pass
         schedule(restack_all)
         return True
 
