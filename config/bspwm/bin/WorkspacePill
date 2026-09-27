@@ -185,14 +185,31 @@ def main():
                 desks.append((v, state))
         return desks
 
-    def on_event(src, _cond):
-        line = src.readline()
-        if not line:
+    buf = {'data': b''}
+
+    def on_event(fd, cond):
+        # Read everything bspwm sent: one desktop switch writes several
+        # lines at once (desktop_focus + report); a buffered readline()
+        # would leave the report waiting for the NEXT event (the pill
+        # looked one switch behind).
+        try:
+            chunk = os.read(fd, 65536)
+        except BlockingIOError:
+            return True
+        if not chunk:
             Gtk.main_quit()
             return False
-        line = line.strip()
-        if line.startswith('W'):
-            desks = parse_report(line)
+        buf['data'] += chunk
+        *lines, buf['data'] = buf['data'].split(b'\n')
+        report, other = None, False
+        for raw in lines:
+            line = raw.decode(errors='replace').strip()
+            if line.startswith('W'):
+                report = line          # only the newest state matters
+            elif line:
+                other = True
+        if report:
+            desks = parse_report(report)
             if len(desks) != len(st['desks']):
                 first = not st['desks']
                 st['desks'] = desks
@@ -202,12 +219,10 @@ def main():
                     subprocess.Popen([os.path.join(bc.BSPWM, 'bin/BarCtl'), 'apply'],
                                      start_new_session=True)
             st['desks'] = desks
-            check_fullscreen()
-            update_visibility()
             win.queue_draw()
-        else:
+        if other or report and st['fullscreen']:
             check_fullscreen()
-            update_visibility()
+        update_visibility()
         return True
 
     def watch_polybar():
@@ -223,8 +238,10 @@ def main():
     win.connect('realize', lambda *_: place())
 
     proc = subprocess.Popen(['bspc', 'subscribe', 'report', 'node_state', 'node_remove', 'desktop_focus'],
-                            stdout=subprocess.PIPE, text=True, bufsize=1)
-    GLib.io_add_watch(proc.stdout, GLib.IO_IN | GLib.IO_HUP, on_event)
+                            stdout=subprocess.PIPE, bufsize=0)
+    fd = proc.stdout.fileno()
+    os.set_blocking(fd, False)
+    GLib.unix_fd_add_full(GLib.PRIORITY_HIGH, fd, GLib.IO_IN | GLib.IO_HUP, on_event)
     GLib.timeout_add_seconds(3, watch_polybar)   # rice switch / bar killed
 
     def set_bar(hidden):
