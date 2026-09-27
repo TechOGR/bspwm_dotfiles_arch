@@ -2501,8 +2501,8 @@ class RiceEditor(Gtk.Window):
 
     def set_win_backdrop(self, on):
         self.cfg.set('WIN_BACKDROP', 'true' if on else 'false')
-        if on and float(self.cfg.raw('P_TERM_OPACITY', '1.0') or 1) > 0.7:
-            self.cfg.set('P_TERM_OPACITY', '0.6')
+        if on and float(self.cfg.raw('P_TERM_OPACITY', '1.0') or 1) > 0.6:
+            self.cfg.set('P_TERM_OPACITY', '0.45')
         self.apply_modules('', '05-kitty.sh', '05-alacritty.sh', '05-ghostty.sh')
         spawn([os.path.join(BIN, 'RoundBorders'), '--reload'])
         self.toast(f'Themed terminal background → {"on" if on else "off"}')

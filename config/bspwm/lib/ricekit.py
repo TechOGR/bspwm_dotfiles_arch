@@ -299,7 +299,7 @@ def _apply(kit, parts, run):
         set_var('WIN_SKIN', kit)   # styled frames around the windows (bin/RoundBorders)
         # the theme's background shows through slightly translucent terminals
         set_var('WIN_BACKDROP', 'true')
-        set_var('P_TERM_OPACITY', '0.6')
+        set_var('P_TERM_OPACITY', '0.45')
         set_var('dunst_corner_radius', k['dunst_r'])
     if 'bar' in parts or 'workspaces' in parts:
         conf = bc.load()

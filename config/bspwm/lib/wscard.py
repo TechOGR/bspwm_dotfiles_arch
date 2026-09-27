@@ -1001,6 +1001,11 @@ def paint_backdrop(cr, style, w, h, radius=0):
     cr.save()
     rounded(cr, 0, 0, w, h, max(0, radius))
     cr.clip()
-    with ws.tinted(style, ws.tint_target('windows')):
-        fn(cr, w, h, random.Random(1234))
+    try:
+        import wsback   # the detailed scenes (cached renders)
+        cr.set_source_surface(wsback.render(style, w, h, ws.tint_target('windows')), 0, 0)
+        cr.paint()
+    except Exception:
+        with ws.tinted(style, ws.tint_target('windows')):
+            fn(cr, w, h, random.Random(1234))
     cr.restore()
