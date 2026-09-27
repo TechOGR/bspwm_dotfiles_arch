@@ -3661,6 +3661,12 @@ class RiceEditor(Gtk.Window):
             sc.set_size_request(220, -1)
             self.bar_w[key] = sc
             c.pack_start(self.row(title, desc, sc, lab), False, False, 0)
+        if wspill:
+            skins = [('none', 'None (plain bar)')] + [(k, n) for k, n, _t in wspill.STYLES if k in wspill.BAR_SKINS]
+            self.bar_w['bar_skin'] = self.combo(skins, conf.get('bar_skin', 'none'),
+                                                lambda v: self.bar_set('bar_skin', v, 'Bar skin'))
+            c.pack_start(self.row('Bar skin', 'The whole bar drawn in a style (Themes set it too)',
+                                  self.bar_w['bar_skin']), False, False, 0)
         colors = [(k, k) for k in ('bg', 'black', 'accent_color', 'blackb')]
         self.bar_w['bg_color'] = self.combo(colors, conf['bg_color'],
                                             lambda v: self.bar_set('bg_color', v, 'Background'))

@@ -38,6 +38,16 @@ cargar_tokyo_night
 
 #cargar_nature
 
+#cargar_pencil_graphite
+
+#cargar_crystal
+
+#cargar_lava
+
+#cargar_solid_neon
+
+#cargar_holographic
+
 
 # Bspwm options
 BORDER_WIDTH="0"		# Bspwm border

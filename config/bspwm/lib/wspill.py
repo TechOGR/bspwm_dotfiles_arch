@@ -685,6 +685,10 @@ GLOW = {'glass': 0.35, 'cyber': 0.5, 'gradient': 0.3, 'macos': 0.25, 'liquid': 0
         'fire': 0.5, 'nature': 0.45, 'minimal': 0.12, 'pixel': 0}
 
 
+# styles that draw their icons themselves: fn(cr, kind, x, y, s, rgb)
+ICON_PAINTERS = {}
+
+
 # ─────────────────────────────────────────────────────────────── public
 def icon_centers(m):
     cy = m['win_h'] / 2
@@ -734,7 +738,10 @@ def paint(cr, style, m, states, pal=None):
             halo(cr, x, y, s * 1.0, c, g)
         elif g:
             halo(cr, x, y, s * 0.55, c, g * 0.8)
-        if style == 'pixel':
+        kind = 'pac' if st == 'focused' else ('dot' if st == 'empty' else 'ghost')
+        if style in ICON_PAINTERS:
+            ICON_PAINTERS[style](cr, kind, x, y, s, c)
+        elif style == 'pixel':
             if st == 'empty':
                 q = max(2, round(s / 8))
                 cr.rectangle(round(x - q), round(y - q), 2 * q, 2 * q)
@@ -1079,3 +1086,658 @@ def bar_nature(cr, x, y, w, h, cy):
 BAR_SKINS = {'glass': bar_glass, 'cyber': bar_cyber, 'minimal': bar_minimal, 'gradient': bar_gradient,
              'pixel': bar_pixel, 'macos': bar_macos, 'liquid': bar_liquid, 'hud': bar_hud,
              'fire': bar_fire, 'nature': bar_nature}
+
+
+# ═════════════════════════════════════════════════ styles, second set
+# Pencil / graphite, Crystal, Lava, Solid neon, Holographic
+STYLES += [
+    ('sketch', 'Pencil', 'hand drawn in graphite'),
+    ('crystal', 'Crystal', 'frosted glass and light'),
+    ('lava', 'Lava', 'cracked rock and fire'),
+    ('neon', 'Solid Neon', 'clean neon outline'),
+    ('holo', 'Holographic', 'space, orbits and particles'),
+]
+STYLE_IDS = [st[0] for st in STYLES]
+COLORS.update({
+    'sketch': ('#d4d4d4', '#dedede', ['#bdbdbd', '#c4c4c4', '#c9c9c9', '#cfcfcf']),
+    'crystal': ('#c4e8ff', '#e8f5ff', ['#35c8ff', '#2fb4ff', '#4f9bff', '#9a8cff', '#e78cff']),
+    'lava': ('#ff8a1f', '#ffa51f', ['#ff7a1a', '#ff7f1c', '#ff841e', '#ff8a20']),
+    'neon': ('#1ec8ff', '#a855f7', ['#1e90ff', '#1ec8ff', '#6b6bff', '#a855f7', '#ff4fd8']),
+    'holo': ('#cdbcff', '#eaf2ff', ['#6aa8ff', '#4fd8ff', '#5ff0e0', '#e3b3ff', '#ff8ae0']),
+})
+GLOW.update({'sketch': 0, 'crystal': 0.4, 'lava': 0.55, 'neon': 0.55, 'holo': 0.45})
+
+
+# ───────────────────────────────────────────────────────────── helpers
+def sketch_stroke(cr, path, c, passes=4, jitter=0.9, width=1.1, alpha=0.6, seed=3):
+    """A path redrawn a few times off by a hair: a pencil line."""
+    rnd = random.Random(seed)
+    for _ in range(passes):
+        cr.save()
+        cr.translate(rnd.uniform(-jitter, jitter), rnd.uniform(-jitter, jitter))
+        path()
+        cr.restore()
+        cr.set_line_width(width * rnd.uniform(0.6, 1.25))
+        cr.set_source_rgba(*c, alpha * rnd.uniform(0.55, 1))
+        cr.stroke()
+
+
+def hatch(cr, clip, box, c, spacing=3.0, alpha=0.3, width=0.7):
+    x, y, w, h = box
+    cr.save()
+    clip()
+    cr.clip()
+    i = -h
+    while i < w:
+        cr.move_to(x + i, y + h)
+        cr.line_to(x + i + h, y)
+        i += spacing
+    cr.set_line_width(width)
+    cr.set_source_rgba(*c, alpha)
+    cr.stroke()
+    cr.restore()
+
+
+def capsule_points(x, y, w, h, step=3.0):
+    """Points around a capsule, clockwise from the top-left, with the
+    outward normal of each one."""
+    r = h / 2
+    pts = []
+    n = max(2, int((w - 2 * r) / step))
+    for i in range(n + 1):
+        pts.append((x + r + (w - 2 * r) * i / n, y, 0, -1))
+    k = max(6, int(PI * r / step))
+    for i in range(1, k):
+        a = -PI / 2 + PI * i / k
+        pts.append((x + w - r + r * math.cos(a), y + r + r * math.sin(a), math.cos(a), math.sin(a)))
+    for i in range(n + 1):
+        pts.append((x + w - r - (w - 2 * r) * i / n, y + h, 0, 1))
+    for i in range(1, k):
+        a = PI / 2 + PI * i / k
+        pts.append((x + r + r * math.cos(a), y + r + r * math.sin(a), math.cos(a), math.sin(a)))
+    return pts
+
+
+def jagged(cr, pts, rnd, amp, smooth=2):
+    """Closed path through the points pushed out/in by a smoothed random."""
+    raw = [rnd.uniform(-amp, amp) for _ in pts]
+    offs = []
+    for i in range(len(raw)):
+        acc = [raw[(i + d) % len(raw)] for d in range(-smooth, smooth + 1)]
+        offs.append(sum(acc) / len(acc))
+    cr.new_path()
+    for i, ((px, py, nx, ny), o) in enumerate(zip(pts, offs)):
+        (cr.move_to if i == 0 else cr.line_to)(px + nx * o, py + ny * o)
+    cr.close_path()
+
+
+def sparkle(cr, x, y, r, c, a=1.0):
+    cr.new_path()
+    for i in range(8):
+        ang = i * PI / 4
+        rr = r if i % 2 == 0 else r * 0.22
+        (cr.move_to if i == 0 else cr.line_to)(x + rr * math.cos(ang), y + rr * math.sin(ang))
+    cr.close_path()
+    cr.set_source_rgba(*c, a)
+    cr.fill()
+    halo(cr, x, y, r * 1.6, c, a * 0.35)
+
+
+def neon_grad(x0, x1, stops, a=1.0):
+    g = cairo.LinearGradient(x0, 0, x1, 0)
+    for i, col in enumerate(stops):
+        g.add_color_stop_rgba(i / max(1, len(stops) - 1), *rgb(col), a)
+    return g
+
+
+# ─────────────────────────────────────────────────────── sketch icons
+def sketch_icons(cr, kind, x, y, s, c):
+    ink = rgb('#f2f2f2')
+    if kind == 'dot':
+        cr.arc(x, y, s * 0.22, 0, 2 * PI)
+        cr.set_source_rgba(*c, 0.9)
+        cr.fill()
+        sketch_stroke(cr, lambda: (cr.new_path(), cr.arc(x, y, s * 0.23, 0, 2 * PI)), ink, passes=2,
+                      jitter=0.4, width=0.8, seed=int(x))
+        return
+    if kind == 'ghost':
+        shape = lambda: ghost_path(cr, x, y, s * 0.95)  # noqa: E731
+    else:
+        shape = lambda: pac_path(cr, x, y, s * 0.55)  # noqa: E731
+    shape()
+    cr.set_source_rgba(*c, 0.95)
+    cr.fill()
+    hatch(cr, shape, (x - s, y - s, 2 * s, 2 * s), rgb('#3a3a3a'), spacing=2.4, alpha=0.35)
+    sketch_stroke(cr, shape, ink, passes=3, jitter=0.5, width=0.9, seed=int(x))
+    if kind == 'ghost':
+        for dx in (-s * 0.19, s * 0.19):
+            cr.save()
+            cr.translate(x + dx, y - s * 0.1)
+            cr.scale(s * 0.1, s * 0.15)
+            cr.arc(0, 0, 1, 0, 2 * PI)
+            cr.restore()
+            cr.set_source_rgba(0.08, 0.08, 0.08, 0.95)
+            cr.fill()
+    else:
+        cr.arc(x + s * 0.05, y - s * 0.28, s * 0.07, 0, 2 * PI)
+        cr.set_source_rgba(0.08, 0.08, 0.08, 0.95)
+        cr.fill()
+
+
+ICON_PAINTERS['sketch'] = sketch_icons
+
+
+# ─────────────────────────────────────────────────────────── pill frames
+def frame_sketch(cr, m):
+    px, py, pw, ph = pill_rect(m)
+    W, cy = m['win_w'], m['win_h'] / 2
+    lead = rgb('#d6d6d6')
+    outer = lambda: rounded(cr, px, py, pw, ph, ph / 2)  # noqa: E731
+    outer()
+    cr.set_source_rgba(*rgb('#141414'), 0.94)
+    cr.fill()
+    hatch(cr, outer, (px, py + ph * 0.55, pw, ph * 0.45), lead, spacing=5, alpha=0.08)
+    sketch_stroke(cr, outer, lead, passes=5, jitter=1.1, width=1.2, alpha=0.7, seed=1)
+    sketch_stroke(cr, lambda: rounded(cr, px + 3.5, py + 3.5, pw - 7, ph - 7, (ph - 7) / 2), lead,
+                  passes=3, jitter=0.7, width=0.8, alpha=0.45, seed=2)
+    # construction lines past the pill, like a draft
+    rnd = random.Random(9)
+    for yy in (py - 0.5, py + ph + 0.5):
+        cr.move_to(px - rnd.uniform(14, 26), yy + rnd.uniform(-0.6, 0.6))
+        cr.line_to(px + pw + rnd.uniform(14, 26), yy + rnd.uniform(-0.6, 0.6))
+    for xx in (px + ph * 0.5, px + pw - ph * 0.5):
+        cr.move_to(xx + rnd.uniform(-1, 1), py - 5)
+        cr.line_to(xx + rnd.uniform(-1, 1), py + ph + 5)
+    cr.set_line_width(0.6)
+    cr.set_source_rgba(*lead, 0.28)
+    cr.stroke()
+    # doodles: a crown on the right, scribbles on the left
+    kx, ky = px + pw + m['side'] * 0.45, cy - 5
+    crown = lambda: (cr.new_path(), cr.move_to(kx - 9, ky + 7), cr.line_to(kx - 9, ky - 3),  # noqa: E731
+                     cr.line_to(kx - 4, ky + 2), cr.line_to(kx, ky - 6), cr.line_to(kx + 4, ky + 2),
+                     cr.line_to(kx + 9, ky - 3), cr.line_to(kx + 9, ky + 7), cr.close_path())
+    sketch_stroke(cr, crown, lead, passes=3, jitter=0.5, width=0.9, alpha=0.8, seed=4)
+    for i in range(5):
+        sx = px - 10 - i * 5
+        cr.move_to(sx, cy + 6)
+        cr.line_to(sx + 4, cy + 1)
+    cr.set_line_width(0.8)
+    cr.set_source_rgba(*lead, 0.35)
+    cr.stroke()
+
+
+def frame_crystal(cr, m):
+    px, py, pw, ph = pill_rect(m)
+    W, cy = m['win_w'], m['win_h'] / 2
+    ice, blue = rgb('#bfe6ff'), rgb('#2f8cff')
+    path = lambda: rounded(cr, px, py, pw, ph, ph / 2)  # noqa: E731
+    halo(cr, px + pw * 0.2, cy, ph * 1.5, blue, 0.18)
+    halo(cr, px + pw * 0.85, cy, ph * 1.5, rgb('#8a5cff'), 0.14)
+    glow_stroke(cr, path, blue, 1, layers=((10, 0.05), (5, 0.10)))
+    path()
+    g = cairo.LinearGradient(0, py, 0, py + ph)
+    g.add_color_stop_rgba(0, 0.85, 0.93, 1, 0.20)
+    g.add_color_stop_rgba(0.5, 0.35, 0.55, 0.95, 0.10)
+    g.add_color_stop_rgba(1, 0.55, 0.75, 1, 0.18)
+    cr.set_source(g)
+    cr.fill()
+    # thick bright rim, cold at the bottom
+    path()
+    rim = cairo.LinearGradient(0, py, 0, py + ph)
+    rim.add_color_stop_rgba(0, 1, 1, 1, 0.95)
+    rim.add_color_stop_rgba(0.5, *ice, 0.45)
+    rim.add_color_stop_rgba(1, *rgb('#6fc8ff'), 0.85)
+    cr.set_source(rim)
+    cr.set_line_width(2.2)
+    cr.stroke()
+    rounded(cr, px + 3, py + 3, pw - 6, ph - 6, (ph - 6) / 2)
+    cr.set_source_rgba(1, 1, 1, 0.22)
+    cr.set_line_width(0.9)
+    cr.stroke()
+    # specular streak along the top and a sparkle on the right end
+    cr.move_to(px + ph * 0.55, py + 3.2)
+    cr.line_to(px + pw * 0.45, py + 3.2)
+    cr.set_line_width(1.6)
+    cr.set_source(hfade(px + ph * 0.55, px + pw * 0.45, (1, 1, 1), 0.85, 0))
+    cr.stroke()
+    sparkle(cr, px + pw - ph * 0.35, py + 2, 5, (1, 1, 1), 0.95)
+    # reflection on the "floor"
+    cr.move_to(px + ph * 0.5, py + ph + 3.5)
+    cr.line_to(px + pw - ph * 0.5, py + ph + 3.5)
+    cr.set_line_width(1.2)
+    rg = cairo.LinearGradient(px, 0, px + pw, 0)
+    for t, a in ((0, 0), (0.3, 0.35), (0.7, 0.35), (1, 0)):
+        rg.add_color_stop_rgba(t, *rgb('#6fc8ff'), a)
+    cr.set_source(rg)
+    cr.stroke()
+
+
+def lava_rim(cr, x, y, w, h, seed, amp_rock=3.0, cracks=True):
+    rnd = random.Random(seed)
+    pts = capsule_points(x, y, w, h, 2.5)
+    # rock ring
+    jagged(cr, [(px + nx * 5.5, py + ny * 5.5, nx, ny) for px, py, nx, ny in pts], rnd, amp_rock + 1, smooth=1)
+    g = cairo.LinearGradient(0, y - 4, 0, y + h + 4)
+    g.add_color_stop_rgb(0, *rgb('#3a2319'))
+    g.add_color_stop_rgb(1, *rgb('#1a0d08'))
+    cr.set_source(g)
+    cr.fill()
+    # molten seam
+    seam = lambda: jagged(cr, pts, random.Random(seed + 1), 1.4, smooth=1)  # noqa: E731
+    for extra, a, col in ((9, 0.10, '#ff2a00'), (5, 0.22, '#ff4a00'), (2.2, 0.9, '#ff6a00'), (0.9, 1, '#ffd23a')):
+        seam()
+        cr.set_line_width(extra)
+        cr.set_source_rgba(*rgb(col), a)
+        cr.stroke()
+    # inner dark basin
+    rounded(cr, x + 2.5, y + 2.5, w - 5, h - 5, (h - 5) / 2)
+    cr.set_source_rgba(*rgb('#0d0604'), 0.96)
+    cr.fill()
+    if cracks:   # glowing cracks running into the rock
+        for px_, py_, nx, ny in pts[::9]:
+            if rnd.random() < 0.55:
+                length = rnd.uniform(3, 7)
+                cr.move_to(px_, py_)
+                cr.line_to(px_ + nx * length * 0.5 + rnd.uniform(-2, 2), py_ + ny * length * 0.5)
+                cr.line_to(px_ + nx * length + rnd.uniform(-2, 2), py_ + ny * length)
+        cr.set_line_width(1)
+        cr.set_source_rgba(*rgb('#ff7a18'), 0.85)
+        cr.stroke()
+
+
+def rock_shard(cr, x, y, r, rnd):
+    cr.new_path()
+    k = rnd.randint(4, 6)
+    a0 = rnd.uniform(0, PI)
+    for i in range(k):
+        a = a0 + 2 * PI * i / k
+        rr = r * rnd.uniform(0.6, 1.1)
+        (cr.move_to if i == 0 else cr.line_to)(x + rr * math.cos(a), y + rr * math.sin(a))
+    cr.close_path()
+    cr.set_source_rgb(*rgb('#2a1710'))
+    cr.fill_preserve()
+    cr.set_source_rgba(*rgb('#ff5a00'), 0.7)
+    cr.set_line_width(0.8)
+    cr.stroke()
+
+
+def frame_lava(cr, m):
+    px, py, pw, ph = pill_rect(m)
+    W, cy = m['win_w'], m['win_h'] / 2
+    halo(cr, px + pw * 0.15, cy, ph * 1.5, rgb('#ff2a00'), 0.25)
+    halo(cr, px + pw * 0.85, cy, ph * 1.5, rgb('#ff2a00'), 0.25)
+    lava_rim(cr, px, py + 1, pw, ph - 2, seed=21)
+    rnd = random.Random(8)
+    for side in (-1, 1):
+        base = px - 8 if side < 0 else px + pw + 8
+        for i in range(4):
+            rock_shard(cr, base + side * rnd.uniform(4, m['side'] * 0.6), cy + rnd.uniform(-8, 8),
+                       rnd.uniform(2, 4.5), rnd)
+        for i in range(10):
+            cr.arc(base + side * rnd.uniform(0, m['side'] * 0.8), cy + rnd.uniform(-12, 12),
+                   rnd.uniform(0.5, 1.2), 0, 2 * PI)
+            cr.set_source_rgba(*rgb(rnd.choice(['#ff7a18', '#ffc400', '#ff3a00'])), rnd.uniform(0.4, 0.9))
+            cr.fill()
+
+
+def frame_neon(cr, m):
+    px, py, pw, ph = pill_rect(m)
+    path = lambda: rounded(cr, px + 1, py + 1, pw - 2, ph - 2, (ph - 2) / 2)  # noqa: E731
+    stops = ['#19d4ff', '#2f6bff', '#8b3dff', '#ff3fd8']
+    path()
+    cr.set_source_rgba(*rgb('#070a18'), 0.94)
+    cr.fill()
+    for extra, a in ((16, 0.05), (10, 0.10), (5, 0.22)):
+        path()
+        cr.set_line_width(2.6 + extra)
+        cr.set_source(neon_grad(px, px + pw, stops, a))
+        cr.stroke()
+    path()
+    cr.set_line_width(2.6)
+    cr.set_source(neon_grad(px, px + pw, stops))
+    cr.stroke()
+    path()
+    cr.set_line_width(0.8)
+    cr.set_source_rgba(1, 1, 1, 0.55)
+    cr.stroke()
+
+
+def orbit(cr, cx, cy, rx, ry, rot, a, width=1.0, beads=True, rnd=None):
+    cr.save()
+    cr.translate(cx, cy)
+    cr.rotate(rot)
+    cr.scale(rx, ry)
+    cr.new_path()
+    cr.arc(0, 0, 1, 0, 2 * PI)
+    cr.restore()
+    g = cairo.LinearGradient(cx - rx, 0, cx + rx, 0)
+    g.add_color_stop_rgba(0, *rgb('#4fd8ff'), a)
+    g.add_color_stop_rgba(0.5, *rgb('#b07cff'), a * 0.5)
+    g.add_color_stop_rgba(1, *rgb('#ff6ad5'), a)
+    cr.set_source(g)
+    cr.set_line_width(width)
+    cr.stroke()
+    if beads:
+        for t, col in ((PI + 0.25, '#4fd8ff'), (-0.3, '#ff8ae0')):
+            bx = cx + rx * math.cos(t) * math.cos(rot) - ry * math.sin(t) * math.sin(rot)
+            by = cy + rx * math.cos(t) * math.sin(rot) + ry * math.sin(t) * math.cos(rot)
+            halo(cr, bx, by, 6, rgb(col), 0.5)
+            cr.arc(bx, by, 2.2, 0, 2 * PI)
+            cr.set_source_rgba(*rgb(col), 1)
+            cr.fill()
+
+
+def stars(cr, box, n, seed, colors=('#ffffff', '#9fd8ff', '#ffb8f0')):
+    x, y, w, h = box
+    rnd = random.Random(seed)
+    for _ in range(n):
+        sx, sy = rnd.uniform(x, x + w), rnd.uniform(y, y + h)
+        r = rnd.uniform(0.4, 1.1)
+        cr.arc(sx, sy, r, 0, 2 * PI)
+        cr.set_source_rgba(*rgb(rnd.choice(colors)), rnd.uniform(0.35, 0.9))
+        cr.fill()
+
+
+def frame_holo(cr, m):
+    px, py, pw, ph = pill_rect(m)
+    W, cy = m['win_w'], m['win_h'] / 2
+    stars(cr, (0, 0, W, m['win_h']), 40, 13)
+    halo(cr, px + pw * 0.2, cy, ph * 1.6, rgb('#3b5bff'), 0.25)
+    halo(cr, px + pw * 0.8, cy, ph * 1.6, rgb('#c03cff'), 0.25)
+    for i, (dx, dy, rot, a) in enumerate(((26, 3, -0.035, 0.55), (16, 5, 0.03, 0.4), (36, 1, 0.012, 0.3))):
+        orbit(cr, px + pw / 2, cy, pw / 2 + dx, ph / 2 + dy, rot, a, beads=(i == 0))
+    path = lambda: rounded(cr, px, py, pw, ph, ph / 2)  # noqa: E731
+    path()
+    cr.set_source(neon_grad(px, px + pw, ['#1b3cff', '#6a3cff', '#c43cf0', '#ff4fd8'], 0.38))
+    cr.fill()
+    path()
+    cr.set_source_rgba(*rgb('#0a0820'), 0.35)
+    cr.fill()
+    rounded(cr, px + 3, py + 2, pw - 6, ph * 0.45, ph * 0.22)
+    gl = cairo.LinearGradient(0, py, 0, py + ph * 0.5)
+    gl.add_color_stop_rgba(0, 1, 1, 1, 0.28)
+    gl.add_color_stop_rgba(1, 1, 1, 1, 0)
+    cr.set_source(gl)
+    cr.fill()
+    glow_stroke(cr, path, rgb('#b07cff'), 1.4, layers=((8, 0.08), (4, 0.18)),
+                source=neon_grad(px, px + pw, ['#8fe6ff', '#ffffff', '#ffb8f0'], 0.9))
+
+
+FRAMES.update({'sketch': frame_sketch, 'crystal': frame_crystal, 'lava': frame_lava,
+               'neon': frame_neon, 'holo': frame_holo})
+
+
+# ─────────────────────────────────────────────────────────── bar skins
+def bar_sketch(cr, x, y, w, h, cy):
+    lead = rgb('#d6d6d6')
+    outer = lambda: _capsule(cr, x, y, w, h)  # noqa: E731
+    outer()
+    cr.set_source_rgba(*rgb('#141414'), 0.95)
+    cr.fill()
+    hatch(cr, outer, (x, y + h * 0.6, w, h * 0.4), lead, spacing=6, alpha=0.06)
+    sketch_stroke(cr, outer, lead, passes=5, jitter=1.2, width=1.2, alpha=0.65, seed=31)
+    sketch_stroke(cr, lambda: _capsule(cr, x + 3.5, y + 3.5, w - 7, h - 7), lead, passes=2, jitter=0.8,
+                  width=0.8, alpha=0.35, seed=32)
+    rnd = random.Random(33)
+    for yy in (y - 0.5, y + h + 0.5):   # construction lines overshooting the ends
+        cr.move_to(x - rnd.uniform(10, 22), yy)
+        cr.line_to(x + h, yy)
+        cr.move_to(x + w - h, yy)
+        cr.line_to(x + w + rnd.uniform(10, 22), yy)
+    for xx in (x + h / 2, x + w - h / 2):
+        cr.move_to(xx, y - 6)
+        cr.line_to(xx, y + h + 6)
+    cr.set_line_width(0.6)
+    cr.set_source_rgba(*lead, 0.3)
+    cr.stroke()
+    for i in range(6):   # pencil scribbles past the ends
+        cr.move_to(x - 6 - i * 4, cy + 5)
+        cr.line_to(x - 3 - i * 4, cy - 1)
+        cr.move_to(x + w + 3 + i * 4, cy + 5)
+        cr.line_to(x + w + 6 + i * 4, cy - 1)
+    cr.set_line_width(0.8)
+    cr.set_source_rgba(*lead, 0.3)
+    cr.stroke()
+
+
+def bar_crystal(cr, x, y, w, h, cy):
+    ice, blue = rgb('#bfe6ff'), rgb('#2f8cff')
+    path = lambda: _capsule(cr, x, y, w, h)  # noqa: E731
+    glow_stroke(cr, path, blue, 1, layers=((10, 0.05), (5, 0.10)))
+    path()
+    cr.set_source_rgba(*rgb('#0a1228'), 0.55)
+    cr.fill()
+    path()
+    g = cairo.LinearGradient(0, y, 0, y + h)
+    g.add_color_stop_rgba(0, 0.85, 0.93, 1, 0.18)
+    g.add_color_stop_rgba(0.5, 0.35, 0.55, 0.95, 0.06)
+    g.add_color_stop_rgba(1, 0.55, 0.75, 1, 0.14)
+    cr.set_source(g)
+    cr.fill()
+    path()
+    rim = cairo.LinearGradient(0, y, 0, y + h)
+    rim.add_color_stop_rgba(0, 1, 1, 1, 0.9)
+    rim.add_color_stop_rgba(0.5, *ice, 0.35)
+    rim.add_color_stop_rgba(1, *rgb('#6fc8ff'), 0.8)
+    cr.set_source(rim)
+    cr.set_line_width(2)
+    cr.stroke()
+    for x0, x1 in ((x + h * 0.6, x + w * 0.3), (x + w * 0.55, x + w * 0.7)):
+        cr.move_to(x0, y + 3)
+        cr.line_to(x1, y + 3)
+        cr.set_line_width(1.4)
+        cr.set_source(hfade(x0, x1, (1, 1, 1), 0.7, 0))
+        cr.stroke()
+    sparkle(cr, x + w - h * 0.4, y + 2, 5, (1, 1, 1), 0.95)
+    sparkle(cr, x + h * 0.3, y + h - 2, 3.5, ice, 0.8)
+    cr.move_to(x + h, y + h + 3.5)
+    cr.line_to(x + w - h, y + h + 3.5)
+    rg = cairo.LinearGradient(x, 0, x + w, 0)
+    for t, a in ((0, 0), (0.2, 0.3), (0.8, 0.3), (1, 0)):
+        rg.add_color_stop_rgba(t, *rgb('#6fc8ff'), a)
+    cr.set_source(rg)
+    cr.set_line_width(1.1)
+    cr.stroke()
+
+
+def bar_lava(cr, x, y, w, h, cy):
+    rnd = random.Random(41)
+    for fx in (0.08, 0.35, 0.65, 0.92):
+        halo(cr, x + w * fx, cy, h * 1.4, rgb('#ff2a00'), 0.14)
+    lava_rim(cr, x, y + 1, w, h - 2, seed=42)
+    for side, base in ((-1, x - 4), (1, x + w + 4)):
+        for i in range(5):
+            rock_shard(cr, base + side * rnd.uniform(2, 26), cy + rnd.uniform(-9, 9), rnd.uniform(2, 4.5), rnd)
+    for _ in range(40):   # embers floating over the bar
+        cr.arc(rnd.uniform(x, x + w), rnd.uniform(max(0, y - 7), y + 1), rnd.uniform(0.5, 1.2), 0, 2 * PI)
+        cr.set_source_rgba(*rgb(rnd.choice(['#ff7a18', '#ffc400', '#ff3a00'])), rnd.uniform(0.35, 0.9))
+        cr.fill()
+
+
+def bar_neon(cr, x, y, w, h, cy):
+    path = lambda: _capsule(cr, x + 1, y + 1, w - 2, h - 2)  # noqa: E731
+    stops = ['#19d4ff', '#2f6bff', '#8b3dff', '#ff3fd8']
+    path()
+    cr.set_source_rgba(*rgb('#070a18'), 0.94)
+    cr.fill()
+    for extra, a in ((14, 0.05), (8, 0.10), (4, 0.22)):
+        path()
+        cr.set_line_width(2.4 + extra)
+        cr.set_source(neon_grad(x, x + w, stops, a))
+        cr.stroke()
+    path()
+    cr.set_line_width(2.4)
+    cr.set_source(neon_grad(x, x + w, stops))
+    cr.stroke()
+    path()
+    cr.set_line_width(0.7)
+    cr.set_source_rgba(1, 1, 1, 0.5)
+    cr.stroke()
+
+
+def bar_holo(cr, x, y, w, h, cy):
+    stars(cr, (x - 20, max(0, y - 8), w + 40, h + 14), int(w / 18), 51)
+    for fx, col in ((0.1, '#3b5bff'), (0.5, '#6a3cff'), (0.9, '#c03cff')):
+        halo(cr, x + w * fx, cy, h * 2, rgb(col), 0.14)
+    for dx, dy, rot, a in ((18, 3, -0.004, 0.5), (10, 5, 0.003, 0.35)):
+        orbit(cr, x + w / 2, cy, w / 2 + dx, h / 2 + dy, rot, a, beads=(dx == 18))
+    path = lambda: _capsule(cr, x, y, w, h)  # noqa: E731
+    path()
+    cr.set_source_rgba(*rgb('#0a0820'), 0.72)
+    cr.fill()
+    path()
+    cr.set_source(neon_grad(x, x + w, ['#1b3cff', '#6a3cff', '#c43cf0', '#ff4fd8'], 0.22))
+    cr.fill()
+    rounded(cr, x + 4, y + 2, w - 8, h * 0.45, h * 0.22)
+    gl = cairo.LinearGradient(0, y, 0, y + h * 0.5)
+    gl.add_color_stop_rgba(0, 1, 1, 1, 0.16)
+    gl.add_color_stop_rgba(1, 1, 1, 1, 0)
+    cr.set_source(gl)
+    cr.fill()
+    glow_stroke(cr, path, rgb('#b07cff'), 1.3, layers=((8, 0.06), (4, 0.14)),
+                source=neon_grad(x, x + w, ['#8fe6ff', '#ffffff', '#ffb8f0'], 0.85))
+
+
+# ───────────────────────────── first-set skins redone to match the pills
+def bar_liquid(cr, x, y, w, h, cy):
+    """Same glossy candy as the Liquid pill: bright gradient, wavy edges,
+    droplets past both ends (a deeper tone keeps the bar text readable)."""
+    r = h / 2
+
+    def path():
+        cr.new_path()
+        n = 160
+        top, bot = [], []
+        for i in range(n + 1):
+            t = i / n
+            xx = x + r + (w - 2 * r) * t
+            top.append((xx, y - 1.8 * math.sin(t * PI * 9) - 1.4 * math.sin(t * PI * 4 + 1)))
+            bot.append((xx, y + h + 1.8 * math.sin(t * PI * 8 + 2) + 1.2 * math.sin(t * PI * 3)))
+        cr.move_to(*top[0])
+        for pt in top[1:]:
+            cr.line_to(*pt)
+        cr.curve_to(x + w + r * 0.35, top[-1][1] - 2, x + w + r * 0.35, bot[-1][1] + 2, *bot[-1])
+        for pt in reversed(bot[:-1]):
+            cr.line_to(*pt)
+        cr.curve_to(x - r * 0.35, bot[0][1] + 2, x - r * 0.35, top[0][1] - 2, *top[0])
+        cr.close_path()
+    for fx, col in ((0.05, '#20c8ff'), (0.5, '#3b5bff'), (0.95, '#a45bff')):
+        halo(cr, x + w * fx, cy, h * 1.8, rgb(col), 0.18)
+    for extra, a in ((10, 0.08), (5, 0.16)):
+        path()
+        cr.set_line_width(extra)
+        cr.set_source(neon_grad(x, x + w, ['#34dcff', '#5c86ff', '#b37cff'], a))
+        cr.stroke()
+    path()
+    cr.set_source(neon_grad(x, x + w, ['#12a8e8', '#2f5cf0', '#4a44e8', '#8a4dff'], 0.95))
+    cr.fill()
+    cr.save()
+    path()
+    cr.clip()
+    hl = cairo.LinearGradient(0, y - 4, 0, cy)
+    hl.add_color_stop_rgba(0, 1, 1, 1, 0.42)
+    hl.add_color_stop_rgba(1, 1, 1, 1, 0)
+    cr.rectangle(x, y - 5, w, h / 2 + 5)
+    cr.set_source(hl)
+    cr.fill()
+    rnd = random.Random(61)
+    for _ in range(int(w / 70)):   # bubbles inside the liquid
+        bx, by, br = rnd.uniform(x + h, x + w - h), rnd.uniform(y + 5, y + h - 5), rnd.uniform(1.2, 2.6)
+        cr.arc(bx, by, br, 0, 2 * PI)
+        cr.set_source_rgba(1, 1, 1, 0.18)
+        cr.fill()
+    cr.restore()
+    for bx, by, br, col in ((x - 10, cy + 6, 4, '#34dcff'), (x - 20, cy - 3, 2.2, '#34dcff'),
+                            (x - 5, y - 3, 1.6, '#34dcff'), (x + w + 10, cy + 4, 3.6, '#b37cff'),
+                            (x + w + 19, cy - 5, 2, '#b37cff'), (x + w + 4, y + h + 3, 1.5, '#b37cff')):
+        halo(cr, bx, by, br * 2.4, rgb(col), 0.4)
+        cr.arc(bx, by, br, 0, 2 * PI)
+        cr.set_source_rgba(*rgb(col), 0.95)
+        cr.fill()
+        cr.arc(bx - br * 0.3, by - br * 0.35, br * 0.35, 0, 2 * PI)
+        cr.set_source_rgba(1, 1, 1, 0.6)
+        cr.fill()
+
+
+def bar_nature(cr, x, y, w, h, cy):
+    """Glowing green bar with leaf bunches spilling past both ends and small
+    sprigs along the top (the bar leaves room for them, see ricekit)."""
+    green = rgb('#2ee06f')
+    halo(cr, x + 10, cy, h * 2, rgb('#0c5a2a'), 0.35)
+    halo(cr, x + w - 10, cy, h * 2, rgb('#0c5a2a'), 0.35)
+    path = lambda: _capsule(cr, x, y, w, h)  # noqa: E731
+    path()
+    cr.set_source_rgba(*rgb('#06140c'), 0.93)
+    cr.fill()
+    glow_stroke(cr, path, green, 1.6, layers=((9, 0.06), (4, 0.15)))
+    _capsule(cr, x + 3, y + 3, w - 6, h - 6)
+    cr.set_source_rgba(*green, 0.22)
+    cr.set_line_width(0.8)
+    cr.stroke()
+    L = h * 1.25
+    bunch = [(-0.55, 1.0, '#2fbf55'), (0.45, 0.9, '#1f8f3a'), (-1.15, 0.72, '#6fdc7f'),
+             (0.05, 0.8, '#3fd46a'), (1.05, 0.62, '#58c96a'), (-0.2, 0.55, '#8ff09a')]
+    for ang, k, col in bunch:
+        leaf(cr, x + h * 0.25, cy + ang * 3, L * k, PI + ang * 0.85, rgb(col))
+        leaf(cr, x + w - h * 0.25, cy - ang * 3, L * k, -ang * 0.85, rgb(col))
+    rnd = random.Random(5)
+    vx = x + w * 0.08
+    while vx < x + w * 0.92:
+        if not (x + w * 0.36 < vx < x + w * 0.64):
+            for a in (-0.6, 0.6):
+                leaf(cr, vx, y + 1, rnd.uniform(6, 9), -PI / 2 + a + rnd.uniform(-0.2, 0.2), rgb('#2fbf55'),
+                     vein=False)
+        vx += rnd.uniform(70, 130)
+
+
+def bar_fire(cr, x, y, w, h, cy):
+    """Burning edges: small tongues along the top and big flames licking
+    out of both ends (the bar leaves room for them, see ricekit)."""
+    orange, yellow, red = rgb('#ff6a00'), rgb('#ffc400'), rgb('#ff2a00')
+    rnd = random.Random(11)
+    halo(cr, x + 12, cy, h * 2, red, 0.25)
+    halo(cr, x + w - 12, cy, h * 2, red, 0.25)
+
+    def flame(fx, fy, dx, dy, length, width):
+        nx, ny = -dy, dx
+        tx, ty = fx + dx * length, fy + dy * length
+        cr.new_path()
+        cr.move_to(fx + nx * width, fy + ny * width)
+        cr.curve_to(fx + nx * width + dx * length * 0.5, fy + ny * width + dy * length * 0.5,
+                    tx + nx * width * 0.4, ty + ny * width * 0.4, tx, ty)
+        cr.curve_to(tx - nx * width * 0.2, ty - ny * width * 0.2,
+                    fx - nx * width + dx * length * 0.3, fy - ny * width + dy * length * 0.3,
+                    fx - nx * width, fy - ny * width)
+        cr.close_path()
+        g = cairo.LinearGradient(fx, fy, tx, ty)
+        g.add_color_stop_rgba(0, *orange, 0.95)
+        g.add_color_stop_rgba(0.6, *yellow, 0.55)
+        g.add_color_stop_rgba(1, *yellow, 0)
+        cr.set_source(g)
+        cr.fill()
+    fx = x + h
+    while fx < x + w - h:
+        if rnd.random() < 0.6:
+            flame(fx, y + 2, rnd.uniform(-0.3, 0.3), -1, rnd.uniform(3, max(4, y + 1)), rnd.uniform(2, 3.5))
+        fx += rnd.uniform(12, 30)
+    for sgn, ex in ((-1, x + 3), (1, x + w - 3)):
+        for _ in range(9):
+            a = rnd.uniform(-1.0, 1.0)
+            flame(ex, cy + a * h * 0.3, sgn * math.cos(a * 0.5), math.sin(a * 0.9) * 0.6 - 0.15,
+                  rnd.uniform(10, 26), rnd.uniform(2.5, 4.5))
+    path = lambda: _capsule(cr, x, y, w, h)  # noqa: E731
+    path()
+    cr.set_source_rgba(*rgb('#120604'), 0.94)
+    cr.fill()
+    grad = cairo.LinearGradient(0, y, 0, y + h)
+    grad.add_color_stop_rgb(0, *yellow)
+    grad.add_color_stop_rgb(1, *orange)
+    glow_stroke(cr, path, orange, 1.5, layers=((8, 0.08), (4, 0.18)), source=grad)
+    for _ in range(22):
+        cr.arc(rnd.uniform(x + h, x + w - h), rnd.uniform(y + h * 0.7, y + h - 3), rnd.uniform(0.6, 1.3), 0, 2 * PI)
+        cr.set_source_rgba(*yellow, rnd.uniform(0.3, 0.7))
+        cr.fill()
+
+
+BAR_SKINS.update({'sketch': bar_sketch, 'crystal': bar_crystal, 'lava': bar_lava, 'neon': bar_neon,
+                  'holo': bar_holo, 'liquid': bar_liquid, 'nature': bar_nature, 'fire': bar_fire})

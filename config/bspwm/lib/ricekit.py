@@ -84,7 +84,45 @@ KITS = {
                  SHADOW_C='#1f8f3a', P_BLUR='false', P_ACTIVE_OPACITY='0.97', P_INACTIVE_OPACITY='0.90'),
         dunst_r=14),
 }
-ORDER = ['glass', 'cyber', 'minimal', 'gradient', 'pixel', 'macos', 'liquid', 'hud', 'fire', 'nature']
+KITS.update({
+    'sketch': dict(
+        name='Pencil', tagline='hand drawn in graphite', palette='cargar_pencil_graphite',
+        win=dict(BORDER_WIDTH=2, FOCUSED_BC='#d6d6d6', NORMAL_BC='#333333', P_CORNER_R=8, gap=10,
+                 SHADOW_C='#000000', P_BLUR='false', P_ACTIVE_OPACITY='0.98', P_INACTIVE_OPACITY='0.92'),
+        dunst_r=8),
+    'crystal': dict(
+        name='Crystal', tagline='frosted glass and light', palette='cargar_crystal',
+        win=dict(BORDER_WIDTH=1, FOCUSED_BC='#bfe6ff', NORMAL_BC='#26406a', P_CORNER_R=16, gap=12,
+                 SHADOW_C='#1e6bff', P_BLUR='true', P_ACTIVE_OPACITY='0.92', P_INACTIVE_OPACITY='0.84'),
+        dunst_r=16),
+    'lava': dict(
+        name='Lava', tagline='cracked rock and fire', palette='cargar_lava',
+        win=dict(BORDER_WIDTH=2, FOCUSED_BC='#ff5a00', NORMAL_BC='#2a1208', P_CORNER_R=6, gap=10,
+                 SHADOW_C='#ff3a00', P_BLUR='false', P_ACTIVE_OPACITY='0.97', P_INACTIVE_OPACITY='0.90'),
+        dunst_r=6),
+    'neon': dict(
+        name='Solid Neon', tagline='clean neon outline', palette='cargar_solid_neon',
+        win=dict(BORDER_WIDTH=2, FOCUSED_BC='#1ec8ff', NORMAL_BC='#1f1a4a', P_CORNER_R=12, gap=10,
+                 SHADOW_C='#8b5cf6', P_BLUR='false', P_ACTIVE_OPACITY='0.97', P_INACTIVE_OPACITY='0.90'),
+        dunst_r=12),
+    'holo': dict(
+        name='Holographic', tagline='space, orbits and particles', palette='cargar_holographic',
+        win=dict(BORDER_WIDTH=2, FOCUSED_BC='#c77dff', NORMAL_BC='#2a2458', P_CORNER_R=16, gap=12,
+                 SHADOW_C='#7b4dff', P_BLUR='true', P_ACTIVE_OPACITY='0.95', P_INACTIVE_OPACITY='0.88'),
+        dunst_r=16),
+})
+ORDER = ['glass', 'cyber', 'minimal', 'gradient', 'pixel', 'macos', 'liquid', 'hud', 'fire', 'nature',
+         'sketch', 'crystal', 'lava', 'neon', 'holo']
+
+# Bar geometry per theme: side margins leave room for what a skin draws
+# past the bar's ends (leaves, flames, droplets, rocks, orbits, doodles)
+BAR_GEOMETRY = {
+    'glass': dict(margin_x=12), 'cyber': dict(margin_x=8), 'minimal': dict(margin_x=10),
+    'gradient': dict(margin_x=14), 'pixel': dict(margin_x=8), 'macos': dict(margin_x=14),
+    'liquid': dict(margin_x=30), 'hud': dict(margin_x=8), 'fire': dict(margin_x=34),
+    'nature': dict(margin_x=52), 'sketch': dict(margin_x=36), 'crystal': dict(margin_x=16),
+    'lava': dict(margin_x=38), 'neon': dict(margin_x=16), 'holo': dict(margin_x=42),
+}
 
 # The palettes (also written to theme_colors.bash): bg fg black blackb red
 # green yellow blue magenta cyan white accent_color arch_icon
@@ -109,6 +147,16 @@ PALETTES = {
              '#ff5a36', '#ffa53a', '#f0c9a8', '#2a0f08', '#ff8a1f'),
     'nature': ('#06140c', '#e3ffe9', '#0b1f12', '#1f4a2c', '#ff7a6b', '#2ee06f', '#d9f26b', '#42d9c6',
                '#9be07a', '#7ff5d6', '#bfe8c8', '#0f2a18', '#b9ff66'),
+    'sketch': ('#121212', '#e8e8e8', '#1a1a1a', '#4a4a4a', '#d98080', '#a8c8a0', '#e0d4a8', '#b8c4d8',
+               '#c8b8d8', '#b0d0d0', '#bdbdbd', '#1f1f1f', '#e8e8e8'),
+    'crystal': ('#0a1228', '#eef6ff', '#0f1a38', '#34507a', '#ff7aa8', '#7ff0d0', '#ffe08a', '#4fb4ff',
+                '#c58cff', '#8fe6ff', '#cfe2ff', '#142448', '#bfe6ff'),
+    'lava': ('#0e0605', '#ffe6d0', '#180a07', '#4a2014', '#ff3a10', '#ffb020', '#ffd040', '#ff6a10',
+             '#ff4a2a', '#ff9a3a', '#e8c0a0', '#261008', '#ff8a1f'),
+    'neon': ('#070a18', '#eef0ff', '#0c1024', '#2a2f5a', '#ff4f8a', '#3fffc0', '#ffe45c', '#1e90ff',
+             '#d946ef', '#1ec8ff', '#c8ccff', '#12163a', '#1ec8ff'),
+    'holo': ('#0a0820', '#f4efff', '#120f30', '#3d3570', '#ff6ab0', '#5ff0e0', '#ffd98a', '#6aa8ff',
+             '#c77dff', '#4fd8ff', '#d4ccff', '#1a1545', '#ff8ae0'),
 }
 PAL_KEYS = ['bg', 'fg', 'black', 'blackb', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white',
             'accent_color', 'arch_icon']
@@ -230,6 +278,7 @@ def apply(kit, parts, run=True):
             conf['bar_skin'] = kit
             conf['style'] = 'capsule'
             conf['border'] = False
+            conf.update(BAR_GEOMETRY.get(kit, {}))
         if 'workspaces' in parts:
             conf['ws_style'] = kit
         bc.save(conf)
@@ -270,7 +319,8 @@ def preview(cr, kit, W, H):
     cr.scale(s, s)
     VW, bar_h, off = 820, 30, 8
     m = ws.metrics(6, bar_h)
-    ws.paint_bar(cr, kit, VW, (6, off, VW - 12, bar_h), pal)
+    mx = BAR_GEOMETRY.get(kit, {}).get('margin_x', 12) * 0.6
+    ws.paint_bar(cr, kit, VW, (mx, off, VW - 2 * mx, bar_h), pal)
     cr.save()
     cr.translate((VW - m['win_w']) / 2, off - m['ext'])
     ws.paint(cr, kit, m, ['occupied', 'focused', 'empty', 'empty', 'occupied', 'empty'])
