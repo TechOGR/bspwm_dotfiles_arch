@@ -254,6 +254,9 @@ def main():
     def restack(cid, win, where='above'):
         gw = win.get_window()
         if gw:
+            # xdo is another X client: our new window must reach the server
+            # first, or xdo fails and it stays on top (over the text)
+            Gdk.Display.get_default().sync()
             subprocess.run(['xdo', where, '-t', hex(cid), hex(gw.get_xid())],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -293,7 +296,10 @@ def main():
             if new:
                 win.realize()
                 win.get_window().input_shape_combine_region(cairo.Region(), 0, 0)
+                win.connect('map-event', lambda w, _e, c=cid: (restack(c, w, 'below'), False)[1])
                 win.show()
+                # and once more when everything settled (map, theme reload)
+                GLib.timeout_add(500, lambda w=win, c=cid: (w.get_window() and restack(c, w, 'below'), False)[1])
             if new or restack_all:
                 restack(cid, win, 'below')
             win.queue_draw()
@@ -338,7 +344,9 @@ def main():
             gw.shape_combine_region(frame_region(w, h) if skin else ring_region(w, h, bw, r), 0, 0)
             gw.input_shape_combine_region(cairo.Region(), 0, 0)
             if new:
+                win.connect('map-event', lambda w, _e, c=cid: (restack(c, w), False)[1])
                 win.show()
+                GLib.timeout_add(500, lambda w=win, c=cid: (w.get_window() and restack(c, w), False)[1])
             if new or restack_all:
                 restack(cid, win)
             win.queue_draw()
@@ -361,7 +369,8 @@ def main():
             return False
         buf['data'] += chunk
         *lines, buf['data'] = buf['data'].split(b'\n')
-        restack_all = any(ln.startswith((b'node_stack', b'node_add', b'node_transfer', b'desktop_focus',
+        # bspwm raises a focused window: its frame must go back over it
+        restack_all = any(ln.startswith((b'node_stack', b'node_add', b'node_transfer', b'desktop_focus', b'node_focus',
                                          b'node_swap', b'node_state', b'node_flag')) for ln in lines)
         schedule(restack_all)
         return True
