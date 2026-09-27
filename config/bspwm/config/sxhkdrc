@@ -210,6 +210,10 @@ super + ctrl {h,v,q}
 super + ctrl + b
   bspc node @/ -B
 
+# Arrange the desktop's windows: pick a layout (TileLayout)
+ctrl + super + t
+    TileLayout
+
 # increase/decrease Node
 super + alt + {plus,minus}
     { \

@@ -1,0 +1,536 @@
+#!/usr/bin/env python3
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# TileLayout - pick how the windows of the desktop are arranged (Ctrl+Super+T)
+#   ✔ Layouts made for the number of windows on the desktop: columns, rows,
+#     master left/right/top/bottom, centered master, spiral, dwindle, grids
+#     and every "2 over 1", "1 over 2", "3 | 2"... split of rows and columns
+#   ✔ Live previews with each app's icon where it will land; the focused
+#     window takes the biggest slot, Tab rotates who goes where
+#   ✔ Arrows / mouse to choose, Enter or click to apply, 1-9 quick pick,
+#     Esc (or Ctrl+Super+T again) closes
+#   ✔ Built as a bspwm tree with receptacles: exact ratios, still a normal
+#     tiled desktop afterwards (resize, swap, rotate as usual)
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+import os
+import sys
+import json
+import math
+import time
+import subprocess
+
+sys.path.insert(0, os.path.expanduser('~/.config/bspwm/lib'))
+import riceui as ui  # noqa: E402
+from riceui import Gtk, Gdk, GLib, cairo  # noqa: E402
+
+W = 'w'   # placeholder leaf while a template is being built
+
+
+# ═══════════════════════════════════════════════════════════════ bspwm
+def bspc(*args):
+    r = subprocess.run(['bspc', *map(str, args)], capture_output=True, text=True)
+    return r.returncode == 0, r.stdout.split()
+
+
+def desktop_windows():
+    """(desktop id, windows in tree order [{id, cls, name}], focused id, aspect)."""
+    try:
+        tree = json.loads(subprocess.run(['bspc', 'query', '-T', '-d', 'focused'],
+                                         capture_output=True, text=True).stdout)
+    except ValueError:
+        return None, [], None, 16 / 9
+    wins = []
+
+    def walk(n):
+        if not n:
+            return
+        c = n.get('client')
+        if c and not n.get('hidden'):
+            wins.append({'id': n['id'], 'cls': c.get('className') or '?',
+                         'inst': c.get('instanceName') or ''})
+        walk(n.get('firstChild'))
+        walk(n.get('secondChild'))
+    walk(tree.get('root'))
+    ok, foc = bspc('query', '-N', '-n', 'focused.window')
+    focused = int(foc[0], 16) if ok and foc else None
+    mon = json.loads(subprocess.run(['bspc', 'query', '-T', '-m', 'focused'],
+                                    capture_output=True, text=True).stdout or '{}')
+    r = (mon.get('rectangle') or {})
+    pad = mon.get('padding') or {}
+    w = r.get('width', 16) - pad.get('left', 0) - pad.get('right', 0)
+    h = r.get('height', 9) - pad.get('top', 0) - pad.get('bottom', 0)
+    return hex(tree.get("id", 0)), wins, focused, max(0.3, min(4.0, w / max(1, h)))
+
+
+def apply_layout(desk, wins, tree, focus):
+    """Rebuild the desktop as `tree` (leaves = index into wins)."""
+    def receptacles():
+        return set(bspc('query', '-N', '-d', desk, '-n', '.leaf.!window')[1])
+
+    def insert(node, d, ratio):
+        before = receptacles()
+        bspc('node', node, '-p', 'east' if d == 'h' else 'south', '-o', f'{ratio:.4f}')
+        bspc('node', node, '-i')
+        new = receptacles() - before
+        if not new:
+            raise RuntimeError('bspwm refused a receptacle')
+        return new.pop()
+
+    slots = {}
+
+    def build(node, t):
+        if isinstance(t, int):
+            slots[t] = node
+            return
+        d, r, a, b = t
+        new = insert(node, d, r)
+        build(node, a)
+        build(new, b)
+
+    ids = [hex(w['id']) for w in wins]
+    # bspwm re-orients a subtree when a node leaves it: off while we move things
+    adj = (bspc('config', 'removal_adjustment')[1] or ['true'])[0]
+    bspc('config', 'removal_adjustment', 'false')
+    try:
+        bspc('desktop', desk, '-l', 'tiled')
+        for i in ids:
+            bspc('node', i, '-t', 'tiled')
+        build(insert(ids[0], 'h', 0.5), tree)
+        for n, i in enumerate(ids):
+            bspc('node', i, '-n', slots[n])
+    finally:
+        for r in receptacles():   # leftovers if anything went wrong
+            bspc('node', r, '-k')
+        bspc('config', 'removal_adjustment', adj)
+        if focus:
+            bspc('node', hex(focus), '-f')
+
+
+# ═════════════════════════════════════════════════════════════ layouts
+def chain(d, subs, weights=None):
+    weights = weights or [1] * len(subs)
+    if len(subs) == 1:
+        return subs[0]
+    return (d, weights[0] / sum(weights), subs[0], chain(d, subs[1:], weights[1:]))
+
+
+def flip(d):
+    return 'v' if d == 'h' else 'h'
+
+
+def rects(t, x=0.0, y=0.0, w=1.0, h=1.0, out=None):
+    """Leaf rectangles in traversal order: [(leaf, (x, y, w, h))]."""
+    out = [] if out is None else out
+    if not isinstance(t, tuple):
+        out.append((t, (x, y, w, h)))
+        return out
+    d, r, a, b = t
+    if d == 'h':
+        rects(a, x, y, w * r, h, out)
+        rects(b, x + w * r, y, w * (1 - r), h, out)
+    else:
+        rects(a, x, y, w, h * r, out)
+        rects(b, x, y + h * r, w, h * (1 - r), out)
+    return out
+
+
+def number(t):
+    """Give the placeholders window indices: biggest slot = 0 (the focused
+    window), the rest in reading order."""
+    counter = iter(range(1000))
+
+    def tag(n):
+        if not isinstance(n, tuple):
+            return next(counter)
+        d, r, a, b = n
+        return (d, r, tag(a), tag(b))
+    t = tag(t)
+    order = sorted(rects(t), key=lambda it: (-round(it[1][2] * it[1][3], 3), round(it[1][1], 3), it[1][0]))
+    rank = {leaf: i for i, (leaf, _r) in enumerate(order)}
+
+    def remap(n):
+        if not isinstance(n, tuple):
+            return rank[n]
+        d, r, a, b = n
+        return (d, r, remap(a), remap(b))
+    return remap(t)
+
+
+def compositions(n, k):
+    if k == 1:
+        yield (n,)
+        return
+    for first in range(1, n - k + 2):
+        for rest in compositions(n - first, k - 1):
+            yield (first,) + rest
+
+
+def grid_counts(n, lines):
+    base, extra = divmod(n, lines)
+    return [base + (1 if i < extra else 0) for i in range(lines)]
+
+
+def dwindle(k, d='h'):
+    return W if k == 1 else (d, 0.5, W, dwindle(k - 1, flip(d)))
+
+
+def spiral(k, step=0):
+    if k == 1:
+        return W
+    d = 'h' if step % 2 == 0 else 'v'
+    rest = spiral(k - 1, step + 1)
+    return (d, 0.5, W, rest) if step % 4 < 2 else (d, 0.5, rest, W)
+
+
+def templates(n):
+    """[(icon, name, tree)] for n windows, most useful first."""
+    if n <= 1:
+        return [('󰹑', 'Full screen', 0)]
+    stack = lambda d, k: chain(d, [W] * k)  # noqa: E731
+    out = [
+        ('󰕴', 'Master left', ('h', 0.6, W, stack('v', n - 1))),
+        ('󰕴', 'Master right', ('h', 0.4, stack('v', n - 1), W)),
+        ('󰕴', 'Master top', ('v', 0.6, W, stack('h', n - 1))),
+        ('󰕴', 'Master bottom', ('v', 0.4, stack('h', n - 1), W)),
+        ('󰕰', 'Columns', stack('h', n)),
+        ('󰕰', 'Rows', stack('v', n)),
+    ]
+    if n >= 3:
+        left = (n - 1) // 2
+        out.append(('󰕮', 'Centered master',
+                    ('h', 0.25, stack('v', left), ('h', 2 / 3, W, stack('v', n - 1 - left)))
+                    if left else ('h', 0.7, W, stack('v', n - 1))))
+        out.append(('󰕴', 'Big master', ('h', 0.7, W, stack('v', n - 1))))
+        out.append(('󱗼', 'Spiral', spiral(n)))
+        out.append(('󱗼', 'Dwindle', dwindle(n)))
+    if n >= 4:
+        lines = max(2, round(math.sqrt(n)))
+        out.append(('󰋁', 'Grid', chain('v', [stack('h', c) for c in grid_counts(n, lines)])))
+        out.append(('󰋁', 'Grid (columns)', chain('h', [stack('v', c) for c in grid_counts(n, lines)])))
+    if n >= 5:
+        right = n - 1
+        out.append(('󰕴', 'Master + grid',
+                    ('h', 0.5, W, chain('v', [stack('h', c) for c in grid_counts(right, max(2, round(math.sqrt(right))))]))))
+    # every split of the windows into 2 (and 3, while it stays readable) rows / columns
+    for k in (2, 3) if n <= 6 else (2,):
+        for comp in compositions(n, k):
+            lab = '·'.join(map(str, comp))
+            out.append(('󰤼', f'Rows {lab}', chain('v', [stack('h', c) for c in comp])))
+            out.append(('󰤻', f'Columns {lab}', chain('h', [stack('v', c) for c in comp])))
+    if n >= 7:
+        for lines in (3, 4):
+            if lines < n:
+                comp = grid_counts(n, lines)
+                lab = '·'.join(map(str, comp))
+                out.append(('󰤼', f'Rows {lab}', chain('v', [stack('h', c) for c in comp])))
+                out.append(('󰤻', f'Columns {lab}', chain('h', [stack('v', c) for c in comp])))
+    seen, uniq = set(), []
+    for icon, name, t in out:
+        t = number(t)
+        sig = tuple(sorted(tuple(round(v, 3) for v in r) for _l, r in rects(t)))
+        if sig not in seen:
+            seen.add(sig)
+            uniq.append((icon, name, t))
+    return uniq
+
+
+# ═══════════════════════════════════════════════════════════════════ UI
+CARD_W, LABEL_H, GAP = 250, 34, 22
+
+
+class Grid(Gtk.DrawingArea):
+    def __init__(self, win):
+        super().__init__()
+        self.win = win
+        self.hover = None
+        self.add_events(Gdk.EventMask.POINTER_MOTION_MASK | Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.connect('draw', self.on_draw)
+        self.connect('motion-notify-event', self.on_motion)
+        self.connect('button-press-event', self.on_press)
+        self.connect('size-allocate', lambda *_: self.relayout())
+        self.cols = 1
+
+    @property
+    def card_h(self):
+        return CARD_W / self.win.aspect + LABEL_H
+
+    def relayout(self):
+        w = self.get_allocated_width() or self.win.W
+        self.cols = max(1, int((w + GAP) // (CARD_W + GAP)))
+        rows = math.ceil(len(self.win.layouts) / self.cols)
+        self.set_size_request(-1, int(rows * (self.card_h + GAP)))
+
+    def card_pos(self, i):
+        w = self.get_allocated_width()
+        used = self.cols * CARD_W + (self.cols - 1) * GAP
+        x0 = max(0, (w - used) / 2)
+        return x0 + (i % self.cols) * (CARD_W + GAP), (i // self.cols) * (self.card_h + GAP) + 6
+
+    def at(self, x, y):
+        for i in range(len(self.win.layouts)):
+            cx, cy = self.card_pos(i)
+            if cx <= x <= cx + CARD_W and cy <= y <= cy + self.card_h:
+                return i
+        return None
+
+    def on_motion(self, _w, ev):
+        i = self.at(ev.x, ev.y)
+        if i is not None and i != self.win.sel:
+            self.win.sel = i
+            self.queue_draw()
+        return False
+
+    def on_press(self, _w, ev):
+        if ev.button == 1:
+            i = self.at(ev.x, ev.y)
+            if i is not None:
+                self.win.choose(i)
+        elif ev.button == 3:
+            self.win.close()
+        return True
+
+    def on_draw(self, w, cr):
+        c = self.win.c
+        now = time.monotonic()
+        ph = CARD_W / self.win.aspect
+        for i, (icon, name, tree) in enumerate(self.win.layouts):
+            x, y = self.card_pos(i)
+            sel = i == self.win.sel
+            acc = c['cyan'] if sel else c['blue']
+            ui.rounded(cr, x, y, CARD_W, self.card_h, 14)
+            cr.set_source_rgba(*c['bg'], 0.80 if sel else 0.62)
+            cr.fill_preserve()
+            if sel:
+                glow = 0.55 + 0.25 * math.sin(now * 4)
+                cr.set_source_rgba(*acc, glow)
+                cr.set_line_width(2)
+            else:
+                cr.set_source_rgba(*acc, 0.22)
+                cr.set_line_width(1)
+            cr.stroke()
+            # preview: the desktop with every window where it will land
+            px, py, pw, phh = x + 10, y + 10, CARD_W - 20, ph - 14
+            for leaf, (rx, ry, rw, rh) in rects(tree):
+                gx, gy, gw, gh = px + rx * pw + 2, py + ry * phh + 2, rw * pw - 4, rh * phh - 4
+                ui.rounded(cr, gx, gy, gw, gh, 6)
+                cr.set_source_rgba(*acc, 0.26 if leaf == 0 else 0.13)
+                cr.fill_preserve()
+                cr.set_source_rgba(*acc, 0.85 if sel else 0.45)
+                cr.set_line_width(1.2)
+                cr.stroke()
+                win = self.win.wins[leaf]
+                s = max(10, min(28, int(min(gw, gh) * 0.42)))
+                pix = self.win.icon(win, s)
+                label = win['cls'] if gw > 60 and gh > s + 20 else ''
+                ty = gy + gh / 2 - (s + (12 if label else 0)) / 2
+                if pix:
+                    Gdk.cairo_set_source_pixbuf(cr, pix, gx + gw / 2 - pix.get_width() / 2, ty)
+                    cr.paint_with_alpha(1 if sel else 0.8)
+                if label:
+                    cr.save()
+                    cr.rectangle(gx + 2, gy, gw - 4, gh)
+                    cr.clip()
+                    ui.text(cr, label, gx + gw / 2, ty + s + 2, 7, (*c['fg'], 0.8), align='center')
+                    cr.restore()
+            num = f'{i + 1}  ' if i < 9 else ''
+            ui.text(cr, f'{num}{icon}  {name}', x + CARD_W / 2, y + ph + 6, 9,
+                    (*(c['cyan'] if sel else c['fg']), 1 if sel else 0.75), bold=sel, align='center')
+        return True
+
+
+class Header(Gtk.DrawingArea):
+    def __init__(self, win):
+        super().__init__()
+        self.win = win
+        self.set_size_request(-1, 86)
+        self.connect('draw', self.on_draw)
+
+    def on_draw(self, w, cr):
+        Wd = w.get_allocated_width()
+        c = self.win.c
+        n = len(self.win.wins)
+        ui.text(cr, '󰕰', 0, 6, 26, (*c['magenta'], 1))
+        ui.text(cr, 'WINDOW LAYOUT', 56, 4, 24, (*c['fg'], 1), bold=True, spacing=6)
+        order = ' → '.join(x['cls'] for x in self.win.wins[:6]) + (' …' if n > 6 else '')
+        ui.text(cr, f'{n} WINDOWS · {len(self.win.layouts)} LAYOUTS · BIGGEST SLOT FIRST: {order}',
+                58, 46, 8, (*c['fg'], 0.45), spacing=2)
+        ui.text(cr, '←↑↓→ / MOUSE  ·  ENTER APPLY  ·  TAB ROTATE  ·  ESC CLOSE', Wd, 14, 9,
+                (*c['blue'], 0.9), bold=True, align='right', spacing=2)
+        y = 76
+        lg = cairo.LinearGradient(0, 0, Wd, 0)
+        lg.add_color_stop_rgba(0, *c['blue'], 0.9)
+        lg.add_color_stop_rgba(0.5, *c['magenta'], 0.4)
+        lg.add_color_stop_rgba(1, *c['blue'], 0.05)
+        cr.rectangle(0, y, Wd, 1)
+        cr.set_source(lg)
+        cr.fill()
+        return True
+
+
+class TileLayout(Gtk.Window):
+    def __init__(self, desk, wins, focused, aspect):
+        super().__init__(type=Gtk.WindowType.POPUP)
+        self.set_title('TileLayout')
+        ui.rgba_window(self)
+        geo = ui.monitor_geometry()
+        self.move(geo.x, geo.y)
+        self.set_default_size(geo.width, geo.height)
+        self.set_size_request(geo.width, geo.height)
+        self.W, self.H = geo.width, geo.height
+        self.pal = ui.load_palette()
+        self.c = ui.rgb_palette(self.pal)
+        self.bg = ui.backdrop(self.W, self.H, self.pal, darken=0.7)
+        self.desk, self.focused, self.aspect = desk, focused, aspect
+        # the focused window first: it gets the biggest slot
+        self.wins = sorted(wins, key=lambda w: w['id'] != focused)
+        self.layouts = templates(len(self.wins))
+        self.sel = 0
+        self.chosen = None
+        self.icons = {}
+        self.alpha, self.t0, self.closing = 0.0, time.monotonic(), None
+
+        css = Gtk.CssProvider()
+        css.load_from_data((ui.hud_css(self.pal) +
+                            '.hud scrolledwindow, .hud viewport { background: transparent; }').encode())
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css,
+                                                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 2)
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        root.get_style_context().add_class('hud')
+        mx = max(40, int(self.W * 0.06))
+        root.set_margin_start(mx)
+        root.set_margin_end(mx)
+        root.set_margin_top(34)
+        root.set_margin_bottom(28)
+        self.add(root)
+        self.header = Header(self)
+        root.pack_start(self.header, False, False, 0)
+        self.scroll = Gtk.ScrolledWindow()
+        self.scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.grid = Grid(self)
+        self.scroll.add(self.grid)
+        root.pack_start(self.scroll, True, True, 0)
+
+        self.add_events(Gdk.EventMask.KEY_PRESS_MASK)
+        self.connect('draw', self.on_draw)
+        self.connect('key-press-event', self.on_key)
+        self.connect('map-event', lambda *_: ui.grab_input(self))
+        self.connect('destroy', Gtk.main_quit)
+        self.add_tick_callback(self.on_tick)
+
+    def icon(self, win, size):
+        key = (win['cls'], size)
+        if key not in self.icons:
+            theme = Gtk.IconTheme.get_default()
+            pix = None
+            for name in (win['cls'].lower(), win['inst'].lower(), win['cls'].lower().split('.')[-1],
+                         'application-x-executable'):
+                if not name:
+                    continue
+                try:
+                    pix = theme.load_icon(name, size, Gtk.IconLookupFlags.FORCE_SIZE)
+                    break
+                except GLib.Error:
+                    continue
+            self.icons[key] = pix
+        return self.icons[key]
+
+    def on_draw(self, _w, cr):
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+        cr.set_source_surface(self.bg, 0, 0)
+        cr.paint()
+        return False
+
+    def on_tick(self, *_):
+        now = time.monotonic()
+        if self.closing:
+            a = max(0.0, 1 - (now - self.closing) / 0.12)
+            if a <= 0:
+                self.destroy()
+                return False
+        else:
+            a = min(1.0, (now - self.t0) / 0.15)
+        if abs(a - self.alpha) > 0.001:
+            self.alpha = a
+            self.get_window() and self.get_window().set_opacity(a)
+        self.grid.queue_draw()   # selection glow
+        return True
+
+    def close(self):
+        if not self.closing:
+            self.closing = time.monotonic()
+
+    def choose(self, i):
+        self.chosen = self.layouts[i][2]
+        # apply at once, the fade-out of the HUD runs on top of it
+        self.hide()
+        self.destroy()
+
+    def move_sel(self, delta):
+        self.sel = max(0, min(len(self.layouts) - 1, self.sel + delta))
+        cx, cy = self.grid.card_pos(self.sel)
+        adj = self.scroll.get_vadjustment()
+        if cy < adj.get_value():
+            adj.set_value(cy - 6)
+        elif cy + self.grid.card_h > adj.get_value() + adj.get_page_size():
+            adj.set_value(cy + self.grid.card_h - adj.get_page_size() + 6)
+        self.grid.queue_draw()
+
+    def on_key(self, _w, ev):
+        k = ev.keyval
+        ctrl_super = ev.state & Gdk.ModifierType.CONTROL_MASK and ev.state & Gdk.ModifierType.SUPER_MASK
+        if k == Gdk.KEY_Escape or (ctrl_super and k in (Gdk.KEY_t, Gdk.KEY_T)):
+            self.close()
+        elif k in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_space):
+            self.choose(self.sel)
+        elif k in (Gdk.KEY_Right, Gdk.KEY_l):
+            self.move_sel(1)
+        elif k in (Gdk.KEY_Left, Gdk.KEY_h):
+            self.move_sel(-1)
+        elif k in (Gdk.KEY_Down, Gdk.KEY_j):
+            self.move_sel(self.grid.cols)
+        elif k in (Gdk.KEY_Up, Gdk.KEY_k):
+            self.move_sel(-self.grid.cols)
+        elif k in (Gdk.KEY_Tab, Gdk.KEY_ISO_Left_Tab):
+            back = k == Gdk.KEY_ISO_Left_Tab or ev.state & Gdk.ModifierType.SHIFT_MASK
+            self.wins = self.wins[-1:] + self.wins[:-1] if back else self.wins[1:] + self.wins[:1]
+            self.header.queue_draw()
+            self.grid.queue_draw()
+        elif Gdk.KEY_1 <= k <= Gdk.KEY_9 and k - Gdk.KEY_1 < len(self.layouts):
+            self.choose(k - Gdk.KEY_1)
+        return True
+
+
+def notify(msg):
+    subprocess.Popen(['dunstify', '-r', '7373', '-i', 'view-grid', 'Window layout', msg],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def main():
+    GLib.set_prgname('TileLayout')
+    _lock = ui.single_instance('tilelayout', toggle=True)  # noqa: F841
+    desk, wins, focused, aspect = desktop_windows()
+    if len(wins) < 2:
+        notify('Open at least 2 windows on this desktop to arrange them')
+        return
+    win = TileLayout(desk, wins, focused, aspect)
+    ui.quit_on_sigterm(win.close)
+    win.show_all()
+    Gtk.main()
+    if win.chosen is not None:
+        try:
+            apply_layout(desk, win.wins, win.chosen, focused)
+        except Exception as e:  # noqa: BLE001  never leave the desktop half-built
+            notify(f'Could not apply the layout: {e}')
+
+
+if __name__ == '__main__':
+    main()
