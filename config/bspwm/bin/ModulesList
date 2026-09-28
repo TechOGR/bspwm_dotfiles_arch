@@ -203,6 +203,13 @@ class Modules(Gtk.Window):
                             style=self.style)
         cr.set_source_surface(self.bg, 0, 0)
         cr.paint()
+        if self.style:   # the theme's effect around the panel's frame
+            anim = ui.panel_anim(self, style=self.style)
+            import wscard
+            M_ = self.M
+            anim.outline_of((self.W, self.H), lambda c: wscard.window_outline(
+                c, self.style, M_, M_, self.W - 2 * M_, self.H - 2 * M_, 22))
+            anim.draw(cr)
         M, fg, acc = self.M, self.c['fg'], self.accent
         emblem = self.items[0]['glyph']
         ui.glyph(cr, emblem, M + 58, M + 58, 24, (*acc, 1), glow=0.4)

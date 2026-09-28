@@ -560,7 +560,7 @@ button.ibtn:hover, button.short:hover { border-color: @accent; color: @accent;
         cr.set_operator(cairo.OPERATOR_OVER)
         if getattr(self, 'themed', False):
             W, H = self.get_allocated_width(), self.get_allocated_height()
-            ui.paint_theme_panel(cr, W, H, self.pal)
+            ui.paint_theme_panel(cr, W, H, self.pal, anim=ui.panel_anim(self, inside=True))
         return False
 
     def fade(self, *_):

@@ -145,7 +145,7 @@ def daemon():
         cr.set_source_rgba(0, 0, 0, 0)
         cr.paint()
         cr.set_operator(cairo.OPERATOR_OVER)
-        s = ui.themed_panel(cr, W, H, M, pal, radius=22, style=style)
+        s = ui.themed_panel(cr, W, H, M, pal, radius=22, style=style, anim=ui.panel_anim(win, style=style))
         acc = ui.style_accent(s, pal) if s else ui.hex_rgb(pal['blue'])
         off = d.get('off')
         fg = ui.hex_rgb(pal['fg'])

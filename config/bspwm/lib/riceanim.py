@@ -44,18 +44,22 @@ def fps():
 EDGE_EFFECTS = [
     ('spark', 'Electric crackle'), ('embers', 'Rising embers'), ('petals', 'Flying butterflies / leaves'),
     ('flow', 'Flowing edge'), ('shimmer', 'Soft shimmer'), ('pulse', 'Breathing glow'),
-    ('comets', 'Running lights'),
+    ('snakes', 'Slithering snakes'), ('bubbles', 'Rising bubbles'), ('drips', 'Dripping venom'),
+    ('sparkles', 'Twinkling glints'), ('comets', 'Running lights'),
 ]
 BACK_EFFECTS = [('drift', 'Floating motes'), ('flash', 'Lightning flashes'), ('sweep', 'Light sweep')]
 FULL = {'pulse', 'flow'}   # redraw the whole outline every frame (drawn at half rate)
 
 WIN_THEME = {
     'storm': 'spark', 'fire': 'embers', 'lava': 'embers', 'butterfly': 'petals', 'nature': 'petals',
-    'liquid': 'flow', 'venom': 'flow', 'snake': 'shimmer', 'holo': 'shimmer', 'glass': 'shimmer',
-    'crystal': 'shimmer', 'neon': 'pulse', 'cyber': 'pulse', 'hud': 'pulse', 'minimal': 'pulse',
-    'sketch': 'shimmer', 'pixel': 'pulse',
+    'liquid': 'flow', 'venom': 'flow', 'snake': 'snakes', 'holo': 'sparkles', 'glass': 'sparkles',
+    'crystal': 'sparkles', 'neon': 'pulse', 'cyber': 'pulse', 'hud': 'pulse', 'minimal': 'pulse',
+    'sketch': 'shimmer', 'pixel': 'sparkles',
 }
-BAR_THEME = dict(WIN_THEME, butterfly='comets', snake='flow', holo='comets')
+# on the bar only effects that don't redraw its outline: the skin's own
+# shape (waves, tentacles...) is not the plain capsule the effect runs on
+BAR_THEME = dict(WIN_THEME, butterfly='comets', liquid='bubbles', venom='drips', sketch='sparkles',
+                 minimal='sparkles')
 BACK_THEME = {'storm': 'flash', 'fire': 'drift', 'lava': 'drift', 'butterfly': 'drift', 'nature': 'drift',
               'venom': 'drift', 'holo': 'drift', 'liquid': 'drift', 'snake': 'drift'}
 
@@ -156,11 +160,15 @@ def point_at(outline, d):
     return ax + (bx - ax) * f, ay + (by - ay) * f, (by - ay) / L, -(bx - ax) / L
 
 
+INSIDE = [False]   # effects towards the inside of the outline (a panel with no room around it)
+
+
 def _outward(outline):
-    """+1 or -1: the sign that makes point_at's normal point out of the shape."""
+    """+1 or -1: the sign that makes point_at's normal point out of the shape
+    (into it while INSIDE)."""
     pts = outline[0]
     area = sum(pts[i][0] * pts[i + 1][1] - pts[i + 1][0] * pts[i][1] for i in range(len(pts) - 1))
-    return -1 if area > 0 else 1
+    return (1 if area > 0 else -1) * (-1 if INSIDE[0] else 1)
 
 
 def _box(points, pad):
@@ -405,7 +413,125 @@ def fx_petals(cr, style, outline, t, seed, scale):
     return box
 
 
-EDGE_FNS = {'comets': fx_comets, 'shimmer': fx_shimmer, 'pulse': fx_pulse, 'flow': fx_flow,
+def fx_bubbles(cr, style, outline, t, seed, scale):
+    """Bubbles leave the edge, wobble up and pop (water)."""
+    total = outline[2]
+    col = color(style)
+    sgn = _outward(outline)
+    box = None
+    for k in range(max(6, min(18, int(total / 130)))):
+        rnd = random.Random(k * 71 + seed)
+        life = rnd.uniform(2.0, 3.6)
+        age = (t + rnd.uniform(0, life)) % life
+        f = age / life
+        for _try in range(12):
+            x, y, nx, ny = point_at(outline, rnd.uniform(0, total))
+            nx, ny = nx * sgn, ny * sgn
+            if ny < 0.5:   # not from the bottom: they rise away from it
+                break
+        bx = x + nx * 5 + math.sin(age * 4 + k) * 3 * scale
+        by = y + ny * 5 - f * rnd.uniform(18, 34) * scale
+        r = (1.6 + f * rnd.uniform(1.5, 3.2)) * scale
+        a = min(1, (1 - f) * 2.2) * 0.9
+        cr.arc(bx, by, r, 0, 2 * math.pi)
+        cr.set_source_rgba(*col, 0.12 * a)
+        cr.fill_preserve()
+        cr.set_line_width(max(0.7, 0.9 * scale))
+        cr.set_source_rgba(*col, 0.85 * a)
+        cr.stroke()
+        cr.arc(bx - r * 0.35, by - r * 0.35, r * 0.28, 0, 2 * math.pi)
+        cr.set_source_rgba(1, 1, 1, 0.85 * a)
+        cr.fill()
+        box = _union(box, (bx - r - 2, by - r - 2, bx + r + 2, by + r + 2))
+    return box
+
+
+def fx_drips(cr, style, outline, t, seed, scale):
+    """Venom gathers under the edge, stretches and falls."""
+    import wsthree
+    total = outline[2]
+    col = color(style)
+    sgn = _outward(outline)
+    box = None
+    for k in range(max(4, min(12, int(total / 170)))):
+        rnd = random.Random(k * 37 + seed)
+        life = rnd.uniform(2.2, 3.8)
+        age = (t + rnd.uniform(0, life)) % life
+        f = age / life
+        for _try in range(16):   # from the bottom edge
+            x, y, nx, ny = point_at(outline, rnd.uniform(0, total))
+            if ny * sgn > 0.6:
+                break
+        w = rnd.uniform(1.4, 2.4) * scale
+        if f < 0.6:   # gathering, stretching
+            L = (3 + f / 0.6 * rnd.uniform(6, 12)) * scale
+            wsthree.drip(cr, x, y, L, w, col, 0.95)
+            box = _union(box, (x - w * 2, y - 1, x + w * 2, y + L + 2))
+        else:         # a drop falling and fading
+            g = (f - 0.6) / 0.4
+            dy = y + (10 + g * g * 40) * scale
+            a = 1 - g
+            cr.save()
+            cr.translate(x, dy)
+            cr.scale(1, 1.5)
+            cr.arc(0, 0, w * 1.1, 0, 2 * math.pi)
+            cr.restore()
+            cr.set_source_rgba(*col, a)
+            cr.fill()
+            box = _union(box, (x - w * 2, dy - w * 3, x + w * 2, dy + w * 3))
+    return box
+
+
+def fx_snakes(cr, style, outline, t, seed, scale):
+    """Little snakes slither along the edge, head first, tongue out."""
+    import wsthree
+    import wspill as ws
+    total = outline[2]
+    col = color(style)
+    sgn = _outward(outline)
+    box = None
+    base = ws.rgb('#0c1a0c') if style == 'snake' else tuple(v * 0.25 for v in col)
+    for k in range(max(2, min(4, int(total / 900) + 1))):
+        rnd = random.Random(k * 59 + seed)
+        speed = rnd.uniform(22, 34) * scale * (1 if k % 2 == 0 else -1)
+        head = rnd.uniform(0, total) + t * speed
+        step = 5.0 * scale * (1 if speed > 0 else -1)
+        pts = []
+        for i in range(18, -1, -1):   # tail to head
+            x, y, nx, ny = point_at(outline, head - i * step)
+            o = sgn * (5 + 3.2 * math.sin(i * 0.75 - t * 9)) * scale
+            pts.append((x + nx * o, y + ny * o))
+        wsthree.snake_body(cr, pts, 3.4 * scale, base, col, col, head_k=1.8)
+        box = _union(box, _box(pts, 12 * scale))
+    return box
+
+
+def fx_sparkles(cr, style, outline, t, seed, scale):
+    """Glints of light twinkle on and off along the edge (glass, crystal,
+    stars)."""
+    import wspill as ws
+    total = outline[2]
+    col = color(style)
+    sgn = _outward(outline)
+    box = None
+    for k in range(max(6, min(26, int(total / 80)))):
+        rnd = random.Random(k * 43 + seed)
+        per = rnd.uniform(1.4, 3.0)
+        v = math.sin((t / per + rnd.random()) * 2 * math.pi)
+        if v <= 0.2:
+            continue
+        a = ((v - 0.2) / 0.8) ** 2
+        x, y, nx, ny = point_at(outline, rnd.uniform(0, total))
+        off = rnd.uniform(-2, 6) * scale * sgn
+        x, y = x + nx * off, y + ny * off
+        r = rnd.uniform(3.5, 6.5) * scale * (0.6 + 0.4 * a)
+        ws.sparkle(cr, x, y, r, rnd.choice((col, (1, 1, 1))), a)
+        box = _union(box, (x - r * 1.8, y - r * 1.8, x + r * 1.8, y + r * 1.8))
+    return box
+
+
+EDGE_FNS = {'bubbles': fx_bubbles, 'drips': fx_drips, 'snakes': fx_snakes, 'sparkles': fx_sparkles,
+            'comets': fx_comets, 'shimmer': fx_shimmer, 'pulse': fx_pulse, 'flow': fx_flow,
             'spark': fx_spark, 'embers': fx_embers, 'petals': fx_petals}
 
 

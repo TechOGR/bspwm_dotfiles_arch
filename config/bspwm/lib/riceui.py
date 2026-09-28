@@ -165,7 +165,75 @@ def theme_style():
     return wscard.style_of()
 
 
-def paint_theme_panel(cr, W, H, pal, inset=4, scale=0.55):
+class PanelAnim:
+    """The theme's window effect (lib/riceanim.py: butterflies, embers,
+    sparks, snakes...) on the frame of an app's own panel. One per widget,
+    made on the first draw: panel_anim(widget). It repaints only where the
+    effect was and is. A no-op when animations are off."""
+
+    def __init__(self, widget, style=None, inside=False):
+        import time as _time
+        self._time = _time
+        self.widget, self.inside = widget, inside
+        self.style = style if style is not None else theme_style()
+        self.fx = None
+        self.outline, self.key, self.box = None, None, None
+        self.t0 = _time.monotonic()
+        self.alive = True
+        try:
+            import riceanim
+            self.ra = riceanim
+            self.fx = riceanim.effect('win', self.style) if self.style else None
+        except Exception:
+            self.ra = None
+        if self.fx:
+            widget.connect('destroy', lambda *_: setattr(self, 'alive', False))
+            GLib.timeout_add(1000 // self.ra.fps(), self._tick)
+
+    def t(self):
+        return self._time.monotonic() - self.t0
+
+    def outline_of(self, key, path_fn):
+        """path_fn(cr) puts the frame's outline in cr (only when key changes)."""
+        if self.fx and key != self.key:
+            cr = cairo.Context(cairo.ImageSurface(cairo.FORMAT_A8, 1, 1))
+            path_fn(cr)
+            self.outline, self.key = self.ra.flat_points(cr), key
+
+    def draw(self, cr):
+        if not (self.fx and self.outline):
+            return None
+        import wspill
+        self.ra.INSIDE[0] = self.inside
+        try:
+            with wspill.tinted(self.style, wspill.tint_target('windows')):
+                return self.ra.draw_edge(cr, self.fx, self.style, self.outline, self.t(),
+                                         scale=0.8 if self.inside else 1.0)
+        finally:
+            self.ra.INSIDE[0] = False
+
+    def _tick(self):
+        if not self.alive:
+            return False
+        if not (self.outline and self.widget.get_visible()):
+            return True
+        box = self.draw(cairo.Context(cairo.ImageSurface(cairo.FORMAT_A8, 1, 1)))
+        for b in (self.box, box):
+            if b:
+                self.widget.queue_draw_area(int(b[0]) - 2, int(b[1]) - 2, int(b[2] - b[0]) + 4,
+                                            int(b[3] - b[1]) + 4)
+        self.box = box
+        return True
+
+
+def panel_anim(widget, **kw):
+    a = getattr(widget, '_panel_anim', None)
+    if a is None:
+        a = widget._panel_anim = PanelAnim(widget, **kw)
+    return a
+
+
+def paint_theme_panel(cr, W, H, pal, inset=4, scale=0.55, anim=None):
     """A popup's panel in the theme style: its scene under a readable veil,
     framed by the style's card. False when no style is set."""
     style = theme_style()
@@ -185,6 +253,9 @@ def paint_theme_panel(cr, W, H, pal, inset=4, scale=0.55):
     cr.paint()
     cr.restore()
     wscard.paint_card(cr, style, x, y, w, h, scale, part='windows')
+    if anim:   # the theme's effect, inside the frame (the window has no room around it)
+        anim.outline_of((style, W, H, inset, scale), lambda c: wscard.shape(c, style, x, y, w, h, scale))
+        anim.draw(cr)
     return True
 
 
@@ -424,7 +495,7 @@ def style_accent(style, pal):
         return hex_rgb(pal['blue'])
 
 
-def themed_panel(cr, W, H, M, pal, radius=18, veil=0.55, style=None):
+def themed_panel(cr, W, H, M, pal, radius=18, veil=0.55, style=None, anim=None):
     """A panel filling a W x H window with M px left around it for the
     style's ornaments: the scene inside the style's outline, veiled for
     reading, and the style's window frame. Returns the style (None: a plain
@@ -444,6 +515,10 @@ def themed_panel(cr, W, H, M, pal, radius=18, veil=0.55, style=None):
             cr.paint()
             cr.restore()
             wscard.paint_window(cr, style, x, y, w, h, radius, True)
+            if anim:   # the theme's effect around the frame (M px of room)
+                anim.outline_of((style, W, H, M, radius),
+                                lambda c: wscard.window_outline(c, style, x, y, w, h, radius))
+                anim.draw(cr)
             return style
         except Exception:
             style = None

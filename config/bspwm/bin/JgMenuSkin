@@ -100,11 +100,60 @@ def main():
     GLib.set_prgname('JgMenuSkin')
     display = Gdk.Display.get_default()
     display.error_trap_push()   # a submenu can close while we restack under it
-    import wscard  # noqa: F401  (the styles)
+    import wscard  # (the styles)
     pal = ui.load_palette()
     style = ui.theme_style()
     xw = X()
-    st = {'main': None, 'unders': {}, 'seen': 0.0, 'start': time.monotonic(), 'cache': {}}
+    st = {'main': None, 'unders': {}, 'fx': {}, 'seen': 0.0, 'start': time.monotonic(), 'cache': {},
+          'outlines': {}}
+    # the theme's window effect (butterflies, embers, sparks...) around every
+    # menu: a click-through layer a bit larger than the menu, above it
+    try:
+        import riceanim
+        fx_name = riceanim.effect('win', style) if style else None
+    except Exception:
+        riceanim, fx_name = None, None
+    PAD = 40
+
+    def fx_layer(xid, x, y, w, h):
+        win = st['fx'].get(xid)
+        if win is None:
+            win = Gtk.Window(type=Gtk.WindowType.POPUP)
+            win.set_title('JgMenuSkin')
+            win.set_wmclass('JgMenuSkin', 'JgMenuSkin')
+            ui.rgba_window(win)
+            win.geo = None
+
+            def draw(wd, cr):
+                cr.set_operator(cairo.OPERATOR_SOURCE)
+                cr.set_source_rgba(0, 0, 0, 0)
+                cr.paint()
+                cr.set_operator(cairo.OPERATOR_OVER)
+                gw_, gh_ = wd.geo[2:]
+                key = (gw_, gh_)
+                if key not in st['outlines']:
+                    oc = cairo.Context(cairo.ImageSurface(cairo.FORMAT_A8, 1, 1))
+                    wscard.window_outline(oc, style, PAD + 3, PAD + 3, gw_ - 6, gh_ - 6, 14)
+                    st['outlines'][key] = riceanim.flat_points(oc)
+                with wscard.ws.tinted(style, wscard.ws.tint_target('windows')):
+                    riceanim.draw_edge(cr, fx_name, style, st['outlines'][key], time.monotonic() - st['start'])
+                return True
+            win.connect('draw', draw)
+            st['fx'][xid] = win
+        if win.geo != (x, y, w, h):
+            win.geo = (x, y, w, h)
+            win.set_size_request(w + 2 * PAD, h + 2 * PAD)
+            win.resize(w + 2 * PAD, h + 2 * PAD)
+            win.move(x - PAD, y - PAD)
+            win.realize()
+            win.get_window().input_shape_combine_region(cairo.Region(), 0, 0)
+            win.show()
+        try:   # right above its menu
+            target = GdkX11.X11Window.foreign_new_for_display(display, xid)
+            win.get_window().restack(target, True)
+        except Exception:
+            pass
+        win.queue_draw()
 
     def panel(w, h):
         key = (w, h)
@@ -154,13 +203,15 @@ def main():
                 st['main'] = menus[0][0]   # the first one up is the main menu (it has its tiles)
         live = set()
         for xid, x, y, w, h in menus:
-            if xid == st['main']:
-                continue
             live.add(xid)
-            under(xid, x, y, w, h)
-        for xid in list(st['unders']):
-            if xid not in live:
-                st['unders'].pop(xid).destroy()
+            if fx_name:
+                fx_layer(xid, x, y, w, h)
+            if xid != st['main']:
+                under(xid, x, y, w, h)
+        for d in (st['unders'], st['fx']):
+            for xid in list(d):
+                if xid not in live:
+                    d.pop(xid).destroy()
         # the menu closed (or never came): done
         if (st['seen'] and now - st['seen'] > 0.6) or (not st['seen'] and now - st['start'] > 6):
             Gtk.main_quit()

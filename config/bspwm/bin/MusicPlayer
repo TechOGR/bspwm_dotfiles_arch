@@ -665,7 +665,7 @@ scale slider { background-color: @fg; border-radius: 50%; min-width: 12px; min-h
         cr.set_source_rgba(0, 0, 0, 0)
         cr.paint()
         cr.set_operator(cairo.OPERATOR_OVER)
-        if ui.paint_theme_panel(cr, Wd, H, self.pal):
+        if ui.paint_theme_panel(cr, Wd, H, self.pal, anim=ui.panel_anim(w, inside=True)):
             return False   # the theme's scene + frame
         ui.rounded(cr, 0.5, 0.5, Wd - 1, H - 1, 22)
         cr.save()
