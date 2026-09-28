@@ -624,6 +624,19 @@ class Dock(Gtk.Window):
             sc = cairo.Context(surf)
             with wspill.tinted(style, tint):
                 wspill.paint_bar(sc, style, base_w + 2 * M, (M, M, base_w, ph))
+            # the style's halos reach past the dock window: fade them out on
+            # every side, else they end on its straight edges (a translucent
+            # "curtain" around the dock)
+            sw_, sh_ = surf.get_width(), surf.get_height()
+            f = min(M, 42)
+            sc.set_operator(cairo.OPERATOR_DEST_IN)
+            for g in (cairo.LinearGradient(0, 0, sw_, 0), cairo.LinearGradient(0, 0, 0, sh_)):
+                n = sw_ if g.get_linear_points()[2] else sh_
+                for t, a in ((0, 0), (0.4, 0.12), (0.75, 0.55), (1, 1)):   # eased
+                    g.add_color_stop_rgba(t * f / n, 0, 0, 0, a)
+                    g.add_color_stop_rgba(1 - t * f / n, 0, 0, 0, a)
+                sc.set_source(g)
+                sc.paint()
             self.skin_cache = ((base_w, int(ph)), surf)
         surf = self.skin_cache[1]
         sw, sh = surf.get_width(), surf.get_height()
