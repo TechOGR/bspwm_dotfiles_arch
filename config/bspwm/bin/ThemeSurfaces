@@ -34,10 +34,10 @@ M = 3     # the frame right at the window's edge: picom's shadow and rounded cor
           # the menus' own) then hug the theme's frame instead of drawing a second border around it
 
 
-def render(path, W, H, pal, style, radius=14):
+def render(path, W, H, pal, style, radius=14, frame=True):
     surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, W, H)
     cr = cairo.Context(surf)
-    ui.themed_panel(cr, W, H, M, pal, radius=radius, veil=0.66, style=style)
+    ui.themed_panel(cr, W, H, M, pal, radius=radius, veil=0.66, style=style, frame=frame)
     surf.write_to_png(path + '.tmp')
     os.replace(path + '.tmp', path)
 
@@ -75,7 +75,9 @@ def main():
     # @icon in a square of 256 px at most: menu.csv puts the 2 x 4 tiles
     # of 144 px back together)
     full = os.path.join(OUT, 'jgmenu.png')
-    render(full, JG_W, JG_H, pal, style, radius=14)
+    # the scene only: bin/JgMenuSkin draws the frame above the menu, with room
+    # for its ornaments (inside the menu they were cut at its edges)
+    render(full, JG_W, JG_H, pal, style, radius=14, frame=False)
     img = cairo.ImageSurface.create_from_png(full)
     T = 144
     for r in range(JG_H // T):

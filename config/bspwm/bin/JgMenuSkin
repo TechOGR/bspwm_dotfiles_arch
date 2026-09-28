@@ -131,12 +131,19 @@ def main():
                 cr.set_operator(cairo.OPERATOR_OVER)
                 gw_, gh_ = wd.geo[2:]
                 key = (gw_, gh_)
-                if key not in st['outlines']:
-                    oc = cairo.Context(cairo.ImageSurface(cairo.FORMAT_A8, 1, 1))
-                    wscard.window_outline(oc, style, PAD + 3, PAD + 3, gw_ - 6, gh_ - 6, 14)
-                    st['outlines'][key] = riceanim.flat_points(oc)
-                with wscard.ws.tinted(style, wscard.ws.tint_target('windows')):
-                    riceanim.draw_edge(cr, fx_name, style, st['outlines'][key], time.monotonic() - st['start'])
+                if ('frame',) + key not in st['cache']:   # the theme's frame, with room for its ornaments
+                    fs = cairo.ImageSurface(cairo.FORMAT_ARGB32, gw_ + 2 * PAD, gh_ + 2 * PAD)
+                    wscard.paint_window(cairo.Context(fs), style, PAD + 3, PAD + 3, gw_ - 6, gh_ - 6, 14, True)
+                    st['cache'][('frame',) + key] = fs
+                cr.set_source_surface(st['cache'][('frame',) + key], 0, 0)
+                cr.paint()
+                if fx_name:
+                    if key not in st['outlines']:
+                        oc = cairo.Context(cairo.ImageSurface(cairo.FORMAT_A8, 1, 1))
+                        wscard.window_outline(oc, style, PAD + 3, PAD + 3, gw_ - 6, gh_ - 6, 14)
+                        st['outlines'][key] = riceanim.flat_points(oc)
+                    with wscard.ws.tinted(style, wscard.ws.tint_target('windows')):
+                        riceanim.draw_edge(cr, fx_name, style, st['outlines'][key], time.monotonic() - st['start'])
                 return True
             win.connect('draw', draw)
             st['fx'][xid] = win
@@ -153,13 +160,14 @@ def main():
             win.get_window().restack(target, True)
         except Exception:
             pass
-        win.queue_draw()
+        if fx_name:   # animated: redraw every poll
+            win.queue_draw()
 
     def panel(w, h):
         key = (w, h)
         if key not in st['cache']:
             surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
-            ui.themed_panel(cairo.Context(surf), w, h, 3, pal, radius=14, veil=0.66, style=style)
+            ui.themed_panel(cairo.Context(surf), w, h, 3, pal, radius=14, veil=0.66, style=style, frame=False)
             st['cache'][key] = surf
         return st['cache'][key]
 
@@ -205,7 +213,7 @@ def main():
         live = set()
         for xid, x, y, w, h in menus:
             live.add(xid)
-            if fx_name:
+            if style:   # the frame (and the effect) above every menu
                 fx_layer(xid, x, y, w, h)
             if xid != st['main']:
                 under(xid, x, y, w, h)

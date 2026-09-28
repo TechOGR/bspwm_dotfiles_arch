@@ -513,7 +513,7 @@ def style_accent(style, pal):
         return hex_rgb(pal['blue'])
 
 
-def themed_panel(cr, W, H, M, pal, radius=18, veil=0.55, style=None, anim=None):
+def themed_panel(cr, W, H, M, pal, radius=18, veil=0.55, style=None, anim=None, frame=True):
     """A panel filling a W x H window with M px left around it for the
     style's ornaments: the scene inside the style's outline, veiled for
     reading, and the style's window frame. Returns the style (None: a plain
@@ -532,7 +532,8 @@ def themed_panel(cr, W, H, M, pal, radius=18, veil=0.55, style=None, anim=None):
             cr.set_source_rgba(*hex_rgb(pal['bg']), veil)
             cr.paint()
             cr.restore()
-            wscard.paint_window(cr, style, x, y, w, h, radius, True)
+            if frame:   # frame=False: the scene only (the frame is drawn elsewhere, with room)
+                wscard.paint_window(cr, style, x, y, w, h, radius, True)
             if anim:   # the theme's effect around the frame (M px of room)
                 anim.outline_of((style, W, H, M, radius),
                                 lambda c: wscard.window_outline(c, style, x, y, w, h, radius))
