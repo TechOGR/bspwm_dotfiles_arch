@@ -130,7 +130,7 @@ def main():
     GLib.set_prgname('RoundBorders')
 
     st = {'conf': None, 'rings': {}, 'backs': {}, 'back_want': {}, 'timer': None, 'raise': set(),
-          'shaped': {}, 'on_screen': set(), 'rects': {}}
+          'shaped': {}, 'on_screen': set(), 'rects': {}, 'tiled': set(), 'tiled_top': None}
 
     def hexcolor(h):
         h = (h or '#000000').lstrip('#')[-6:]
@@ -181,6 +181,7 @@ def main():
         out = {}
         st['on_screen'] = set()
         st['rects'] = {}
+        st['tiled'] = set()
         f = bspc('query', '-N', '-n', 'focused.window')
         focused = int(f, 16) if f else None
         for desk in bspc('query', '-D', '-d', '.active').split():
@@ -210,6 +211,8 @@ def main():
                 r = cl['floatingRectangle'] if cl.get('state') == 'floating' else cl['tiledRectangle']
                 out[n['id']] = (r['x'] - bw, r['y'] - bw, r['width'] + 2 * bw, r['height'] + 2 * bw, bw,
                                 n['id'] == focused)
+                if cl.get('state') != 'floating':
+                    st['tiled'].add(n['id'])
                 if c['backdrop'] and is_terminal(n['id'], cl):
                     st['back_want'][n['id']] = (r['x'], r['y'], r['width'], r['height'], bw)
         return out
@@ -243,9 +246,19 @@ def main():
         cr.paint()
         cr.set_operator(cairo.OPERATOR_OVER)
         if info.get('skin'):
-            fw, fh = w - 2 * E, h - 2 * E
-            wscard.paint_window(cr, info['skin'], E + bw / 2, E + bw / 2, fw - bw, fh - bw,
-                                min(st['conf']['r'], fw / 2, fh / 2), info['focused'])
+            # the frame is drawn once per size / style / tint and kept: a
+            # focus change only changes how opaque it is (the rich styles
+            # take 40-100 ms to draw, twice per click was felt)
+            key = (info['skin'], w, h, bw, st['conf']['r'], info.get('tint'))
+            cache = getattr(win, 'cache', None)
+            if not cache or cache[0] != key:
+                surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
+                fw, fh = w - 2 * E, h - 2 * E
+                wscard.paint_window(cairo.Context(surf), info['skin'], E + bw / 2, E + bw / 2, fw - bw, fh - bw,
+                                    min(st['conf']['r'], fw / 2, fh / 2), True)
+                cache = win.cache = (key, surf)
+            cr.set_source_surface(cache[1], 0, 0)
+            cr.paint_with_alpha(1.0 if info['focused'] else 0.45)
             return True
         r = max(0.0, st['conf']['r'] - bw / 2)
         x, y, ww, hh = bw / 2, bw / 2, w - bw, h - bw
@@ -367,11 +380,16 @@ def main():
                 except Exception:
                     pass
             return
-        target = foreign_win(cid)
+        # the frame of a tiled window sits over the topmost tiled window:
+        # when bspwm raises a tiled window on focus it puts it right over
+        # the previous topmost one, still under the frames, so a click never
+        # hides a frame (it flickered for the 25 ms until the restack)
+        anchor = st['tiled_top'] if cid in st['tiled'] and st.get('tiled_top') else cid
+        target = foreign_win(anchor)
         if target is not None:
             gw.restack(target, True)
         else:
-            subprocess.run(['xdo', 'above', '-t', hex(cid), hex(gw.get_xid())],
+            subprocess.run(['xdo', 'above', '-t', hex(anchor), hex(gw.get_xid())],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def draw_back(win, cr):
@@ -433,11 +451,32 @@ def main():
                 restack(cid, win, 'below', True)
             win.queue_draw()
 
+    def tiled_top():
+        """The highest tiled window in the X stack (_NET_CLIENT_LIST_STACKING)."""
+        try:
+            stack = [w.get_xid() for w in Gdk.Screen.get_default().get_window_stack() or []]
+        except Exception:
+            stack = []
+        for xid in reversed(stack):
+            if xid in st['tiled']:
+                return xid
+        return None
+
     def sync(restack_all=False):
         st['timer'] = None
         want = wanted()
+        top = tiled_top()
+        if top != st.get('tiled_top'):
+            st['tiled_top'] = top
+            restack_all = True   # the tiled frames follow the new top
         shape_clients(want)
         sync_backs(restack_all)
+        # monocle: only the tiled window on top shows its frame (the ones
+        # under it, same place, would draw over it)
+        if top in want:
+            tr = want[top][:4]
+            for cid in [c for c in want if c != top and c in st['tiled'] and want[c][:4] == tr]:
+                del want[cid]
         for cid in list(st['rings']):
             if cid not in want:
                 if cid in st.get('alive', ()):   # on another desktop: keep it, hidden
@@ -501,7 +540,7 @@ def main():
         return False
 
     def schedule(restack_all=False):
-        # several events within 25 ms: one sync, and a restack if any asked
+        # several events within 10 ms: one sync, and a restack if any asked
         st['pending_restack'] = st.get('pending_restack', False) or restack_all
         if st['timer']:
             GLib.source_remove(st['timer'])
@@ -509,7 +548,7 @@ def main():
         def fire():
             r, st['pending_restack'] = st['pending_restack'], False
             return sync(r)
-        st['timer'] = GLib.timeout_add(25, fire)
+        st['timer'] = GLib.timeout_add(10, fire)
 
     buf = {'data': b''}
 

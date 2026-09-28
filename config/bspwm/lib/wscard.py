@@ -113,42 +113,73 @@ def notched(cr, x, y, w, h, q):
     cr.close_path()
 
 
-def wavy(x, y, w, h, r, amp, seed):
-    """Points of a rounded rectangle pushed in and out by two sines. On a
-    window frame the waves keep the same length whatever its size (and a
-    bit deeper), so a big window gets many waves, like the bar."""
+def wavy(x, y, w, h, r, amp, seed, wavelength=170, kind='mix'):
+    """Points of a rounded rectangle pushed in and out along its normal.
+    kind: 'mix' two sines (water, vines, tentacles), 'sine' one clean sine
+    (a slithering snake), 'tongue' pointed crests with a random height each
+    (flames). On a window frame the waves keep their length whatever its
+    size (and get a bit deeper), so a big window gets many, like the bar."""
     rnd = random.Random(seed)
     ph = [rnd.uniform(0, 6) for _ in range(3)]
     pts = rrect_points(x, y, w, h, r, 2.5)
     n = len(pts)
     k1, k2 = 5, 9
     if _FRAME[0]:
-        k1 = max(5, round(2 * (w + h) / 170))
+        k1 = max(5, round(2 * (w + h) / wavelength))
         k2 = round(k1 * 1.75)
         amp *= 1.5
+    heights = [rnd.uniform(0.45, 1.0) for _ in range(k1 + 1)]
     out = []
     for i, (px, py, nx, ny) in enumerate(pts):
         t = i / n * 2 * PI
-        o = amp * (0.6 * math.sin(t * k1 + ph[0]) + 0.4 * math.sin(t * k2 + ph[1]))
+        if kind == 'sine':
+            o = amp * math.sin(t * k1 + ph[0])
+        elif kind == 'tongue':
+            u = (t * k1 + ph[0]) / (2 * PI)
+            f = u - math.floor(u)
+            peak = heights[int(math.floor(u)) % len(heights)]
+            o = amp * (2.2 * peak * (1 - abs(2 * f - 1)) ** 3 - 0.35)
+        else:
+            o = amp * (0.6 * math.sin(t * k1 + ph[0]) + 0.4 * math.sin(t * k2 + ph[1]))
         out.append((px + nx * o, py + ny * o, nx, ny))
     return out
 
 
-def zigzag(x, y, w, h, r, amp, seed, step=7.0):
-    """A lightning outline: the points of a rounded rectangle pushed out
-    and in, one each, by a random share of amp."""
+def zigzag(x, y, w, h, r, amp, seed):
+    """A lightning outline: straight strokes of random length (4 to 26 px)
+    that jump in and out by random amounts, now and then a sharp spike,
+    never a regular pattern (a seam of stitches is what regular looks
+    like)."""
     rnd = random.Random(seed)
-    out = []
-    for i, (px, py, nx, ny) in enumerate(rrect_points(x, y, w, h, r, step)):
-        o = amp * rnd.uniform(0.35, 1) * (1 if i % 2 else -1)
+    pts = rrect_points(x, y, w, h, r, 2.0)
+    n = len(pts)
+    out, i, prev = [], 0, 0.0
+    while i < n:
+        px, py, nx, ny = pts[i]
+        o = rnd.uniform(-1, 1) * amp
+        if rnd.random() < 0.12:   # a spike
+            o = amp * rnd.uniform(1.6, 2.6) * (1 if prev <= 0 else -1)
+        elif abs(o - prev) < amp * 0.5:   # keep it jagged
+            o = -o if o else amp * 0.8
         out.append((px + nx * o, py + ny * o, nx, ny))
+        prev = o
+        i += rnd.choice((2, 3, 4, 5, 6, 8, 10, 13))
     return out
 
 
 # the outline of each style (wavy/jagged ones also cut the window itself
 # to that shape: bin/RoundBorders, window_region)
-WAVES = {'liquid': (3, 7), 'venom': (3.2, 3), 'butterfly': (2.6, 4), 'fire': (2.2, 11), 'nature': (1.6, 13)}
+# style: (amplitude, seed, wave length on a window, kind of wave)
+WAVES = {'liquid': (3, 7, 170, 'mix'), 'venom': (3.2, 3, 170, 'mix'), 'butterfly': (2.6, 4, 170, 'mix'),
+         'fire': (2.6, 11, 60, 'tongue'), 'nature': (1.6, 13, 170, 'mix'), 'snake': (3.6, 17, 115, 'sine')}
 SHAPED = {'cyber', 'hud', 'crystal', 'pixel', 'lava', 'storm', 'sketch'} | set(WAVES)
+
+
+def snake_ring(x, y, w, h, s):
+    """The slithering path of the snake frame (the same wave that cuts
+    the window)."""
+    amp, seed, wl, kind = WAVES['snake']
+    return wavy(x, y, w, h, max(_r('snake', s), 4), amp * s, seed, wl, kind)
 
 
 def _r(style, s):
@@ -163,13 +194,13 @@ def shape(cr, style, x, y, w, h, s):
         q = max(3, round(4 * s))
         notched(cr, round(x), round(y), round(w / q) * q, round(h / q) * q, q)
     elif style in WAVES:
-        amp, seed = WAVES[style]
-        poly(cr, wavy(x, y, w, h, max(_r(style, s), 4), amp * s, seed))
+        amp, seed, wl, kind = WAVES[style]
+        poly(cr, wavy(x, y, w, h, max(_r(style, s), 4), amp * s, seed, wl, kind))
     elif style == 'lava':
         ws.jagged(cr, rrect_points(x, y, w, h, RADIUS['lava'] * s, 3), random.Random(3),
                   2.2 * s * (1.4 if _FRAME[0] else 1), smooth=1)
     elif style == 'storm':
-        poly(cr, zigzag(x, y, w, h, max(_r(style, s), 4), 3 * s, 5))
+        poly(cr, zigzag(x, y, w, h, max(_r(style, s), 4), 3.2 * s * (1.3 if _FRAME[0] else 1), 5))
     elif style == 'sketch':
         ws.jagged(cr, rrect_points(x, y, w, h, max(_r(style, s), 4), 4), random.Random(8), 1.6 * s, smooth=4)
     else:
@@ -188,8 +219,10 @@ def window_outline(cr, style, x, y, w, h, radius):
 def window_region(style, w, h, bw, radius):
     """The X shape of a w x h window (bw border) cut to the style's outline,
     as a cairo.Region in the window's coordinates (the border is outside,
-    at negative ones). Only the edge rows need runs: the middle is one
-    rectangle per band of identical rows."""
+    at negative ones). Only the edge bands are scanned: a middle row is one
+    run between its left and right edge, and equal rows merge into one
+    rectangle (a few ms even for a full-screen window, so a mouse resize
+    stays smooth)."""
     W, H = int(w + 2 * bw), int(h + 2 * bw)
     surf = cairo.ImageSurface(cairo.FORMAT_A8, W, H)
     cr = cairo.Context(surf)
@@ -200,15 +233,24 @@ def window_region(style, w, h, bw, radius):
     surf.flush()
     stride = surf.get_stride()
     data = bytes(surf.get_data())
-    reg = cairo.Region()
+    B = min(int(max(radius, 0) + 48), W // 2, H // 2)   # the band where the outline lives
+    rows = [None] * H
     try:
         import numpy as np
         a = np.frombuffer(data, np.uint8).reshape(H, stride)[:, :W] > 127
-        pad = np.zeros((H, 1), bool)
-        d = np.diff(np.hstack([pad, a, pad]).astype(np.int8), axis=1)
-        rows = [(tuple(np.flatnonzero(d[yy] == 1)), tuple(np.flatnonzero(d[yy] == -1))) for yy in range(H)]
+
+        def runs(yy):
+            d = np.diff(np.concatenate(([0], a[yy].view(np.int8), [0])))
+            return tuple(np.flatnonzero(d == 1)), tuple(np.flatnonzero(d == -1))
+        for yy in list(range(B)) + list(range(max(B, H - B), H)):
+            rows[yy] = runs(yy)
+        mid = a[B:H - B]
+        if len(mid):
+            left = np.where(mid[:, :B].any(1), mid[:, :B].argmax(1), B)
+            right = W - np.where(mid[:, W - B:].any(1), mid[:, W - B:][:, ::-1].argmax(1), B)
+            for i, (l0, r0) in enumerate(zip(left.tolist(), right.tolist())):
+                rows[B + i] = ((l0,), (r0,)) if r0 > l0 else ((), ())
     except ImportError:
-        rows = []
         for yy in range(H):
             line = data[yy * stride:yy * stride + W]
             st_, en = [], []
@@ -219,7 +261,8 @@ def window_region(style, w, h, bw, radius):
                     inside = not inside
             if inside:
                 en.append(W)
-            rows.append((tuple(st_), tuple(en)))
+            rows[yy] = (tuple(st_), tuple(en))
+    reg = cairo.Region()
     y0 = 0
     for yy in range(1, H + 1):
         if yy == H or rows[yy] != rows[y0]:
@@ -827,21 +870,36 @@ def card_butterfly(cr, p, x, y, w, h, cx, cy, s):
 
 
 def card_snake(cr, p, x, y, w, h, cx, cy, s):
+    """The frame is a snake: its body slithers once round the window (the
+    same wave the window is cut to), the tail slips under the head at the
+    top left corner and the head rises off it, tongue out."""
     lime, base = rgb('#7dff2e'), rgb('#0c1a0c')
     halo(cr, cx, cy, w * 0.8, rgb('#1f6a10'), 0.25)
     _tint(cr, p, '#040d05', 0.55)
-    pts = _ring(x, y, w, h, s, 'snake', 5 * s)
-    n = len(pts)
-    # the body goes round the frame from the top right corner and the head
-    # rests on the top edge, tail tapering before it
-    start = int(n * 0.02)
-    body = [(px + nx * 1.5 * s, py + ny * 1.5 * s) for px, py, nx, ny in pts[start:] + pts[:start]]
-    body = body[:int(n * 0.93)]
-    body = body[::-1]
-    ex, ey = body[-1]
-    body += [(ex - i * 3 * s, ey - math.sin(i / 9 * PI * 0.5) * 12 * s) for i in range(1, 10)]   # the neck rises
-    w3.snake_body(cr, body, 7 * s, base, lime, lime, head_k=2.2)
-    if _far():   # a second, smaller snake around the corner
+    ring = [(px, py) for px, py, _nx, _ny in snake_ring(x, y, w, h, s)]
+    n = len(ring)
+    k = int(n * 0.985)   # a full lap: the tail ends right under the head
+    body = ring[:k]
+    # a coil: at the lower right corner the body loops once round itself
+    ci = min(range(len(body)), key=lambda i: -(body[i][0] - x) - (body[i][1] - y))
+    (px0, py0), (px1, py1) = body[ci - 1], body[ci]
+    d = math.atan2(py1 - py0, px1 - px0)   # heading at the corner
+    R = 15 * s
+    ocx, ocy = px1 + math.cos(d - PI / 2) * R, py1 + math.sin(d - PI / 2) * R
+    a0 = d + PI / 2
+    loop = [(ocx + math.cos(a0 - t / 40 * 2 * PI) * R * (1 + 0.1 * math.sin(t / 40 * 2 * PI)),
+             ocy + math.sin(a0 - t / 40 * 2 * PI) * R * (1 + 0.1 * math.sin(t / 40 * 2 * PI)))
+            for t in range(1, 40)]
+    body = body[:ci + 1] + loop + body[ci + 1:]
+    # the neck leaves the corner going up and out
+    (ax, ay), (bx, by) = body[-6], body[-1]
+    ang = math.atan2(by - ay, bx - ax)
+    for i in range(1, 12):
+        ang -= 0.07
+        bx, by = bx + math.cos(ang) * 2.6 * s, by + math.sin(ang) * 2.6 * s - 0.9 * s
+        body.append((bx, by))
+    w3.snake_body(cr, body, 10 * s, base, lime, lime, head_k=1.9)
+    if _far():   # a second, smaller snake round the lower left corner
         seg = [(x - 26 * s + math.sin(t / 3) * 6 * s, y + h * 0.6 + t * 4 * s) for t in range(18)]
         w3.snake_body(cr, seg, 5 * s, base, lime, lime)
 

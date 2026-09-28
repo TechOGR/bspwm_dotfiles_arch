@@ -284,6 +284,13 @@ def snake_body(cr, pts, wmax, base, rim, glow, head=True, tail=True, head_k=1.7)
             wd *= min(1.0, 0.7 + (n - 1 - i) / 12)
         widths.append(wd)
     left, right = tube(cr, pts, widths, base, rim, glow, 0.35)
+    # a dorsal pattern: dashes of light along the spine
+    _poly(cr, pts)
+    cr.set_dash([max(1.5, wmax * 0.55), max(1.5, wmax * 0.45)])
+    cr.set_line_width(max(0.8, wmax * 0.28))
+    cr.set_source_rgba(*rim, 0.45)
+    cr.stroke()
+    cr.set_dash([])
     for i in range(2, n - 2, 2):   # scales: little arcs across the body
         (lx, ly), (rx, ry) = left[i], right[i]
         mx, my = (lx + rx) / 2, (ly + ry) / 2

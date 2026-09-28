@@ -2528,6 +2528,8 @@ class RiceEditor(Gtk.Window):
     def set_win_skin(self, v):
         self.cfg.set('WIN_SKIN', v or '')
         spawn([os.path.join(BIN, 'RoundBorders'), '--reload'])
+        # framed windows use picom's fade-only animations (00-picom.sh)
+        self.apply_modules('', '00-picom.sh', reload_picom=True)
         self.toast(f'Window frames → {v or "none"}')
 
     def set_border_width(self, v):

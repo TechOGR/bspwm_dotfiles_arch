@@ -16,6 +16,11 @@ sed -i "$HOME/.config/bspwm/config/picom/picom.conf" \
     -e "s/shadow-color = .*/shadow-color = \"${SHADOW_C}\"/" \
     -e "s/^corner-radius = .*/corner-radius = ${P_CORNER_R}/"
 
+# Windows in a theme frame (WIN_SKIN): no size / position / scale
+# animations, the frame and shape drawn by RoundBorders follow the real
+# geometry and would be left behind (picom-animations-framed.conf)
+if [ -n "${WIN_SKIN}" ]; then P_ANIM_FILE="picom-animations-framed.conf"; else P_ANIM_FILE="picom-animations.conf"; fi
+
 # Terminals over the theme's background keep one opacity (no focus pulse)
 if [ "${WIN_BACKDROP:-false}" = "true" ]; then P_TERM_LOCK=""; else P_TERM_LOCK="#"; fi
 
@@ -24,7 +29,7 @@ sed -i "$HOME/.config/bspwm/config/picom/picom-rules.conf" \
     -e "/#-shadow-switch/s/.*#-/\t\tshadow = ${P_SHADOWS};\t#-/" \
     -e "/#-fade-switch/s/.*#-/\t\tfade = ${P_FADE};\t#-/" \
     -e "/#-blur-switch/s/.*#-/\t\tblur-background = ${P_BLUR};\t#-/" \
-    -e "/picom-animations/c\\        ${P_ANIMATIONS}include \"picom-animations.conf\"" \
+    -e "/picom-animations/c\\        ${P_ANIMATIONS}include \"${P_ANIM_FILE}\"" \
     -e "/#-active-opacity/s/.*#-/\t\topacity = ${P_ACTIVE_OPACITY:-0.97};\t#-/" \
     -e "/#-inactive-opacity/s/.*#-/\t\topacity = ${P_INACTIVE_OPACITY:-0.92};\t#-/"
 
