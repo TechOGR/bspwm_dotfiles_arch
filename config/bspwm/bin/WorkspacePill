@@ -28,6 +28,7 @@ import subprocess
 sys.path.insert(0, os.path.expanduser('~/.config/bspwm/lib'))
 import barconf as bc  # noqa: E402
 import wspill  # noqa: E402
+import riceanim  # noqa: E402
 import bspcsafe  # noqa: E402,F401  every bspc call has a time limit (no bspwm freeze)
 
 LOCK = os.path.join(bc.HOME, '.cache', os.environ.get('USER', 'user'), '.workspacepill.lock')
@@ -125,18 +126,40 @@ def main():
         skin_win.set_size_request(geo.width, skin_h)
         skin_win.move(geo.x, geo.y if conf['position'] != 'bottom' else geo.y + geo.height - skin_h)
 
+        skin_cache = {'key': None, 'surf': None, 'outlines': []}
+
         def draw_skin(_w, cr):
+            """The skin from its cache (it is painted once per layout) and, in
+            Normal, the style's light running along the bar's outline."""
+            rects = skin_rects()
+            if skin_cache['key'] != rects:
+                surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, geo.width, skin_h)
+                paint_skin(cairo.Context(surf), rects)
+                outs = []
+                with wspill.bar_shape({'cyber': 'chamfer', 'strip': 'square'}.get(bar_style, 'capsule')):
+                    for (rx, ry, rw, rh) in rects:
+                        wspill._capsule(cr, rx + 0.5, ry + 0.5, rw - 1, rh - 1)
+                        outs.append(riceanim.flat_points(cr))
+                skin_cache.update(key=rects, surf=surf, outlines=outs)
             cr.set_operator(cairo.OPERATOR_SOURCE)
-            cr.set_source_rgba(0, 0, 0, 0)
+            cr.set_source_surface(skin_cache['surf'], 0, 0)
             cr.paint()
             cr.set_operator(cairo.OPERATOR_OVER)
+            if anim['on'] and bar_style != 'strip':
+                with wspill.tinted(skin, wspill.tint_target('bar')):
+                    for k, out in enumerate(skin_cache['outlines']):
+                        riceanim.draw_comets(cr, skin, out, anim['t'], width=1.6, seed=k)
+            return True
+
+        def skin_rects():
             y = off_y if conf['position'] != 'bottom' else skin_h - off_y - H
             if bar_style in ('islands', 'cyber'):
-                # one skin under each group of modules (found in sample_groups)
-                rects = [(gx, y, gw, H) for gx, gw in groups['list'] or []]
-            else:
-                mx = bc.margin(conf)
-                rects = [(mx, y, geo.width - 2 * mx, H)]
+                return tuple((gx, y, gw, H) for gx, gw in groups['list'] or [])
+            mx = bc.margin(conf)
+            return ((mx, y, geo.width - 2 * mx, H),)
+
+        def paint_skin(cr, rects):
+            y = off_y if conf['position'] != 'bottom' else skin_h - off_y - H
             shape = {'cyber': 'chamfer', 'strip': 'square'}.get(bar_style, 'capsule')
             top_bar = conf['position'] != 'bottom'
             # glows and ornaments past the window fade out on the side facing
@@ -155,7 +178,6 @@ def main():
                         cr.set_line_width(lw)
                         cr.set_source_rgba(*col, a)
                         cr.stroke()
-            return True
 
         def sample_groups():
             """Where polybar drew its pods (alpha 1/255 over a skin): one
@@ -247,9 +269,19 @@ def main():
         cr.set_operator(cairo.OPERATOR_OVER)
         if has_pill and st['m'] and st['desks']:
             m = st['m']
-            with wspill.soft_edges(cr, m['win_h'], top=m['ext'], bottom=m['ext']), \
-                    wspill.tinted(style, wspill.tint_target('workspaces')):
-                wspill.paint(cr, style, m, [d[1] for d in st['desks']])
+            if anim['on']:   # pac-man chomps, ghosts float
+                wspill.MOUTH[0], wspill.ANIM_T[0] = riceanim.mouth(anim['t']), anim['t']
+            try:
+                with wspill.soft_edges(cr, m['win_h'], top=m['ext'], bottom=m['ext']), \
+                        wspill.tinted(style, wspill.tint_target('workspaces')):
+                    wspill.paint(cr, style, m, [d[1] for d in st['desks']])
+                    if anim['on'] and style != 'classic':   # light around the pill
+                        px, py, pw, ph = wspill.pill_rect(m)
+                        wspill.rounded(cr, px + 0.5, py + 0.5, pw - 1, ph - 1, (ph - 1) / 2)
+                        riceanim.draw_comets(cr, style, riceanim.flat_points(cr), anim['t'] * 1.3,
+                                             width=1.4, seed=5, scale=0.8)
+            finally:
+                wspill.MOUTH[0] = wspill.ANIM_T[0] = None
         return True
 
     def on_press(_w, ev):
@@ -339,6 +371,34 @@ def main():
         return True
 
     win.connect('draw', on_draw)
+
+    # ── Normal mode: the pill and the bar move (lib/riceanim.py)
+    anim = {'on': riceanim.enabled(), 't': 0.0, 'box': None}
+    t0 = time.monotonic()
+
+    def tick():
+        anim['t'] = time.monotonic() - t0
+        if win.get_visible():
+            win.queue_draw()   # small window: all of it
+        if skin_win and skin_win.get_visible() and skin_cache['outlines']:
+            # repaint only where the comets were and are now
+            import cairo as _c
+            scratch = _c.Context(_c.ImageSurface(_c.FORMAT_A8, 1, 1))
+            box = None
+            for k, out in enumerate(skin_cache['outlines']):
+                b = riceanim.draw_comets(scratch, skin, out, anim['t'], width=1.6, seed=k)
+                if b:
+                    box = b if box is None else (min(box[0], b[0]), min(box[1], b[1]),
+                                                 max(box[2], b[2]), max(box[3], b[3]))
+            for b in (anim['box'], box):
+                if b:
+                    skin_win.queue_draw_area(int(b[0]) - 2, int(b[1]) - 2, int(b[2] - b[0]) + 4,
+                                             int(b[3] - b[1]) + 4)
+            anim['box'] = box
+        return True
+    if anim['on'] and (has_pill or skin):
+        wspill.FRAME_CACHE = {}
+        GLib.timeout_add(1000 // riceanim.FPS, tick)
     win.connect('button-press-event', on_press)
     win.connect('scroll-event', on_scroll)
     win.connect('realize', lambda *_: place())

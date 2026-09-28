@@ -3147,9 +3147,10 @@ class RiceEditor(Gtk.Window):
         mode = perf_mode()
         self.perf_now = auto if mode == 'auto' else mode
         c = self.card('󰓅', 'Performance', 'suggested for this machine: ' + ('Lite' if auto == 'lite' else 'Normal'))
-        c.pack_start(self.row('Mode', 'Normal: every effect, full repaints for flawless frames · Lite: picom '
-                              'on xrender, no blur, no animations, lighter frames and bar pulse (shadows, '
-                              'corners, fading and the theme stay). For VMs without 3D',
+        c.pack_start(self.row('Mode', 'Normal: every effect and the themes in motion (light running along the '
+                              'bar, the pill and the frames, pac-man chomping) · Lite: picom on xrender, no '
+                              'blur, no animations, still themes (shadows, corners and fading stay). For VMs '
+                              'without 3D',
                               self.combo([('full', 'Normal'), ('lite', 'Lite')], self.perf_now, self.set_perf)),
                      False, False, 0)
         p.pack_start(c, False, False, 0)

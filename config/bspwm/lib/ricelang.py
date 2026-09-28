@@ -205,11 +205,12 @@ ES = {
 
     # ── compositor
     'PERFORMANCE ': 'RENDIMIENTO', 'Lite': 'Lite', 'Mode': 'Modo',
-    'Normal: every effect, full repaints for flawless frames · Lite: picom on xrender, no blur, no animations, '
-    'lighter frames and bar pulse (shadows, corners, fading and the theme stay). For VMs without 3D':
-        'Normal: todos los efectos, repintado completo para marcos impecables · Lite: picom con xrender, sin '
-        'desenfoque ni animaciones, marcos y pulso de la barra más ligeros (se mantienen sombras, esquinas, '
-        'fundido y el tema). Para VMs sin 3D',
+    'Normal: every effect and the themes in motion (light running along the bar, the pill and the frames, '
+    'pac-man chomping) · Lite: picom on xrender, no blur, no animations, still themes (shadows, corners and '
+    'fading stay). For VMs without 3D':
+        'Normal: todos los efectos y los temas en movimiento (luz recorriendo la barra, la pastilla y los '
+        'marcos, pac-man comiendo) · Lite: picom con xrender, sin desenfoque ni animaciones, temas estáticos '
+        '(se mantienen sombras, esquinas y fundido). Para VMs sin 3D',
     '(applied)': '(aplicado)',
     'suggested for this machine: Lite': 'recomendado para este equipo: Lite',
     'suggested for this machine: Normal': 'recomendado para este equipo: Normal',

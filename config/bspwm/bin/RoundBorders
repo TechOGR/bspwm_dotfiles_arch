@@ -178,6 +178,7 @@ def main():
     import riceui as ui
     try:
         import wscard
+        import riceanim
     except Exception:
         wscard = None
     _lock = ui.single_instance('roundborders')  # noqa: F841  writes LOCK
@@ -368,7 +369,21 @@ def main():
                                 min(st['conf']['r'], fw / 2, fh / 2), True, inner_glow=not st['conf']['lite'])
             reg = wscard.alpha_region(surf)
             reg.union(handle_band(win.cid, w, h))
-            cache = win.cache = (key, surf, reg)
+            outline = None
+            if anim['on']:   # the path the light runs along, and room for its glow
+                cr = cairo.Context(surf)
+                wscard.window_outline(cr, info['skin'], E + bw / 2, E + bw / 2, fw - bw, fh - bw,
+                                      min(st['conf']['r'], fw / 2, fh / 2))
+                outline = riceanim.flat_points(cr)
+                band = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
+                bc_ = cairo.Context(band)
+                bc_.move_to(*outline[0][0])
+                for p_ in outline[0][1:]:
+                    bc_.line_to(*p_)
+                bc_.set_line_width(22)
+                bc_.stroke()
+                reg.union(wscard.alpha_region(band))
+            cache = win.cache = (key, surf, reg, outline)
         return cache
 
     def draw(win, cr):
@@ -385,6 +400,9 @@ def main():
             cache = frame_cache(win)
             cr.set_source_surface(cache[1], 0, 0)
             cr.paint_with_alpha(1.0 if info['focused'] else 0.45)
+            if anim['on'] and info['focused'] and cache[3]:
+                with wscard.ws.tinted(info['skin'], info.get('tint')):
+                    riceanim.draw_comets(cr, info['skin'], cache[3], anim['t'], width=1.8)
             return True
         r = max(0.0, st['conf']['r'] - bw / 2)
         x, y, ww, hh = bw / 2, bw / 2, w - bw, h - bw
@@ -558,6 +576,10 @@ def main():
         cr.set_operator(cairo.OPERATOR_SOURCE)
         cr.set_source_surface(cache[1], 0, 0)
         cr.paint()
+        if anim['on']:   # a slow light crossing the texture
+            cr.set_operator(cairo.OPERATOR_OVER)
+            with wscard.ws.tinted(st['conf']['skin'], st['conf']['tint']):
+                riceanim.sweep(cr, st['conf']['skin'], i['w'], i['h'], anim['t'])
         return True
 
     def sync_backs(restack_all):
@@ -744,6 +766,46 @@ def main():
         st['raise'] = set()
         return False
 
+    # ── Normal mode: light runs along the focused frame, crosses the textures
+    anim = {'on': False, 't': 0.0, 'box': None, 'n': 0, 'timer': None}
+    t_start = time.monotonic()
+
+    def anim_tick():
+        anim['t'] = time.monotonic() - t_start
+        anim['n'] += 1
+        skin = st['conf']['skin'] if st['conf'] else None
+        if not skin:
+            return True
+        for win in st['rings'].values():
+            info = getattr(win, 'info', {})
+            cache = getattr(win, 'cache', None)
+            if not (info.get('focused') and win.get_visible() and cache and cache[3]):
+                continue
+            import cairo as _c
+            scratch = _c.Context(_c.ImageSurface(_c.FORMAT_A8, 1, 1))
+            box = riceanim.draw_comets(scratch, skin, cache[3], anim['t'], width=1.8)
+            for b in (getattr(win, 'anim_box', None), box):
+                if b:
+                    win.queue_draw_area(int(b[0]) - 2, int(b[1]) - 2, int(b[2] - b[0]) + 4, int(b[3] - b[1]) + 4)
+            win.anim_box = box
+        if anim['n'] % 3 == 0:   # the textures at a third of the rate (slow light)
+            for win in st['backs'].values():
+                if win.get_visible():
+                    win.queue_draw()
+        return True
+
+    def anim_config():
+        on = bool(wscard) and riceanim.enabled() and (not st['conf'].get('lite') or os.environ.get('RICE_ANIM') == '1')
+        if on != anim['on']:
+            anim['on'] = on
+            for w_ in list(st['rings'].values()) + list(st['backs'].values()):
+                w_.cache = None   # outlines are only kept while animated
+            if on:
+                anim['timer'] = GLib.timeout_add(1000 // riceanim.FPS, anim_tick)
+            elif anim['timer']:
+                GLib.source_remove(anim['timer'])
+                anim['timer'] = None
+
     def schedule(restack_all=False):
         # several events within 10 ms: one sync, and a restack if any asked
         st['pending_restack'] = st.get('pending_restack', False) or restack_all
@@ -780,12 +842,14 @@ def main():
 
     def reload():
         read_conf()
+        anim_config()
         for win in list(st['rings'].values()) + list(st['backs'].values()):
             win.info = {}
         schedule(True)
         return True
 
     read_conf()
+    anim_config()
     proc = subprocess.Popen(['bspc', 'subscribe', 'node_add', 'node_remove', 'node_swap', 'node_transfer',
                              'node_focus', 'node_stack', 'node_geometry', 'node_state', 'node_flag',
                              'node_layer', 'desktop_focus', 'desktop_layout'],

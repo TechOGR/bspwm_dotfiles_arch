@@ -274,7 +274,16 @@ def ghost(cr, cx, cy, s, c, alpha=1.0):
         cr.fill()
 
 
-def pac_path(cr, cx, cy, r, mouth=0.62):
+# animation state (lib/riceanim.py, Normal mode): pac-man's mouth opening
+# and the time the ghosts float by; None = still
+MOUTH = [None]
+ANIM_T = [None]
+FRAME_CACHE = None   # {key: surface} when the pill is animated (bin/WorkspacePill)
+
+
+def pac_path(cr, cx, cy, r, mouth=None):
+    if mouth is None:
+        mouth = MOUTH[0] if MOUTH[0] is not None else 0.62
     cr.new_path()
     cr.move_to(cx, cy)
     cr.arc(cx, cy, r, mouth / 2, 2 * PI - mouth / 2)
@@ -796,7 +805,19 @@ def paint(cr, style, m, states, pal=None):
                 dot(cr, x, y, s * 0.9, pal.get('magenta', rgb('#bb9af7')))
         return centers
     focus_x = next((x for (x, _y), st in zip(centers, states) if st == 'focused'), None)
-    if style == 'hud':
+    if FRAME_CACHE is not None:   # animated: the static frame painted once
+        key = (style, m['win_w'], m['win_h'], focus_x if style == 'hud' else None, _TINT[0])
+        surf = FRAME_CACHE.get(key)
+        if surf is None:
+            if len(FRAME_CACHE) > 8:
+                FRAME_CACHE.clear()
+            surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, int(m['win_w']), int(m['win_h']))
+            fc = cairo.Context(surf)
+            frame_hud(fc, m, focus_x) if style == 'hud' else FRAMES[style](fc, m)
+            FRAME_CACHE[key] = surf
+        cr.set_source_surface(surf, 0, 0)
+        cr.paint()
+    elif style == 'hud':
         frame_hud(cr, m, focus_x)
     else:
         FRAMES[style](cr, m)
@@ -819,6 +840,8 @@ def paint(cr, style, m, states, pal=None):
         elif g:
             halo(cr, x, y, s * 0.55, c, g * 0.8)
         kind = 'pac' if st == 'focused' else ('dot' if st == 'empty' else 'ghost')
+        if kind == 'ghost' and ANIM_T[0] is not None:   # ghosts float
+            y += 1.3 * math.sin(ANIM_T[0] * 2.4 + i * 1.1)
         if style in ICON_PAINTERS:
             ICON_PAINTERS[style](cr, kind, x, y, s, c)
         elif style == 'pixel':
