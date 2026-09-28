@@ -10,8 +10,9 @@
 #     "restart after updating"
 #   ✔ Arch news newer than your last upgrade, to read before updating
 #   ✔ Last upgrade, orphan packages, package cache size
-#   ✔ Update all / official / AUR, clean the cache, remove orphans: in a
-#     floating terminal (sudo asks there, never here)
+#   ✔ Update all / official: UpdateProgress (password in its field, the
+#     progress in the theme's bar, no pacman output); AUR only, clean the
+#     cache, remove orphans: in a floating terminal
 #   ✔ Details of a package on click (pacman -Si)
 #
 #   UpdateCenter            the window (polybar updates module, left click)
@@ -286,14 +287,12 @@ def window():
                 col.pack_start(ra.label(k.upper(), 'key'), False, False, 0)
                 grid.pack_start(col, True, True, 0)
             self.acts.pack_start(grid, False, False, 0)
-            if helper:
-                allc = f'{helper} -Syu'
-            else:
-                allc = 'sudo pacman -Syu'
-            self.acts.pack_start(ra.button(T('Update all'), lambda: self.run(allc), 'nbtn accent', '\U000f0162'),
-                                 False, False, 0)
+            # official: the themed progress window; AUR after it, in a terminal
+            allx = ['--aur'] if helper and n_aur else []
+            self.acts.pack_start(ra.button(T('Update all'), lambda: self.progress(allx), 'nbtn accent',
+                                           '\U000f0162'), False, False, 0)
             row = Gtk.Box(spacing=8, homogeneous=True)
-            row.pack_start(ra.button(T('Official only'), lambda: self.run('sudo pacman -Syu'), 'nbtn'),
+            row.pack_start(ra.button(T('Official only'), lambda: self.progress([]), 'nbtn'),
                            True, True, 0)
             aurb = ra.button(T('AUR only'), lambda: self.run(f'{helper} -Sua'), 'nbtn')
             aurb.set_sensitive(bool(helper and n_aur))
@@ -366,6 +365,11 @@ def window():
                 self.detail.set_no_show_all(False)
                 self.detail.show_all()
             ra.run_bg(read, done)
+
+        def progress(self, extra):
+            subprocess.Popen([os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), 'UpdateProgress'),
+                              *extra], start_new_session=True)
+            self.destroy()
 
         def run(self, command):
             # at the end: check again (the pacman hook does it too)

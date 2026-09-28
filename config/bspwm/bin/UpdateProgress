@@ -1,0 +1,528 @@
+#!/usr/bin/env python3
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# UpdateProgress - the system upgrade (pacman -Syu) as a themed progress
+# window instead of a terminal:
+#   ✔ asks the password in its own field; it goes to sudo through stdin
+#     (never a command line, never a file), checked before starting
+#   ✔ phases: sync, download, verify, install, hooks, with the package
+#     being installed and a counter
+#   ✔ real progress: the download against pacman's "Total Download Size"
+#     (the package cache growing), the install from pacman.log (one
+#     "upgraded" line per package), the hooks one by one
+#   ✔ the bar in the theme: its gradient, a light gliding along it and the
+#     theme's own dot riding its end; the theme's effect around the panel
+#   ✔ at the end: summary, restart button when the kernel / drivers /
+#     core libraries changed, the log on demand, AUR next (terminal)
+#   ✔ cancel while syncing / downloading (never while installing)
+#
+#   UpdateProgress              official packages (pacman -Syu)
+#   UpdateProgress --aur        then the AUR updates in a terminal
+#   UpdateProgress --demo       a simulated run, to see it (no sudo)
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+import json
+import math
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import threading
+import time
+
+sys.path.insert(0, os.path.expanduser('~/.config/bspwm/lib'))
+import riceui as ui  # noqa: E402
+import riceapp as ra  # noqa: E402
+from riceui import Gtk, Gdk, GLib, cairo  # noqa: E402
+
+HOME = os.path.expanduser('~')
+LOG = '/var/log/pacman.log'
+CACHE_DIR = '/var/cache/pacman/pkg'
+UPD_CACHE = os.path.join(os.environ.get('XDG_CACHE_HOME', os.path.join(HOME, '.cache')), 'rice-updates.json')
+DEMO = '--demo' in sys.argv
+CRITICAL = re.compile(r'^(linux(-[\w-]+)?|linux-firmware.*|systemd|glibc|mesa|nvidia.*|xorg-server|'
+                      r'(amd|intel)-ucode|grub|mkinitcpio|cachyos-.*kernel.*)$')
+
+T = ra.translator({
+    'System update': 'Actualización del sistema', 'Password': 'Contraseña',
+    'Your password, to install the updates as administrator':
+        'Tu contraseña, para instalar las actualizaciones como administrador',
+    'Update': 'Actualizar', 'Cancel': 'Cancelar', 'Close': 'Cerrar', 'Restart now': 'Reiniciar ahora',
+    'Wrong password': 'Contraseña incorrecta', 'Checking…': 'Comprobando…',
+    'Synchronizing databases': 'Sincronizando bases de datos', 'Resolving dependencies': 'Resolviendo dependencias',
+    'Downloading': 'Descargando', 'Verifying packages': 'Verificando paquetes', 'Installing': 'Instalando',
+    'Running hooks': 'Ejecutando hooks', 'Done': 'Terminado', 'Failed': 'Falló',
+    'System up to date': 'Sistema al día', 'packages updated': 'paquetes actualizados',
+    'Restart to use the new kernel / drivers': 'Reinicia para usar el nuevo kernel / controladores',
+    'Show the log': 'Ver el registro', 'Hide the log': 'Ocultar el registro',
+    'Update AUR (terminal)': 'Actualizar AUR (terminal)', 'Nothing to do': 'Nada que hacer',
+    'Another package manager is running': 'Otro gestor de paquetes está en uso',
+    "Don't turn the computer off": 'No apagues el equipo', 'Cancelled': 'Cancelado',
+    'Open in a terminal': 'Abrir en una terminal', 'of': 'de', 'Demo (simulated)': 'Demostración (simulada)',
+})
+
+
+# ═══════════════════════════════════════════════════════════ the run
+class Run:
+    """pacman -Syu under sudo; feeds events to the window through GLib."""
+
+    def __init__(self, win):
+        self.win = win
+        self.proc = None
+        self.lines = []
+        self.total_dl = 0.0       # bytes pacman will download
+        self.npkgs = 0
+        self.done_pkgs = []
+        self.hooks = 0
+        self.hooks_n = 0
+        self.phase = 'sync'
+        self.cancelled = False
+
+    def emit(self, *a):
+        GLib.idle_add(lambda: (self.win.event(*a), False)[1])
+
+    def start(self, password):
+        threading.Thread(target=self.demo if DEMO else self.real, args=(password,), daemon=True).start()
+
+    # ── the real one
+    def real(self, password):
+        env = {**os.environ, 'LC_ALL': 'C'}
+        self.log_start = os.path.getsize(LOG) if os.path.exists(LOG) else 0
+        self.cache0 = cache_size()
+        pacman = ['pacman', '-Syu', '--noconfirm', '--noprogressbar', '--color', 'never']
+        # sudo -v just cached the credentials: with -n pacman's stdin never sees the
+        # password (a scriptlet could read it); only without a cache (timestamp_timeout=0)
+        cached = subprocess.run(['sudo', '-n', 'true'], capture_output=True).returncode == 0
+        self.proc = subprocess.Popen(['sudo', '-n' if cached else '-S', '-p', '', *pacman],
+                                     stdin=subprocess.DEVNULL if cached else subprocess.PIPE,
+                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env,
+                                     start_new_session=True)
+        if not cached:
+            self.proc.stdin.write(password + '\n')
+            self.proc.stdin.close()
+        password = None
+        threading.Thread(target=self.watch_log, daemon=True).start()
+        for line in self.proc.stdout:
+            self.line(line.rstrip('\n'))
+        rc = self.proc.wait()
+        time.sleep(0.6)
+        self.emit('end', rc)
+
+    def watch_log(self):
+        """pacman.log from where it was: one line per package / hook."""
+        pos = self.log_start
+        while self.proc and self.proc.poll() is None:
+            try:
+                with open(LOG, errors='replace') as f:
+                    f.seek(pos)
+                    chunk = f.read()
+                    pos = f.tell()
+            except OSError:
+                chunk = ''
+            for line in chunk.splitlines():
+                self.log_line(line)
+            if self.phase == 'download' and self.total_dl:
+                self.emit('download', max(0, cache_size() - self.cache0) / self.total_dl)
+            time.sleep(0.4)
+
+    def log_line(self, line):
+        m = re.search(r'\[ALPM\] (upgraded|installed|reinstalled|downgraded|removed) (\S+)', line)
+        if m:
+            self.done_pkgs.append(m.group(2))
+            if self.phase not in ('install', 'hooks'):
+                self.set_phase('install')
+            self.emit('pkg', m.group(1), m.group(2), len(self.done_pkgs), self.npkgs)
+        m = re.search(r"\[ALPM\] running '(.+?)'", line)
+        if m and self.phase == 'install' and self.npkgs and len(self.done_pkgs) >= self.npkgs:
+            self.set_phase('hooks')
+        if m and self.phase == 'hooks' and not self.hooks_n:   # pacman's own (i/N) is better
+            self.hooks += 1
+            self.emit('hook', m.group(1), self.hooks)
+
+    def line(self, line):
+        self.lines.append(line)
+        self.emit('line', line)
+        low = line.lower()
+        if 'synchronizing package databases' in low:
+            self.set_phase('sync')
+        elif 'starting full system upgrade' in low or 'resolving dependencies' in low:
+            self.set_phase('resolve')
+        elif re.match(r'^Packages \((\d+)\)', line):
+            self.npkgs = int(re.match(r'^Packages \((\d+)\)', line).group(1))
+        elif line.startswith('Total Download Size:'):
+            self.total_dl = to_bytes(line.split(':', 1)[1])
+        elif 'retrieving packages' in low:
+            self.set_phase('download')
+        elif 'checking keyring' in low or 'checking package integrity' in low or 'loading package files' in low:
+            self.set_phase('verify')
+        elif 'processing package changes' in low:
+            self.set_phase('install')
+        elif 'running post-transaction hooks' in low:
+            self.set_phase('hooks')
+        elif self.phase == 'hooks' and re.match(r'^\((\d+)/(\d+)\) ', line):
+            i, n = map(int, re.match(r'^\((\d+)/(\d+)\) ', line).groups())
+            self.hooks_n = n
+            self.emit('hook', line.split(') ', 1)[1].rstrip('.'), i)
+        elif 'there is nothing to do' in low:
+            self.emit('nothing')
+        elif 'unable to lock database' in low:
+            self.emit('locked')
+
+    def set_phase(self, p):
+        if p != self.phase:
+            self.phase = p
+            self.emit('phase', p)
+
+    def cancel(self):
+        if self.proc and self.phase in ('sync', 'resolve', 'download') and self.proc.poll() is None:
+            self.cancelled = True
+            try:   # sudo forwards it to pacman, which stops cleanly before the transaction
+                os.killpg(self.proc.pid, signal.SIGINT)
+            except OSError:
+                pass
+            return True
+        return False
+
+    # ── the demo
+    def demo(self, _password):
+        try:
+            pkgs = [p['name'] for p in json.load(open(UPD_CACHE)).get('official', [])][:24]
+        except (OSError, ValueError):
+            pkgs = []
+        pkgs = pkgs or ['bash', 'linux-cachyos', 'mesa', 'python', 'firefox', 'systemd', 'glibc', 'git']
+        self.npkgs = len(pkgs)
+        seq = [':: Synchronizing package databases...', ' core downloading...', ' extra downloading...',
+               ':: Starting full system upgrade...', 'resolving dependencies...',
+               'looking for conflicting packages...', f'Packages ({len(pkgs)}) ' + ' '.join(pkgs),
+               'Total Download Size:   312.40 MiB', ':: Retrieving packages...']
+        for ln in seq:
+            self.line(ln)
+            time.sleep(0.35)
+        for i in range(41):
+            if self.cancelled:
+                self.emit('end', 130)
+                return
+            self.emit('download', i / 40)
+            time.sleep(0.12)
+        for ln in ('checking keyring...', 'checking package integrity...', 'loading package files...',
+                   'checking for file conflicts...', ':: Processing package changes...'):
+            self.line(ln)
+            time.sleep(0.3)
+        for p in pkgs:
+            self.log_line(f'[ALPM] upgraded {p} (1.0 -> 1.1)')
+            self.line(f'upgrading {p}...')
+            time.sleep(0.35)
+        self.line(':: Running post-transaction hooks...')
+        self.hooks_n = 4
+        for h in ('Arming ConditionNeedsUpdate...', 'Updating linux initcpios...', 'Updating icon theme caches...',
+                  'Updating the desktop file MIME type cache...'):
+            self.set_phase('hooks')
+            self.hooks += 1
+            self.emit('hook', h, self.hooks)
+            self.line(h)
+            time.sleep(0.5)
+        self.done_pkgs = pkgs
+        self.emit('end', 0)
+
+
+def to_bytes(s):
+    m = re.search(r'([\d.]+)\s*([KMGT]?i?B)', s)
+    if not m:
+        return 0
+    return float(m.group(1)) * {'B': 1, 'KiB': 1024, 'MiB': 1024 ** 2, 'GiB': 1024 ** 3,
+                                'TiB': 1024 ** 4}.get(m.group(2), 1)
+
+
+def cache_size():
+    total = 0
+    for root, _d, files in os.walk(CACHE_DIR):
+        for f in files:
+            try:
+                total += os.lstat(os.path.join(root, f)).st_size
+            except OSError:
+                pass
+    return total
+
+
+# ═══════════════════════════════════════════════════════════ the bar
+class Bar(Gtk.DrawingArea):
+    """The progress in the theme: track, gradient fill, a light gliding
+    along it, the theme's dot riding the end; a sweep when indeterminate."""
+
+    def __init__(self, win):
+        super().__init__()
+        self.win = win
+        self.frac = 0.0
+        self.shown = 0.0
+        self.indeterminate = False
+        self.set_size_request(-1, 44)
+        self.connect('draw', self.on_draw)
+        self.t0 = time.monotonic()
+        GLib.timeout_add(33, self.tick)
+
+    def tick(self):
+        self.shown += (self.frac - self.shown) * 0.18   # eased
+        self.queue_draw()
+        return True
+
+    def on_draw(self, _w, cr):
+        W = self.get_allocated_width()
+        H = self.get_allocated_height()
+        t = time.monotonic() - self.t0
+        x, y, w, h = 14, H / 2 - 6, W - 28, 12
+        style = self.win.style
+        ui.level_bar(cr, style, x, y, w, h, 0 if self.indeterminate else self.shown, self.win.pal)
+        acc = self.win.acc
+        cr.save()
+        ui.rounded(cr, x, y, w, h, h / 2)
+        cr.clip()
+        if self.indeterminate:   # a comet sweeping the track
+            u = (t % 1.6) / 1.6
+            cx = x - w * 0.25 + u * w * 1.5
+            g = cairo.LinearGradient(cx - w * 0.2, 0, cx + w * 0.05, 0)
+            g.add_color_stop_rgba(0, *acc, 0)
+            g.add_color_stop_rgba(1, *acc, 0.9)
+            cr.set_source(g)
+            cr.rectangle(cx - w * 0.2, y, w * 0.25, h)
+            cr.fill()
+        elif self.shown > 0.01:   # a light gliding along the filled part
+            fw = w * self.shown
+            u = (t % 2.2) / 2.2
+            cx = x + u * (fw + 60) - 30
+            g = cairo.LinearGradient(cx - 30, 0, cx + 30, 0)
+            g.add_color_stop_rgba(0, 1, 1, 1, 0)
+            g.add_color_stop_rgba(0.5, 1, 1, 1, 0.45)
+            g.add_color_stop_rgba(1, 1, 1, 1, 0)
+            cr.set_source(g)
+            cr.rectangle(x, y, fw, h)
+            cr.fill()
+        cr.restore()
+        return True
+
+
+# ═══════════════════════════════════════════════════════════ the window
+PHASES = [('sync', 'Synchronizing databases', 0.00, 0.05), ('resolve', 'Resolving dependencies', 0.05, 0.08),
+          ('download', 'Downloading', 0.08, 0.48), ('verify', 'Verifying packages', 0.48, 0.55),
+          ('install', 'Installing', 0.55, 0.93), ('hooks', 'Running hooks', 0.93, 1.0)]
+SPAN = {k: (a, b) for k, _t, a, b in PHASES}
+
+
+class UpdateProgress(ra.CenterWindow):
+    def __init__(self):
+        super().__init__('UpdateProgress', T('System update'), '\U000f0162', (760, 520))
+        if DEMO:
+            self.subtitle.set_text(T('Demo (simulated)'))
+        self.run = None
+        self.critical = False
+        self.col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        self.body.pack_start(self.col, True, True, 0)
+        self.anim = ui.panel_anim(self, style=self.style)
+        self.ask_password()
+
+    # ── step 1: the password
+    def ask_password(self, error=''):
+        ra.clear(self.col)
+        card = ra.section(T('Password'), '\U000f033e')
+        card.pack_start(ra.label(T('Your password, to install the updates as administrator'), 'sub', wrap=True),
+                        False, False, 0)
+        self.pw = Gtk.Entry()
+        self.pw.set_visibility(False)
+        self.pw.set_input_purpose(Gtk.InputPurpose.PASSWORD)
+        self.pw.connect('activate', lambda *_: self.check_password())
+        card.pack_start(self.pw, False, False, 0)
+        if error:
+            card.pack_start(ra.label(error, 'chip bad'), False, False, 0)
+        row = Gtk.Box(spacing=10)
+        row.pack_start(ra.button(T('Update'), self.check_password, 'nbtn accent', '\U000f0162'), False, False, 0)
+        row.pack_start(ra.button(T('Cancel'), self.destroy, 'nbtn'), False, False, 0)
+        card.pack_start(row, False, False, 0)
+        self.col.pack_start(card, False, False, 0)
+        self.col.show_all()
+        GLib.idle_add(self.pw.grab_focus)
+
+    def check_password(self):
+        pw = self.pw.get_text()
+        self.pw.set_text('')
+        if DEMO:
+            return self.start(pw)
+        self.say(T('Checking…'))
+
+        def work():
+            p = subprocess.run(['sudo', '-S', '-k', '-v', '-p', ''], input=pw + '\n', capture_output=True, text=True)
+            return p.returncode
+
+        def done(rc):
+            self.say('')
+            if rc == 0:
+                self.start(pw)
+            else:
+                self.ask_password(T('Wrong password'))
+        ra.run_bg(work, done)
+
+    # ── step 2: the progress
+    def start(self, pw):
+        ra.clear(self.col)
+        self.phase_l = ra.label(T('Synchronizing databases'), 'title')
+        self.col.pack_start(self.phase_l, False, False, 0)
+        self.what = ra.label('', 'sub', ellipsize=True)
+        self.col.pack_start(self.what, False, False, 0)
+        self.bar = Bar(self)
+        self.col.pack_start(self.bar, False, False, 0)
+        row = Gtk.Box(spacing=10)
+        self.pct = ra.label('0%', 'big')
+        row.pack_start(self.pct, False, False, 0)
+        self.count = ra.label('', 'val')
+        self.count.set_valign(Gtk.Align.CENTER)
+        row.pack_start(self.count, True, True, 0)
+        self.warn = ra.label("\U000f0026  " + T("Don't turn the computer off"), 'chip mid')
+        self.warn.set_valign(Gtk.Align.CENTER)
+        row.pack_start(self.warn, False, False, 0)
+        self.cancel_b = ra.button(T('Cancel'), self.cancel, 'nbtn danger')
+        row.pack_start(self.cancel_b, False, False, 0)
+        self.col.pack_start(row, False, False, 0)
+        self.logbuf = Gtk.TextBuffer()
+        tv = Gtk.TextView(buffer=self.logbuf, editable=False, cursor_visible=False)
+        tv.get_style_context().add_class('mono')
+        tv.set_wrap_mode(Gtk.WrapMode.CHAR)
+        self.logview = self.scroller(tv)
+        self.logview.set_size_request(-1, 160)
+        self.logview.set_no_show_all(True)
+        self.tv = tv
+        self.log_b = ra.button(T('Show the log'), self.toggle_log, 'nbtn', '\U000f09ed')
+        self.log_b.set_halign(Gtk.Align.START)
+        self.col.pack_start(self.log_b, False, False, 0)
+        self.col.pack_start(self.logview, True, True, 0)
+        self.end_row = Gtk.Box(spacing=10)
+        self.col.pack_start(self.end_row, False, False, 0)
+        self.col.show_all()
+        self.run = Run(self)
+        self.run.start(pw)
+
+    def toggle_log(self):
+        vis = not self.logview.get_visible()
+        self.logview.set_no_show_all(False)
+        self.logview.set_visible(vis)
+        self.tv.set_visible(vis)
+        self.log_b.get_children()[0].get_children()[-1].set_text(T('Hide the log') if vis else T('Show the log'))
+
+    def progress(self, phase, inner):
+        a, b = SPAN.get(phase, (0, 1))
+        f = a + (b - a) * max(0.0, min(1.0, inner))
+        if f >= self.bar.frac:
+            self.bar.frac = f
+        self.pct.set_text(f'{round(self.bar.frac * 100)}%')
+
+    def event(self, kind, *a):
+        if kind == 'line':
+            self.logbuf.insert(self.logbuf.get_end_iter(), a[0] + '\n')
+            if self.tv.get_visible():
+                self.tv.scroll_to_iter(self.logbuf.get_end_iter(), 0, False, 0, 0)
+        elif kind == 'phase':
+            name = dict((k, t) for k, t, _a, _b in PHASES).get(a[0], a[0])
+            self.phase_l.set_text(T(name))
+            self.bar.indeterminate = a[0] in ('sync', 'resolve', 'verify')
+            self.progress(a[0], 0)
+            if a[0] in ('verify', 'install', 'hooks'):
+                self.cancel_b.set_sensitive(False)
+        elif kind == 'download':
+            self.bar.indeterminate = False
+            self.progress('download', a[0])
+            total = self.run.total_dl
+            if total:
+                self.what.set_text(f'{a[0] * total / 1024 ** 2:.1f} {T("of")} {total / 1024 ** 2:.1f} MiB')
+        elif kind == 'pkg':
+            verb, name, i, n = a
+            self.bar.indeterminate = False
+            self.what.set_text(f'{verb}  {name}')
+            if n:
+                self.count.set_text(f'{i} / {n}')
+                self.progress('install', i / n)
+            if CRITICAL.match(name):
+                self.critical = True
+        elif kind == 'hook':
+            self.what.set_text(a[0])
+            self.bar.indeterminate = False
+            self.progress('hooks', min(1.0, a[1] / (self.run.hooks_n or 12)))
+        elif kind == 'nothing':
+            self.what.set_text(T('Nothing to do'))
+        elif kind == 'locked':
+            self.what.set_text(T('Another package manager is running'))
+        elif kind == 'end':
+            self.finish(a[0])
+
+    def finish(self, rc):
+        self.bar.indeterminate = False
+        self.cancel_b.hide()
+        self.warn.hide()
+        n = len(self.run.done_pkgs)
+        if rc == 0:
+            self.bar.frac = 1.0
+            self.pct.set_text('100%')
+            self.phase_l.set_text(T('System up to date'))
+            self.what.set_text(f'{n} {T("packages updated")}' if n else T('Nothing to do'))
+        elif self.run.cancelled:
+            self.phase_l.set_text(T('Cancelled'))
+        else:
+            self.phase_l.set_text(T('Failed'))
+            last = [ln for ln in self.run.lines if ln.strip()][-2:]
+            self.what.set_text('  '.join(last))
+            if not self.logview.get_visible():
+                self.toggle_log()
+        ra.clear(self.end_row)
+        if self.critical and rc == 0:
+            self.end_row.pack_start(ra.label('\U000f110c  ' + T('Restart to use the new kernel / drivers'),
+                                             'chip mid'), False, False, 0)
+            self.end_row.pack_start(ra.button(T('Restart now'), lambda: subprocess.Popen(['systemctl', 'reboot']),
+                                              'nbtn accent', '\U000f0709'), False, False, 0)
+        if rc not in (0, 130) and not self.run.cancelled:
+            self.end_row.pack_start(ra.button(T('Open in a terminal'),
+                                              lambda: (ra.terminal('sudo pacman -Syu', T('System update')),
+                                                       self.destroy()), 'nbtn'), False, False, 0)
+        if '--aur' in sys.argv and rc == 0:
+            try:
+                helper = json.load(open(UPD_CACHE)).get('helper')
+            except (OSError, ValueError):
+                helper = None
+            if helper:
+                self.end_row.pack_start(ra.button(T('Update AUR (terminal)'),
+                                                  lambda: (ra.terminal(f'{helper} -Sua', 'AUR'), self.destroy()),
+                                                  'nbtn accent'), False, False, 0)
+        self.end_row.pack_start(Gtk.Box(), True, True, 0)
+        self.end_row.pack_start(ra.button(T('Close'), self.destroy, 'nbtn'), False, False, 0)
+        self.end_row.show_all()
+        if not DEMO:   # the bar and the center see the new state
+            subprocess.Popen([os.path.join(HOME, '.config/bspwm/bin/UpdateCenter'), '--check'],
+                             start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def cancel(self):
+        if self.run and self.run.cancel():
+            self.cancel_b.set_sensitive(False)
+        elif DEMO and self.run:
+            self.run.cancelled = True
+
+    def on_key(self, w, ev):
+        if Gdk.keyval_name(ev.keyval) == 'Escape' and self.run and self.run.proc and self.run.proc.poll() is None:
+            return True   # never close while pacman runs
+        return super().on_key(w, ev)
+
+
+def main():
+    _lock = ui.single_instance('updateprogress')  # noqa: F841
+    GLib.set_prgname('UpdateProgress')
+    ra.float_rule('UpdateProgress')
+    w = UpdateProgress()
+    w.connect('delete-event', lambda *_: bool(w.run and w.run.proc and w.run.proc.poll() is None))
+    ui.quit_on_sigterm(w.destroy)
+    w.show_all()
+    Gtk.main()
+
+
+if __name__ == '__main__':
+    main()
