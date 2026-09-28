@@ -737,6 +737,34 @@ GLOW = {'glass': 0.35, 'cyber': 0.5, 'liquid': 0.3, 'hud': 0.45,
         'fire': 0.5, 'nature': 0.45, 'minimal': 0.12, 'pixel': 0}
 
 
+class soft_edges:
+    """with soft_edges(cr, h, top, bottom): what is drawn inside fades out
+    over the last `top` / `bottom` px of a window h px tall. Glows and
+    ornaments that reach past the widget's window then melt away instead
+    of ending on a hard straight line (the bar and the pill have no room
+    to grow: the windows start right under them)."""
+
+    def __init__(self, cr, h, top=0, bottom=0):
+        self.cr, self.h, self.top, self.bottom = cr, max(1, h), top, bottom
+
+    def __enter__(self):
+        self.cr.push_group()
+        return self
+
+    def __exit__(self, *exc):
+        cr, h = self.cr, self.h
+        cr.pop_group_to_source()
+        g = cairo.LinearGradient(0, 0, 0, h)
+        g.add_color_stop_rgba(0, 0, 0, 0, 0 if self.top else 1)
+        if self.top:
+            g.add_color_stop_rgba(min(0.5, self.top / h), 0, 0, 0, 1)
+        if self.bottom:
+            g.add_color_stop_rgba(max(0.5, 1 - self.bottom / h), 0, 0, 0, 1)
+        g.add_color_stop_rgba(1, 0, 0, 0, 0 if self.bottom else 1)
+        cr.mask(g)
+        return False
+
+
 # styles that draw their icons themselves: fn(cr, kind, x, y, s, rgb)
 ICON_PAINTERS = {}
 

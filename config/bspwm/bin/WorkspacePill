@@ -133,7 +133,12 @@ def main():
                 mx = bc.margin(conf)
                 rects = [(mx, y, geo.width - 2 * mx, H)]
             shape = {'cyber': 'chamfer', 'strip': 'square'}.get(bar_style, 'capsule')
-            with wspill.tinted(skin, wspill.tint_target('bar')), wspill.bar_shape(shape):
+            top_bar = conf['position'] != 'bottom'
+            # glows and ornaments past the window fade out on the side facing
+            # the windows (no hard line under the bar)
+            edge = 4 if bar_style == 'strip' else 8   # the strip's neon line sits right at its edge
+            fade = wspill.soft_edges(cr, skin_h, top=0 if top_bar else edge, bottom=edge if top_bar else 0)
+            with fade, wspill.tinted(skin, wspill.tint_target('bar')), wspill.bar_shape(shape):
                 for r in rects:
                     wspill.paint_bar(cr, skin, geo.width, r)
                 if bar_style == 'strip':   # the strip's neon line along its inner edge
@@ -236,8 +241,10 @@ def main():
         cr.paint()
         cr.set_operator(cairo.OPERATOR_OVER)
         if has_pill and st['m'] and st['desks']:
-            with wspill.tinted(style, wspill.tint_target('workspaces')):
-                wspill.paint(cr, style, st['m'], [d[1] for d in st['desks']])
+            m = st['m']
+            with wspill.soft_edges(cr, m['win_h'], top=m['ext'], bottom=m['ext']), \
+                    wspill.tinted(style, wspill.tint_target('workspaces')):
+                wspill.paint(cr, style, m, [d[1] for d in st['desks']])
         return True
 
     def on_press(_w, ev):
