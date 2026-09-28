@@ -182,6 +182,11 @@ def main():
         wscard = None
     _lock = ui.single_instance('roundborders')  # noqa: F841  writes LOCK
     GLib.set_prgname('RoundBorders')
+    # X errors on other programs' windows are expected: a window can close
+    # between an event and our restack/shape of it (BadWindow). GDK aborts
+    # the program on an untrapped X error, and then every frame / texture
+    # vanished at once: this trap, never popped, ignores them.
+    Gdk.Display.get_default().error_trap_push()
 
     st = {'conf': None, 'rings': {}, 'backs': {}, 'back_want': {}, 'timer': None, 'raise': set(),
           'shaped': {}, 'on_screen': set(), 'rects': {}, 'tiled': set(), 'tiled_top': None}

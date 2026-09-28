@@ -89,6 +89,11 @@ def main():
         return
 
     GLib.set_prgname('WorkspacePill')
+    # X errors on other programs' windows are expected: a window can close
+    # between an event and our read of it (polybar restarting) (BadWindow). GDK aborts
+    # the program on an untrapped X error, and then every frame / texture
+    # vanished at once: this trap, never popped, ignores them.
+    Gdk.Display.get_default().error_trap_push()
     display = Gdk.Display.get_default()
     mon = display.get_primary_monitor() or display.get_monitor(0)
     geo = mon.get_geometry()
