@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# ClipMenu - the clipboard history (clipcat), in the theme's panel.
+# super + alt + c
+#
+#   ✔ Each clip with its kind: link, file path, color (with a swatch),
+#     code, email, number, image, text - and its size when long
+#   ✔ Enter: copy it again · Alt+v: view it whole · Alt+d: delete it
+#   ✔ Alt+x: clear the whole history (asks) · Alt+p: pause / resume the
+#     history (the clips you copy while paused are not kept)
+#   ✔ Clips that look like secrets (private keys, tokens) are hidden as
+#     •••• until viewed, and flagged
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+import os
+import re
+import subprocess
+import sys
+
+HOME = os.path.expanduser('~')
+BSPWM = os.path.join(HOME, '.config/bspwm')
+THEME = os.path.join(BSPWM, 'config/rofi-themes/Clipboard.rasi')
+
+SECRET = re.compile(r'-----BEGIN [A-Z ]*PRIVATE KEY-----|\bAKIA[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9]{30,}|'
+                    r'\bxox[baprs]-[A-Za-z0-9-]{10,}|\bsk-[A-Za-z0-9_-]{20,}|\beyJ[A-Za-z0-9_-]{10,}\.eyJ')
+
+
+def es():
+    try:
+        sys.path.insert(0, os.path.join(BSPWM, 'lib'))
+        import ricelang
+        return ricelang.get_lang() == 'es'
+    except Exception:
+        return True
+
+
+ES = es()
+TR = {'Clipboard': 'Portapapeles', 'clips': 'elementos', 'paused': 'en pausa',
+      'Enter copy · Alt+v view · Alt+d delete · Alt+x clear all · Alt+p pause':
+          'Enter copiar · Alt+v ver · Alt+d borrar · Alt+x vaciar · Alt+p pausar',
+      'The history is empty': 'El historial está vacío', 'Clear the whole history?': '¿Vaciar todo el historial?',
+      'Yes, clear it': 'Sí, vaciar', 'Cancel': 'Cancelar', 'Copied': 'Copiado', 'Deleted': 'Borrado',
+      'History cleared': 'Historial vaciado', 'History paused: new copies are not kept':
+          'Historial en pausa: lo que copies no se guarda', 'History resumed': 'Historial reanudado',
+      'secret?': '¿secreto?', 'lines': 'líneas', 'chars': 'caracteres'}
+
+
+def T(s):
+    return TR.get(s, s) if ES else s
+
+
+def cc(*args, input_=None):
+    try:
+        return subprocess.run(['clipcatctl', *args], capture_output=True, text=True, timeout=5,
+                              input=input_).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return ''
+
+
+def notify(title, body=''):
+    subprocess.Popen(['dunstify', '-a', 'ClipMenu', '-i', 'edit-paste', '-h', 'string:x-dunst-stack-tag:clipmenu',
+                      title, body], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def kind(text):
+    t = text.strip()
+    if SECRET.search(t):
+        return '\U000f0bc5', 'secret'
+    if re.fullmatch(r'https?://\S+', t):
+        return '\U000f0339', 'link'
+    if re.fullmatch(r'[\w.+-]+@[\w-]+\.[\w.]+', t):
+        return '\U000f01ee', 'email'
+    if re.fullmatch(r'#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|#[0-9a-fA-F]{3}', t):
+        return '\U000f03d8', 'color'
+    if re.fullmatch(r'(~|/)[^\n]*', t) and '  ' not in t:
+        return '\U000f0214', 'path'
+    if re.fullmatch(r'[-+]?[\d.,]+', t):
+        return '\U000f03a0', 'number'
+    if '\n' in t and re.search(r'[{};]|^\s*(def|class|import|function|for|if)\b|=>', t, re.M):
+        return '\U000f0169', 'code'
+    if text.startswith('\x89PNG') or text.lower().startswith('image'):
+        return '\U000f0976', 'image'
+    return '\U000f09ed', 'text'
+
+
+def row(cid, text):
+    glyph, k = kind(text)
+    one = re.sub(r'\s+', ' ', text).strip()
+    if k == 'secret':
+        one = '•' * 16 + f'   ⟨{T("secret?")}⟩'
+    elif len(one) > 90:
+        one = one[:88] + '…'
+    extra = ''
+    n = text.rstrip('\n').count('\n') + 1
+    if n > 1:
+        extra = f'   ⟨{n} {T("lines")}⟩'
+    elif len(text) > 90:
+        extra = f'   ⟨{len(text)} {T("chars")}⟩'
+    if k == 'color':
+        sw = text.strip()
+        one = f'<span foreground="{sw}">██</span>  {sw}'
+        return f'{glyph}  {one}'
+    esc = one.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    return f'{glyph}  {esc}<span alpha="55%">{extra}</span>'
+
+
+def rofi(rows, mesg, selected=0):
+    args = ['rofi', '-dmenu', '-i', '-markup-rows', '-format', 'i', '-selected-row', str(selected),
+            '-p', T('Clipboard'), '-mesg', mesg, '-theme', THEME, '-no-custom',
+            '-kb-custom-1', 'Alt+d', '-kb-custom-2', 'Alt+x', '-kb-custom-3', 'Alt+p', '-kb-custom-4', 'Alt+v']
+    r = subprocess.run(args, input='\n'.join(rows), capture_output=True, text=True)
+    idx = r.stdout.strip()
+    return r.returncode, int(idx) if idx.lstrip('-').isdigit() else -1
+
+
+def confirm(prompt, yes):
+    r = subprocess.run(['rofi', '-dmenu', '-i', '-no-custom', '-p', prompt, '-theme', THEME, '-l', '2'],
+                       input=f'{T("Cancel")}\n{yes}', capture_output=True, text=True)
+    return r.stdout.strip() == yes
+
+
+def view(text, glyph):
+    subprocess.run(['rofi', '-dmenu', '-p', T('Clipboard'), '-theme', THEME, '-l', '0',
+                    '-mesg', text[:3000].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')],
+                   input='', capture_output=True)
+
+
+def main():
+    selected = 0
+    while True:
+        items = []
+        for line in cc('list').splitlines():
+            cid, _, _preview = line.partition(': ')
+            if cid:   # clipcatctl get escapes newlines / tabs and adds one at the end
+                raw = cc('get', cid)
+                raw = raw[:-1] if raw.endswith('\n') else raw
+                items.append((cid, raw.replace('\\n', '\n').replace('\\t', '\t')))
+        watching = 'not watching' not in cc('get-watcher-state')
+        state = '' if watching else f'  ·  \U000f03e4 {T("paused")}'
+        mesg = (f'{len(items)} {T("clips")}{state}\n'
+                f'<span alpha="60%">{T("Enter copy · Alt+v view · Alt+d delete · Alt+x clear all · Alt+p pause")}</span>')
+        rows = [row(cid, text) for cid, text in items] or [f'\U000f0791  {T("The history is empty")}']
+        rc, i = rofi(rows, mesg, min(selected, max(0, len(rows) - 1)))
+        if rc == 1 or (i < 0 and rc not in (12,)):
+            return
+        cid, text = items[i] if 0 <= i < len(items) else (None, None)
+        if rc == 0 and cid:
+            cc('promote', cid)
+            notify(T('Copied'), '' if kind(text)[1] == 'secret' else re.sub(r'\s+', ' ', text)[:80])
+            return
+        if rc == 10 and cid:          # Alt+d
+            cc('remove', cid)
+            selected = i
+        elif rc == 11:                # Alt+x
+            if confirm(T('Clear the whole history?'), T('Yes, clear it')):
+                cc('clear')
+                notify(T('History cleared'))
+        elif rc == 12:                # Alt+p
+            cc('disable-watcher' if watching else 'enable-watcher')
+            notify(T('History paused: new copies are not kept') if watching else T('History resumed'))
+            selected = max(0, i)
+        elif rc == 13 and cid:        # Alt+v
+            view(text, kind(text)[0])
+            selected = i
+        else:
+            return
+
+
+if __name__ == '__main__':
+    main()
