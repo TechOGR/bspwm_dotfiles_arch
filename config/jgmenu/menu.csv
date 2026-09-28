@@ -17,34 +17,34 @@
 @rect,,14,50,38,2,1,left,top,{cyan} 100,{cyan} 100,
 @rect,,56,50,14,2,1,left,top,{magenta} 100,{magenta} 100,
 @rect,,74,50,6,2,1,left,top,{blue} 100,{blue} 100,
-@rect,,84,50,172,2,1,left,top,{blackb} 45,{blackb} 45,
+@rect,,84,50,172,2,1,left,top,{fg} 18,{fg} 18,
 
-^sep(<span foreground="{blackb}">//</span> LAUNCH <span foreground="{blackb}">· {rice}</span>)
+^sep(<span foreground="{fg}" fgalpha="50%">//</span> LAUNCH <span foreground="{fg}" fgalpha="50%">· {rice}</span>)
 <span foreground="{cyan}">󰆍</span>   Terminal,OpenApps --floating
 <span foreground="{blue}">󰖟</span>   Web Browser,brave
 <span foreground="{yellow}">󰉋</span>   File Manager,env GTK_THEME=Adwaita:dark thunar
 <span foreground="{blue}">󰨞</span>   VS Code,code
 <span foreground="{magenta}">󰀻</span>   Applications,OpenApps --menu
-<span foreground="{blackb}">󰕰</span>   All apps,^checkout(lx-apps)
+<span foreground="{fg}" fgalpha="50%">󰕰</span>   All apps,^checkout(lx-apps)
 
-^sep(<span foreground="{blackb}">//</span> RICE)
+^sep(<span foreground="{fg}" fgalpha="50%">//</span> RICE)
 <span foreground="{magenta}">󰏘</span>   Rice Editor,RiceEditor
 <span foreground="{cyan}">󰸉</span>   Wallpapers,WallSelect
 <span foreground="{green}">󰌌</span>   Keybinds,OpenApps --KeyHelp
 <span foreground="{blue}">󰕮</span>   Widgets,^checkout(wg)
 <span foreground="{blue}">󰖲</span>   BSPWM,^checkout(wm)
 
-^sep(<span foreground="{blackb}">//</span> SESSION)
+^sep(<span foreground="{fg}" fgalpha="50%">//</span> SESSION)
 <span foreground="{yellow}">󰌾</span>   Lock screen,ScreenLocker -r
 <span foreground="{red}">󰐥</span>   Power,^checkout(exit)
 
 ^tag(wg)
-^sep(<span foreground="{blackb}">//</span> WIDGETS)
+^sep(<span foreground="{fg}" fgalpha="50%">//</span> WIDGETS)
 <span foreground="{cyan}">󰀄</span>   User Card,OpenApps --usercard
 <span foreground="{magenta}">󰎈</span>   Music Player,OpenApps --player
 
 ^tag(wm)
-^sep(<span foreground="{blackb}">//</span> BSPWM)
+^sep(<span foreground="{fg}" fgalpha="50%">//</span> BSPWM)
 <span foreground="{magenta}">󰏘</span>   Rice Editor,RiceEditor
 <span foreground="{green}">󰌌</span>   Keybinds,OpenApps --KeyHelp
 <span foreground="{cyan}">󰑓</span>   Soft Reload,SoftReload
@@ -52,7 +52,7 @@
 <span foreground="{red}">󰍃</span>   Logout,bspc quit
 
 ^tag(exit)
-^sep(<span foreground="{blackb}">//</span> POWER)
+^sep(<span foreground="{fg}" fgalpha="50%">//</span> POWER)
 <span foreground="{yellow}">󰌾</span>   Lock,ScreenLocker -r
 <span foreground="{blue}">󰜉</span>   Reboot,systemctl reboot
 <span foreground="{red}">󰐥</span>   Shut down,systemctl poweroff

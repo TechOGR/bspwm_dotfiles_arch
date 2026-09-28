@@ -11,6 +11,9 @@ PERF=$("$HOME"/.config/bspwm/bin/PerfProfile)
 if [ "$PERF" = lite ]; then
     P_BLUR=false
     P_ANIMATIONS="#"
+    # xrender can't scale a window: the zoom of the menus' open animation
+    # (jgmenu, launcher, key help) drew them shrunk and tiled. Fade only.
+    P_SCALE=1
 fi
 
 # Windows in a theme frame (WIN_SKIN): no size / position / scale
@@ -38,6 +41,7 @@ sed -i "$HOME/.config/bspwm/config/picom/picom-rules.conf" \
     -e "/#-shadow-switch/s/.*#-/\t\tshadow = ${P_SHADOWS};\t#-/" \
     -e "/#-fade-switch/s/.*#-/\t\tfade = ${P_FADE};\t#-/" \
     -e "/#-blur-switch/s/.*#-/\t\tblur-background = ${P_BLUR};\t#-/" \
+    -e "s/scale = [0-9.]*;\t#-scale \([0-9.]*\)/scale = ${P_SCALE:-\1};\t#-scale \1/" \
     -e "/picom-animations/c\\        ${P_ANIMATIONS}include \"${P_ANIM_FILE}\"" \
     -e "/#-active-opacity/s/.*#-/\t\topacity = ${P_ACTIVE_OPACITY:-0.97};\t#-/" \
     -e "/#-inactive-opacity/s/.*#-/\t\topacity = ${P_INACTIVE_OPACITY:-0.92};\t#-/"
