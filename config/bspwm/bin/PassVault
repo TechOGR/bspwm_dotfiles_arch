@@ -80,7 +80,10 @@ TR = {
     'No OTP in this entry (or pass-otp missing)': 'Sin OTP en esta entrada (o falta pass-otp)',
     'pass is not installed': 'pass no está instalado', 'Install it (terminal)': 'Instalarlo (terminal)',
     'The vault is not set up yet': 'La bóveda aún no está configurada',
-    'Use this GPG key': 'Usar esta clave GPG', 'Create a new GPG key (terminal)': 'Crear una clave GPG nueva (terminal)',
+    'Use this GPG key': 'Usar esta clave GPG', 'Your name': 'Tu nombre', 'Your email': 'Tu correo',
+    'For the new GPG key that locks the vault': 'Para la nueva clave GPG que cierra la bóveda',
+    'A valid email is needed': 'Hace falta un correo válido',
+    'Choose the passphrase that protects the vault': 'Elige la frase de contraseña que protege la bóveda', 'Create a new GPG key (terminal)': 'Crear una clave GPG nueva (terminal)',
     'Vault ready': 'Bóveda lista', 'Could not decrypt (wrong passphrase?)': 'No se pudo descifrar (¿frase de paso incorrecta?)',
     'Generated and copied': 'Generada y copiada', 'Typed': 'Escrita', 'Renamed': 'Renombrada',
     'Deleted': 'Eliminada', 'Synced': 'Sincronizada', 'Failed': 'Falló', 'entries': 'entradas',
@@ -226,6 +229,9 @@ def type_text(*parts):
 
 
 # ═══════════════════════════════════════════════════════════ setup
+AGAIN = f'setsid -f {os.path.abspath(sys.argv[0])} >/dev/null 2>&1'
+
+
 def setup():
     """True when pass and the store are ready (guides through it)."""
     if not shutil.which('pass'):
@@ -233,7 +239,9 @@ def setup():
         if r:
             sys.path.insert(0, os.path.join(BSPWM, 'lib'))
             import riceapp
-            riceapp.terminal('sudo pacman -S --needed pass pass-otp xclip xdotool', 'PassVault')
+            # done: the terminal closes and PassVault comes back at the next step
+            riceapp.terminal(f'sudo pacman -S --needed pass pass-otp xclip xdotool && {{ {AGAIN}; exit; }}',
+                             'PassVault')
         return False
     if os.path.isfile(os.path.join(STORE, '.gpg-id')):
         return True
@@ -254,8 +262,19 @@ def setup():
     if r == T('Create a new GPG key (terminal)'):
         sys.path.insert(0, os.path.join(BSPWM, 'lib'))
         import riceapp
-        riceapp.terminal('gpg --full-generate-key && echo && echo "Now open PassVault again (super+alt+x)."',
-                         'PassVault')
+        # the name and email here; the terminal only asks the key's passphrase
+        # (gpg's pinentry), then pass init with it and PassVault comes back ready
+        name = ask(T('Your name'), T('For the new GPG key that locks the vault'))
+        if name is None:
+            return False
+        email = ask(T('Your email'), T('For the new GPG key that locks the vault'))
+        if not email or not re.fullmatch(r'[^@\s<>]+@[^@\s<>]+', email):
+            notify(T('Failed'), T('A valid email is needed'))
+            return False
+        uid = f'{name.strip() or os.environ.get("USER", "user")} <{email}>'
+        riceapp.terminal(f'export GPG_TTY=$(tty); echo "{T("Choose the passphrase that protects the vault")}"; '
+                         f'gpg --quick-generate-key {shlex_quote(uid)} default default never && '
+                         f'pass init {shlex_quote(email)} && {{ {AGAIN}; exit; }}', 'PassVault')
         return False
     kid = next(k for k, u in keys if r.endswith(f'[{k[-8:]}]'))
     rc, _o, err = pass_('init', kid)
