@@ -163,10 +163,16 @@ alias ll='eza --icons=always --color=always -la'
 #  ├─┤│ │ │ │ │  └─┐ │ ├─┤├┬┘ │
 #  ┴ ┴└─┘ ┴ └─┘  └─┘ ┴ ┴ ┴┴└─ ┴
 # root (sudo -i / su) uses the system-wide copy made by install.sh
-for _cs in "$HOME/.local/bin/colorscript" /usr/local/bin/colorscript; do
-	[[ -x "$_cs" ]] && { "$_cs" -r; break; }
-done
-unset _cs
+# the theme's greeting (emblem + system details, bin/RiceFetch); a random
+# colorscript when it is missing (root: sudo -i / su)
+if [[ -x "$HOME/.config/bspwm/bin/RiceFetch" ]]; then
+	"$HOME/.config/bspwm/bin/RiceFetch"
+else
+	for _cs in "$HOME/.local/bin/colorscript" /usr/local/bin/colorscript; do
+		[[ -x "$_cs" ]] && { "$_cs" -r; break; }
+	done
+	unset _cs
+fi
 #disable-fzf-tab
 
 ############################

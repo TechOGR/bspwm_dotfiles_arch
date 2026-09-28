@@ -1,0 +1,391 @@
+#!/usr/bin/env python3
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# RiceFetch - the terminal's greeting in the theme: an emblem of its
+# own (a lightning bolt for Storm, a skull for Venom, a butterfly, a
+# coiled snake, a flame, a volcano, a tree, a drop...) in the palette's
+# gradient, beside the system's details in a box drawn in the theme's
+# style (rounded, double, heavy, dashed, pixel, hand-drawn), and the
+# palette. Everything is read from files: no slow commands, the
+# terminal opens at once. Narrow terminals get the details only.
+#
+#   RiceFetch            the current theme
+#   RiceFetch STYLE      another one (preview)
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+import os
+import re
+import shutil
+import sys
+import time
+
+HOME = os.path.expanduser('~')
+BSPWM = os.path.join(HOME, '.config/bspwm')
+
+# ═══════════════════════════════════════════════════════════ emblems
+ART = {
+    'storm': r'''
+      ▄▄▄▄▄▄▄▄
+     ▐████████▌
+    ▐███████▀
+   ▐█████▀
+  ▐███████████▌
+       ▐██████▀
+      ▐████▀
+     ▐██▀
+    ▐▀
+''',
+    'venom': r'''
+    ▄▄████████▄▄
+  ▄██████████████▄
+ ████▀▀  ████  ▀▀████
+ ███   ▄ ████ ▄   ███
+ ████▄▄  ████  ▄▄████
+  ▀███████▀▀███████▀
+    ▀██▄▀▄▀▄▀▄▄██▀
+     ▐█▐█▐█▐█▐█▌
+      ▀ ▀ ▀ ▀ ▀
+''',
+    'butterfly': r'''
+  ▄▄▄        ▄▄▄
+ █▀▀▀█▄ ▀▄▄▀ ▄█▀▀▀█
+ █ ◆  ▀█▄██▄█▀  ◆ █
+ ▀█▄    ▐██▌    ▄█▀
+   ▀██▄▄▐██▌▄▄██▀
+   ▄█▀▀ ▐██▌ ▀▀█▄
+  █  ◆ ▄▀▐▌▀▄ ◆  █
+  ▀█▄▄█▀  ▀▀ ▀█▄▄█▀
+''',
+    'snake': r'''
+          ▄▄▄▄▄▄
+        ▄█▀ ◉  ▀█▄▶═<
+       ██    ▄▄▄███▀
+       ▀██▄▄▄▀▀▀
+    ▄▄▄▄▄▀▀▀████▄
+  ▄██▀▀▀      ▀██▌
+  ▐██▄▄▄▄▄▄▄▄▄██▀
+   ▀▀██████████▀
+''',
+    'fire': r'''
+         ▄
+        ▐█▌   ▄
+    ▄   ███▌ ▐█
+   ▐█▄ ▐████▄██▌
+   ████████████▌
+  ▐████▀▀██▀▀███▌
+  ▐███▀ ▐▀▌  ▀██▌
+   ▀██▄  ▀  ▄██▀
+     ▀▀██████▀▀
+''',
+    'lava': r'''
+       ▄ ▀▄▀ ▄
+        ▀▄█▄▀
+         ▐█▌
+       ▄█▀▀▀█▄
+     ▄██▀░░░▀██▄
+    ███░░▓▓▓░░███
+  ▄███░░▓███▓░░███▄
+ ████████████████████
+''',
+    'nature': r'''
+        ▄▄██▄▄
+     ▄██████████▄
+    ████▀▀██▀▀████
+   ▐██▄▄▄████▄▄▄██▌
+    ▀████████████▀
+       ▀▀▐██▌▀▀
+          ██
+        ▄████▄
+''',
+    'liquid': r'''
+         ▄
+        ▐█▌
+       ▄███▄
+      ▐█████▌
+     ▐███████▌
+     ████▀ ███
+     ▐███▄▄██▌
+       ▀▀▀▀▀
+   ≈≈≈≈≈≈≈≈≈≈≈≈
+''',
+    'glass': r'''
+       ▄▄▄▄▄▄▄
+     ▄▀ ▄▄▄▄▄ ▀▄
+    █ ▄▀     ▀▄ █
+    █ █  ▄▄▄  █ █
+    █ █ █   █ █ █
+    █ ▀▄ ▀▀▀ ▄▀ █
+     ▀▄ ▀▀▀▀▀ ▄▀
+       ▀▀▀▀▀▀▀
+''',
+    'crystal': r'''
+        ▄▄███▄▄
+      ▄█▀ ▐█▌ ▀█▄
+     ███▄▄▐█▌▄▄███
+      ▀██▄███▄██▀
+        ▀█████▀
+          ▀█▀
+           ▀
+''',
+    'neon': r'''
+     ▄▄▀▀▀▀▀▀▀▄▄
+   ▄▀  ▄▄▄▄▄▄▄  ▀▄
+  █  ▄▀       ▀▄  █
+  █  █   ▄▄▄   █  █
+  █  █  █   █  █  █
+  █  ▀▄  ▀▀▀  ▄▀  █
+   ▀▄  ▀▀▀▀▀▀▀  ▄▀
+     ▀▀▄▄▄▄▄▄▄▀▀
+''',
+    'cyber': r'''
+    ▄▄▄▄▄▄▄▄▄▄▄▄▄
+   █▀▀▀▀▀▀▀▀▀▀▀▀▀█
+   █ ▄██▄   ▄██▄ █
+   █ ▀██▀ ▄ ▀██▀ █
+   █▄▄▄▄▄███▄▄▄▄▄█
+    ▀█ ▀ ▀ ▀ ▀ █▀
+     ▀▀▀▀▀▀▀▀▀▀▀
+''',
+    'hud': r'''
+         │
+     ╭───┼───╮
+    ╭╯  ╭┴╮  ╰╮
+  ──┼──┤ ◉ ├──┼──
+    ╰╮  ╰┬╯  ╭╯
+     ╰───┼───╯
+         │
+''',
+    'holo': r'''
+          ▄▄▄▄
+   ▄▄▄▄ ▄██████▄
+ ▄▀    ██████████ ▄▄
+ █    ▐██████████▌  █
+  ▀▀▄▄ ██████████▄▄▀
+       ▀▀██████▀▀
+     ·    ▀▀▀▀   ✦
+''',
+    'pixel': r'''
+   ▄████▄     ▄███▄
+  ██████▀    █▀█▀███
+  █████▄     ███████
+  ▀█████▄    ███████
+   ▀████▀    █▀█▀█▀█
+''',
+    'sketch': r'''
+            ▄▀▄
+           █▄ █
+          ▄▀ ▄▀
+         █▄ ▄▀
+        ▄▀ ▄▀
+       █ ▄▀
+      ▐▄▀
+      ▀
+''',
+    'minimal': r'''
+          ▄
+         ███
+        █████
+       ▀▀███▀▀
+      ▄██▀ ▀██▄
+     ███▀   ▀███
+    ▀▀▀       ▀▀▀
+''',
+}
+
+# box style per theme: (tl, h, tr, v, bl, br)
+BOX = {
+    'rounded': ('╭', '─', '╮', '│', '╰', '╯'), 'double': ('╔', '═', '╗', '║', '╚', '╝'),
+    'heavy': ('┏', '━', '┓', '┃', '┗', '┛'), 'dashed': ('┌', '┄', '┐', '┆', '└', '┘'),
+    'pixel': ('▛', '▀', '▜', '▌', '▙', '▟'), 'sketch': ('┌', '╌', '┐', '╎', '└', '┘'),
+}
+THEME = {   # box, emblem glyph, name, tagline
+    'storm': ('heavy', '󰖓', 'STORM', 'pure energy'), 'venom': ('heavy', '󰚌', 'VENOM', 'moving shadows'),
+    'butterfly': ('rounded', '󱖉', 'BUTTERFLIES', 'delicate · free · magic'),
+    'snake': ('rounded', '󱔎', 'SNAKES', 'power · mystery'), 'fire': ('heavy', '󰈸', 'FIRE', 'intense'),
+    'lava': ('heavy', '󱪃', 'LAVA', 'cracked rock and fire'), 'nature': ('rounded', '󰌪', 'NATURE', 'calm and fresh'),
+    'liquid': ('rounded', '󰖌', 'LIQUID', 'fluid and original'), 'glass': ('rounded', '󰙴', 'GLASS', 'modern and clean'),
+    'crystal': ('rounded', '󰇈', 'CRYSTAL', 'frosted light'), 'neon': ('double', '󰛨', 'SOLID NEON', 'clean neon'),
+    'cyber': ('double', '󰚩', 'CYBERPUNK', 'futuristic'), 'hud': ('heavy', '󰆤', 'HUD', 'tech and professional'),
+    'holo': ('rounded', '󰀘', 'HOLOGRAPHIC', 'space and orbits'), 'pixel': ('pixel', '󰮯', 'PIXEL', 'retro and classic'),
+    'sketch': ('sketch', '󰏫', 'PENCIL', 'hand drawn'), 'minimal': ('rounded', '󰣇', 'MINIMAL', 'elegant and discreet'),
+}
+
+
+# ═══════════════════════════════════════════════════════════ colors
+def rice():
+    try:
+        return open(os.path.join(BSPWM, '.rice')).read().strip() or 'crackone'
+    except OSError:
+        return 'crackone'
+
+
+def theme_var(name):
+    try:
+        text = open(os.path.join(BSPWM, 'rices', rice(), 'theme-config.bash')).read()
+        m = re.search(rf'^{name}=["\']?([\w-]*)', text, re.M)
+        return m.group(1) if m else ''
+    except OSError:
+        return ''
+
+
+def palette():
+    pal = {'fg': '#c0caf5', 'blue': '#7aa2f7', 'purple': '#bb9af7', 'cyan': '#7dcfff', 'green': '#9ece6a',
+           'yellow': '#e0af68', 'red': '#f7768e', 'blue-arch': '#7aa2f7', 'blue-gray': '#414868'}
+    try:
+        for line in open(os.path.join(BSPWM, 'rices', rice(), 'colors.ini')):
+            m = re.match(r'([\w-]+)\s*=\s*(#[0-9a-fA-F]{6})', line.strip())
+            if m:
+                pal[m.group(1)] = m.group(2)
+    except OSError:
+        pass
+    return pal
+
+
+def rgb(h):
+    h = h.lstrip('#')
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def fgc(c, text, bold=False):
+    r, g, b = c if isinstance(c, tuple) else rgb(c)
+    return f'\033[{"1;" if bold else ""}38;2;{r};{g};{b}m{text}\033[0m'
+
+
+def mix(a, b, t):
+    a, b = rgb(a) if isinstance(a, str) else a, rgb(b) if isinstance(b, str) else b
+    return tuple(round(x + (y - x) * t) for x, y in zip(a, b))
+
+
+# ═══════════════════════════════════════════════════════════ details
+def read(path, default=''):
+    try:
+        return open(path).read()
+    except OSError:
+        return default
+
+
+def details():
+    user = os.environ.get('USER', 'user')
+    host = read('/etc/hostname').strip() or os.uname().nodename
+    osr = dict(re.findall(r'^(\w+)="?([^"\n]*)"?', read('/etc/os-release'), re.M))
+    up = int(float(read('/proc/uptime', '0').split()[0]))
+    d, rem = divmod(up, 86400)
+    h, m = divmod(rem // 60, 60)
+    uptime = (f'{d}d ' if d else '') + (f'{h}h ' if h or d else '') + f'{m}m'
+    try:
+        pkgs = str(len(os.listdir('/var/lib/pacman/local')) - 1)
+    except OSError:
+        pkgs = '?'
+    cpu = re.search(r'^model name\s*:\s*(.+)$', read('/proc/cpuinfo'), re.M)
+    cpu = re.sub(r'\s+', ' ', re.sub(r'\((R|TM)\)|CPU|Processor|@.*', '', cpu.group(1))).strip() if cpu else '?'
+    ncpu = os.cpu_count() or 1
+    mem = dict(re.findall(r'^(\w+):\s+(\d+)', read('/proc/meminfo'), re.M))
+    total, avail = int(mem.get('MemTotal', 0)), int(mem.get('MemAvailable', 0))
+    st = os.statvfs('/')
+    dt, df = st.f_blocks * st.f_frsize, st.f_bavail * st.f_frsize
+    gpu = read(os.path.join(HOME, '.cache', 'ricefetch-gpu')).strip()
+    if not gpu:
+        for card in sorted(os.listdir('/sys/class/drm')) if os.path.isdir('/sys/class/drm') else []:
+            ven = read(f'/sys/class/drm/{card}/device/vendor').strip()
+            if ven:
+                gpu = {'0x10de': 'NVIDIA', '0x1002': 'AMD', '0x8086': 'Intel', '0x15ad': 'VMware SVGA',
+                       '0x1af4': 'Virtio GPU', '0x1234': 'QEMU'}.get(ven, ven)
+                break
+    shell = os.path.basename(os.environ.get('SHELL', '?'))
+    term = os.environ.get('TERM_PROGRAM') or os.path.basename(os.environ.get('TERM', '?'))
+    for p in ('alacritty', 'kitty', 'ghostty', 'wezterm', 'st'):
+        if p in os.environ.get('TERM', '') or os.environ.get(f'{p.upper()}_SOCKET') or \
+                (p == 'alacritty' and os.environ.get('ALACRITTY_WINDOW_ID')) or (p == 'kitty' and os.environ.get('KITTY_PID')):
+            term = p
+            break
+    gb = 1024 ** 3
+    return [
+        ('󰣇', 'os', osr.get('PRETTY_NAME', 'Linux')),
+        ('\U000f033d', 'kernel', os.uname().release),
+        ('󰅐', 'uptime', uptime),
+        ('󰏖', 'packages', f'{pkgs} (pacman)'),
+        ('\U000f018d', 'shell', shell),
+        ('\U000f056e', 'wm', f'bspwm · {rice()}'),
+        ('\U000f07b7', 'terminal', term),
+        ('󰻠', 'cpu', f'{cpu} ({ncpu})'),
+        ('󰢮', 'gpu', gpu or '?'),
+        ('󰍛', 'memory', f'{(total - avail) / 1048576:.1f} / {total / 1048576:.1f} GiB'),
+        ('󰋊', 'disk', f'{(dt - df) / gb:.0f} / {dt / gb:.0f} GiB'),
+    ], f'{user}@{host}', (total - avail) / max(1, total), (dt - df) / max(1, dt)
+
+
+def bar(frac, width, c1, c2, dim):
+    full = round(frac * width)
+    return ''.join(fgc(mix(c1, c2, i / max(1, width - 1)), '━') for i in range(full)) + fgc(dim, '━' * (width - full))
+
+
+# ═══════════════════════════════════════════════════════════ layout
+def vlen(s):
+    return len(re.sub(r'\033\[[0-9;]*m', '', s))
+
+
+def main():
+    style = sys.argv[1] if len(sys.argv) > 1 else (theme_var('RICE_KIT') or theme_var('WIN_SKIN') or 'minimal')
+    if style not in ART:
+        style = 'minimal'
+    pal = palette()
+    c1, c2, c3 = pal.get('blue-arch', pal['blue']), pal.get('purple', pal['blue']), pal.get('cyan', pal['blue'])
+    fg, dim = pal['fg'], mix(pal.get('blue-gray', '#414868'), pal['fg'], 0.25)
+    box_name, glyph, name, tagline = THEME.get(style, THEME['minimal'])
+    tl, hz, tr, vt, bl, br = BOX[box_name]
+    info, who, memf, diskf = details()
+
+    # the box: title, details, meters, palette
+    W = 44
+    rows = []
+    title = f' {glyph}  {name} '
+    rows.append(fgc(c1, tl + hz) + fgc(c1, title, True) + fgc(c1, hz * (W - 2 - len(title) - 1) + tr))
+    tag = tagline if len(who) + len(tagline) + 5 <= W - 2 else ''
+    body = ' ' + fgc(mix(c2, fg, 0.3), who, True) + (fgc(dim, f'  {tag}') if tag else '')
+    rows.append(fgc(c1, vt) + body + ' ' * max(0, W - 2 - vlen(body)) + fgc(c1, vt))
+    rows.append(fgc(c1, vt) + fgc(dim, ' ' + '·' * (W - 4) + ' ') + fgc(c1, vt))
+    for i, (ic, key, val) in enumerate(info):
+        col = mix(c1, c3, i / max(1, len(info) - 1))
+        val = val if len(val) <= W - 17 else val[:W - 18] + '…'
+        body = f' {fgc(col, ic)}  {fgc(col, key.ljust(9), True)}{fgc(fg, val)}'
+        rows.append(fgc(c1, vt) + body + ' ' * (W - 2 - vlen(body)) + fgc(c1, vt))
+    rows.append(fgc(c1, vt) + fgc(dim, ' ' + '·' * (W - 4) + ' ') + fgc(c1, vt))
+    for key, frac in (('mem', memf), ('disk', diskf)):
+        body = f' {fgc(c2, key.ljust(5), True)}{bar(frac, W - 16, c1, c2, dim)} {fgc(fg, f"{frac * 100:3.0f}%")}'
+        rows.append(fgc(c1, vt) + body + ' ' * (W - 2 - vlen(body)) + fgc(c1, vt))
+    sw = ''.join(fgc(pal.get(k, fg), '●') + ' ' for k in ('red', 'yellow', 'green', 'cyan', 'blue', 'purple',
+                                                        'pink', 'fg'))
+    body = '  ' + sw
+    rows.append(fgc(c1, vt) + body + ' ' * (W - 2 - vlen(body)) + fgc(c1, vt))
+    rows.append(fgc(c1, bl + hz * (W - 2) + br))
+
+    # the emblem, in the palette's gradient
+    art = [line for line in ART[style].split('\n') if line.strip() != '' or False]
+    aw = max(len(line) for line in art) + 3
+    n = len(art)
+    colored = [''.join(fgc(mix(c1, c2, (i / max(1, n - 1)) * 0.7 + (j / max(1, aw)) * 0.3), ch)
+                       if ch != ' ' else ' ' for j, ch in enumerate(line)) for i, line in enumerate(art)]
+
+    cols = shutil.get_terminal_size((100, 30)).columns
+    out = []
+    if cols >= aw + W + 4:
+        top = max(0, (len(rows) - n) // 2)
+        for i in range(max(len(rows), n + top)):
+            a = colored[i - top] + ' ' * (aw - len(art[i - top])) if 0 <= i - top < n else ' ' * aw
+            out.append('  ' + a + (rows[i] if i < len(rows) else ''))
+    else:
+        out = ['  ' + r for r in rows]
+    print('\n' + '\n'.join(out) + '\n')
+
+
+if __name__ == '__main__':
+    t0 = time.monotonic()
+    try:
+        main()
+    except BrokenPipeError:
+        pass
