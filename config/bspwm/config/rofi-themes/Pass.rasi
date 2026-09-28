@@ -13,6 +13,7 @@ window {
     anchor:                      center;
     fullscreen:                  false;
     width:                       37%;
+    height:                      40%;
     x-offset:                    0;
     y-offset:                    0;
 
@@ -274,3 +275,6 @@ error-message {
     background-color:            @background;
     text-color:                  @foreground;
 }
+
+/* the theme's panel (scene + frame) as the window background: bin/ThemeSurfaces */
+@import "surface-pass.rasi"

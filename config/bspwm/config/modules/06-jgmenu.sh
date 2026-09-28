@@ -11,8 +11,8 @@ _template="$_dir/menu.csv"
     sed '/^# Colors$/,$d' "$_target"
     cat << EOF
 # Colors
-color_menu_bg = ${jg_bg:-$bg} 98
-color_menu_border = ${blue} 80
+color_menu_bg = ${jg_bg:-$bg} 0
+color_menu_border = ${blue} 0
 color_norm_bg = #000000 0
 color_norm_fg = ${jg_fg:-$fg}
 color_sel_bg = ${blue} 16
@@ -37,7 +37,7 @@ if [ -f "$_template" ]; then
             -e "s|{red}|${red}|g" -e "s|{green}|${green}|g" \
             -e "s|{yellow}|${yellow}|g" -e "s|{blue}|${blue}|g" \
             -e "s|{magenta}|${magenta}|g" -e "s|{cyan}|${cyan}|g" \
-            -e "s|{white}|${white}|g" -e "s|{rice}|${_rice}|g"
+            -e "s|{white}|${white}|g" -e "s|{rice}|${_rice}|g" -e "s|{home}|${HOME}|g"
     } | _write "$_prepend"
 else
     awk -F',' -v OFS=',' -v color="$jg_fg" '
@@ -52,3 +52,7 @@ _write "$_dir/search.svg" << EOF
   <path d="M15.4 15.4 21 21" stroke="${magenta}" stroke-width="2.8" stroke-linecap="round"/>
 </svg>
 EOF
+
+# The theme's panel (scene + frame) behind jgmenu and the clipboard /
+# password rofi menus (they can't draw it themselves)
+"$HOME"/.config/bspwm/bin/ThemeSurfaces >/dev/null 2>&1

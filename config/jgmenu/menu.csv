@@ -10,14 +10,22 @@
 # =============================================================
 
 # ── header: search capsule + neon ticks
-@rect,,8,8,254,34,9,left,top,{blue} 55,{black} 90,
-@rect,,9,9,4,32,2,left,top,{cyan} 100,{cyan} 100,
-@icon,,22,17,16,16,0,left,top,,,.config/jgmenu/search.svg
-@search,,46,17,200,16,0,left,top,{fg} 75,,SEARCH  ·  type to filter
-@rect,,14,50,38,2,1,left,top,{cyan} 100,{cyan} 100,
-@rect,,56,50,14,2,1,left,top,{magenta} 100,{magenta} 100,
-@rect,,74,50,6,2,1,left,top,{blue} 100,{blue} 100,
-@rect,,84,50,172,2,1,left,top,{fg} 18,{fg} 18,
+@icon,,0,0,144,144,0,left,top,,,{home}/.cache/rice-surfaces/jgmenu-00.png
+@icon,,144,0,144,144,0,left,top,,,{home}/.cache/rice-surfaces/jgmenu-01.png
+@icon,,0,144,144,144,0,left,top,,,{home}/.cache/rice-surfaces/jgmenu-10.png
+@icon,,144,144,144,144,0,left,top,,,{home}/.cache/rice-surfaces/jgmenu-11.png
+@icon,,0,288,144,144,0,left,top,,,{home}/.cache/rice-surfaces/jgmenu-20.png
+@icon,,144,288,144,144,0,left,top,,,{home}/.cache/rice-surfaces/jgmenu-21.png
+@icon,,0,432,144,144,0,left,top,,,{home}/.cache/rice-surfaces/jgmenu-30.png
+@icon,,144,432,144,144,0,left,top,,,{home}/.cache/rice-surfaces/jgmenu-31.png
+@rect,,24,20,238,34,9,left,top,{blue} 55,{black} 90,
+@rect,,25,21,4,32,2,left,top,{cyan} 100,{cyan} 100,
+@icon,,38,29,16,16,0,left,top,,,{home}/.config/jgmenu/search.svg
+@search,,62,29,192,16,0,left,top,{fg} 75,,SEARCH  ·  type to filter
+@rect,,28,62,38,2,1,left,top,{cyan} 100,{cyan} 100,
+@rect,,70,62,14,2,1,left,top,{magenta} 100,{magenta} 100,
+@rect,,88,62,6,2,1,left,top,{blue} 100,{blue} 100,
+@rect,,98,62,162,2,1,left,top,{fg} 18,{fg} 18,
 
 ^sep(<span foreground="{fg}" fgalpha="50%">//</span> LAUNCH <span foreground="{fg}" fgalpha="50%">· {rice}</span>)
 <span foreground="{cyan}">󰆍</span>   Terminal,OpenApps --floating

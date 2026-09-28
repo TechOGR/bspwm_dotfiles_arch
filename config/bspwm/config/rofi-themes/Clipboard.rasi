@@ -273,3 +273,6 @@ error-message {
     background-color:            @background;
     text-color:                  @foreground;
 }
+
+/* the theme's panel (scene + frame) as the window background: bin/ThemeSurfaces */
+@import "surface-clipboard.rasi"
