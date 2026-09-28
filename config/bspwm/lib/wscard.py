@@ -13,6 +13,7 @@
 # =============================================================
 
 import math
+import re
 import random
 
 import cairo
@@ -235,33 +236,17 @@ def window_region(style, w, h, bw, radius):
     data = bytes(surf.get_data())
     B = min(int(max(radius, 0) + 48), W // 2, H // 2)   # the band where the outline lives
     rows = [None] * H
-    try:
-        import numpy as np
-        a = np.frombuffer(data, np.uint8).reshape(H, stride)[:, :W] > 127
-
-        def runs(yy):
-            d = np.diff(np.concatenate(([0], a[yy].view(np.int8), [0])))
-            return tuple(np.flatnonzero(d == 1)), tuple(np.flatnonzero(d == -1))
-        for yy in list(range(B)) + list(range(max(B, H - B), H)):
-            rows[yy] = runs(yy)
-        mid = a[B:H - B]
-        if len(mid):
-            left = np.where(mid[:, :B].any(1), mid[:, :B].argmax(1), B)
-            right = W - np.where(mid[:, W - B:].any(1), mid[:, W - B:][:, ::-1].argmax(1), B)
-            for i, (l0, r0) in enumerate(zip(left.tolist(), right.tolist())):
-                rows[B + i] = ((l0,), (r0,)) if r0 > l0 else ((), ())
-    except ImportError:
-        for yy in range(H):
-            line = data[yy * stride:yy * stride + W]
-            st_, en = [], []
-            inside = False
-            for xx, v in enumerate(line):
-                if (v > 127) != inside:
-                    (st_ if not inside else en).append(xx)
-                    inside = not inside
-            if inside:
-                en.append(W)
-            rows[yy] = (tuple(st_), tuple(en))
+    # no antialiasing: every pixel is 0 or 255, runs are found with C-speed
+    # byte searches (no numpy needed, a few ms for a full-screen window)
+    full = re.compile(b'\xff+')
+    for yy in range(H):
+        row = data[yy * stride:yy * stride + W]
+        if B <= yy < H - B:   # a middle row: one run between its edges
+            l0, r0 = row.find(b'\xff'), row.rfind(b'\xff')
+            rows[yy] = ((l0,), (r0 + 1,)) if l0 >= 0 else ((), ())
+        else:
+            ms = [(m.start(), m.end()) for m in full.finditer(row)]
+            rows[yy] = (tuple(m[0] for m in ms), tuple(m[1] for m in ms))
     reg = cairo.Region()
     y0 = 0
     for yy in range(1, H + 1):
