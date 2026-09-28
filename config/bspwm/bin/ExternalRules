@@ -77,13 +77,4 @@ case "$instance" in
     Toolkit)
         result "state=floating sticky=on rectangle=500x290+1054+593"
         ;;
-    YaziTerm)
-        result "state=floating center=on rectangle=900x342+0+0"
-        ;;
-    MusicTerm)
-        result "state=floating center=on rectangle=656x343+0+0"
-        ;;
-	FetchTerm)
-        result "state=floating center=on rectangle=369x601+0+0"
-        ;;
 esac

@@ -1,4 +1,4 @@
-#!bin/sh
+#!/bin/sh
 
 sed -i "s|^background-opacity = .*|background-opacity = ${P_TERM_OPACITY}|" "$HOME/.config/ghostty/config"
 

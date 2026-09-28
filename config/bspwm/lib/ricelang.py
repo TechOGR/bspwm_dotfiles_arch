@@ -200,9 +200,12 @@ ES = {
 
     # ── compositor
     'PERFORMANCE ': 'RENDIMIENTO', 'Lite': 'Lite', 'Mode': 'Modo',
-    'Normal: every effect · Lite: no blur and no animations, picom on xrender (shadows, corners and fading stay). '
-    'For VMs without 3D': 'Normal: todos los efectos · Lite: sin desenfoque ni animaciones, picom con xrender '
-    '(se mantienen sombras, esquinas y fundido). Para VMs sin 3D',
+    'Normal: every effect, full repaints for flawless frames · Lite: picom on xrender, no blur, no animations, '
+    'lighter frames and bar pulse (shadows, corners, fading and the theme stay). For VMs without 3D':
+        'Normal: todos los efectos, repintado completo para marcos impecables · Lite: picom con xrender, sin '
+        'desenfoque ni animaciones, marcos y pulso de la barra más ligeros (se mantienen sombras, esquinas, '
+        'fundido y el tema). Para VMs sin 3D',
+    '(applied)': '(aplicado)',
     'suggested for this machine: Lite': 'recomendado para este equipo: Lite',
     'suggested for this machine: Normal': 'recomendado para este equipo: Normal',
     'Backend': 'Motor', 'glx is the fastest; xrender works everywhere': 'glx es el más rápido; xrender funciona en todas partes',

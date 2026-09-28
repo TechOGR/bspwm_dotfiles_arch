@@ -3012,8 +3012,9 @@ class RiceEditor(Gtk.Window):
         mode = perf_mode()
         self.perf_now = auto if mode == 'auto' else mode
         c = self.card('󰓅', 'Performance', 'suggested for this machine: ' + ('Lite' if auto == 'lite' else 'Normal'))
-        c.pack_start(self.row('Mode', 'Normal: every effect · Lite: no blur and no animations, picom on '
-                              'xrender (shadows, corners and fading stay). For VMs without 3D',
+        c.pack_start(self.row('Mode', 'Normal: every effect, full repaints for flawless frames · Lite: picom '
+                              'on xrender, no blur, no animations, lighter frames and bar pulse (shadows, '
+                              'corners, fading and the theme stay). For VMs without 3D',
                               self.combo([('full', 'Normal'), ('lite', 'Lite')], self.perf_now, self.set_perf)),
                      False, False, 0)
         p.pack_start(c, False, False, 0)
@@ -3078,10 +3079,16 @@ class RiceEditor(Gtk.Window):
     def set_perf(self, v):
         def work():
             subprocess.run([PERF_PROFILE, 'set', v], timeout=10)
+            # picom: backend, animations, blur, full or partial repaints
             run_modules('00-picom.sh')
             restart_picom()
+            # the window frames (no inner glow in Lite) and the bar (the
+            # heartbeat pulse runs slower in Lite) read the mode when they start
+            spawn([os.path.join(BIN, 'RoundBorders'), '--restart'])
+            subprocess.run([os.path.join(BIN, 'BarCtl'), 'apply'], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=30)
         self.perf_now = v
-        run_bg(work, lambda _r: self.toast(f'Performance → {"Lite" if v == "lite" else "Normal"} (picom restarted)'))
+        run_bg(work, lambda _r: self.toast(f'Performance → {"Lite" if v == "lite" else "Normal"} (applied)'))
 
     def set_backend(self, v):
         picom_set('backend', v, quoted=True)
@@ -4618,7 +4625,22 @@ class RiceEditor(Gtk.Window):
             '  rice, close and reopen it.\n'
             '• A snapshot is taken automatically the first time you open RiceEditor each day,\n'
             '  so a bad tweak is always one click away from being undone (Snapshots).\n'
-            '• Palettes come from theme_colors.bash; the editor itself follows the active one.')
+            '• Palettes come from theme_colors.bash; the editor itself follows the active one.\n'
+            '• Compositor → Performance: Normal for real GPUs (every effect), Lite for VMs\n'
+            '  and weak machines (picom on xrender, lighter frames), the theme stays the same.')
+        if ricelang and ricelang.LANG == 'es':
+            text = (
+                f'• Todo lo que cambias se escribe en {THEME_CFG.replace(HOME, "~")} (o en picom.conf /\n'
+                '  bspwmrc para opciones globales) y se aplica al instante: bspc para las ventanas,\n'
+                '  recarga de picom para el compositor y los módulos del rice para dunst, gtk, rofi\n'
+                '  y las terminales.\n'
+                '• Siempre editas el rice que estaba activo al abrir RiceEditor. Si cambias de rice,\n'
+                '  ciérralo y vuelve a abrirlo.\n'
+                '• La primera vez que abres RiceEditor cada día se guarda una instantánea: un ajuste\n'
+                '  que salga mal siempre se deshace con un clic (Instantáneas).\n'
+                '• Las paletas vienen de theme_colors.bash; el propio editor sigue la activa.\n'
+                '• Compositor → Rendimiento: Normal para GPUs reales (todos los efectos), Lite para\n'
+                '  VMs y equipos modestos (picom con xrender, marcos más ligeros); el tema no cambia.')
         lb = Gtk.Label(label=text, xalign=0)
         lb.get_style_context().add_class('dim')
         c.pack_start(lb, False, False, 4)

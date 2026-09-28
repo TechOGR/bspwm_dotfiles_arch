@@ -152,6 +152,15 @@ class Stacking:
             self.x.XFree(data)
 
 
+def perf_lite():
+    """Lite performance profile (bin/PerfProfile, cached per boot)?"""
+    try:
+        return subprocess.run([os.path.join(BSPWM, 'bin/PerfProfile')], capture_output=True, text=True,
+                              timeout=10).stdout.strip() == 'lite'
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def win_skin():
     """WIN_SKIN of theme-config.bash: the style window frames are drawn in."""
     return theme_var('WIN_SKIN')
@@ -192,6 +201,7 @@ def main():
             'r': corner_radius(),
             'bw': int(bspc('config', 'border_width') or 0),
             'gap': int(bspc('config', 'window_gap') or 0),
+            'lite': perf_lite(),
             'focused': hexcolor(bspc('config', 'focused_border_color')),
             'normal': hexcolor(bspc('config', 'normal_border_color')),
         }
@@ -271,7 +281,6 @@ def main():
         return reg
 
     E = wscard.WINDOW_REACH if wscard else 0   # room for ornaments outside the window
-    INNER, CORNER = 26, 80                     # glow inside the edge / corner ornaments
 
     # ── resize from the frame: the ring just outside each window (in the gap)
     # takes the pointer, shows the arrow of that border / corner and drags it
@@ -337,16 +346,25 @@ def main():
         st['drag'] = None
         return True
 
-    def frame_region(w, h):
-        """Bands around the edges (E outside, INNER inside) + corner squares."""
-        reg = cairo.Region()
-        b = E + INNER
-        for rect in ((0, 0, w, b), (0, h - b, w, b), (0, 0, b, h), (w - b, 0, b, h),
-                     (0, 0, E + CORNER, E + CORNER), (w - E - CORNER, 0, E + CORNER, E + CORNER),
-                     (0, h - E - CORNER, E + CORNER, E + CORNER),
-                     (w - E - CORNER, h - E - CORNER, E + CORNER, E + CORNER)):
-            reg.union(cairo.RectangleInt(*map(int, rect)))
-        return reg
+    def frame_cache(win):
+        """The frame of a window drawn once per size / style / tint (a focus
+        change only changes its opacity: the rich styles take 40-100 ms to
+        draw) and its X shape: exactly the painted pixels plus the resize
+        band, so the compositor blends a thin frame instead of 90 px bands
+        around every window. Lite leaves out the glow inside the edge."""
+        info = win.info
+        w, h, bw = info['w'], info['h'], info['bw']
+        key = (info['skin'], w, h, bw, st['conf']['r'], info.get('tint'), st['conf']['lite'], info.get('tiled'))
+        cache = getattr(win, 'cache', None)
+        if not cache or cache[0] != key:
+            surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
+            fw, fh = w - 2 * E, h - 2 * E
+            wscard.paint_window(cairo.Context(surf), info['skin'], E + bw / 2, E + bw / 2, fw - bw, fh - bw,
+                                min(st['conf']['r'], fw / 2, fh / 2), True, inner_glow=not st['conf']['lite'])
+            reg = wscard.alpha_region(surf)
+            reg.union(handle_band(win.cid, w, h))
+            cache = win.cache = (key, surf, reg)
+        return cache
 
     def draw(win, cr):
         info = win.info
@@ -359,14 +377,7 @@ def main():
             # the frame is drawn once per size / style / tint and kept: a
             # focus change only changes how opaque it is (the rich styles
             # take 40-100 ms to draw, twice per click was felt)
-            key = (info['skin'], w, h, bw, st['conf']['r'], info.get('tint'))
-            cache = getattr(win, 'cache', None)
-            if not cache or cache[0] != key:
-                surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
-                fw, fh = w - 2 * E, h - 2 * E
-                wscard.paint_window(cairo.Context(surf), info['skin'], E + bw / 2, E + bw / 2, fw - bw, fh - bw,
-                                    min(st['conf']['r'], fw / 2, fh / 2), True)
-                cache = win.cache = (key, surf)
+            cache = frame_cache(win)
             cr.set_source_surface(cache[1], 0, 0)
             cr.paint_with_alpha(1.0 if info['focused'] else 0.45)
             return True
@@ -470,11 +481,6 @@ def main():
         gw = win.get_window()
         if not gw:
             return
-        # picom (xrender + use-damage) doesn't repaint what a restacked window
-        # covers when its contents stay the same: a frame moved over a window
-        # kept showing the wallpaper in its band. A repaint (from the cached
-        # frame, cheap) marks the area damaged.
-        win.queue_draw()
         if where == 'below':
             win.mode = 'under' if covering(cid) else 'bottom'
             target = foreign_win(cid) if win.mode == 'under' else None
@@ -506,6 +512,18 @@ def main():
         else:
             subprocess.run(['xdo', 'above', '-t', hex(anchor), hex(gw.get_xid())],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        reshape(win)
+
+    def reshape(win):
+        """Set the frame's X shape again (same region, cached). picom's
+        damage tracking doesn't repaint what a restacked translucent window
+        covers: a frame moved over a window kept showing the wallpaper in
+        its band. A ShapeNotify makes picom take the whole frame area again
+        (cheaper than use-damage = false, which repaints the full screen)."""
+        reg = getattr(win, 'shape_reg', None)
+        gw = win.get_window()
+        if reg is not None and gw is not None:
+            gw.shape_combine_region(reg, 0, 0)
 
     def draw_back(win, cr):
         i = win.info
@@ -682,7 +700,8 @@ def main():
                 win.realize()
             gw = win.get_window()
             r = min(st['conf']['r'], w // 2, h // 2)
-            gw.shape_combine_region(frame_region(w, h) if skin else ring_region(w, h, bw, r), 0, 0)
+            win.shape_reg = frame_cache(win)[2] if skin else ring_region(w, h, bw, r)
+            gw.shape_combine_region(win.shape_reg, 0, 0)
             # skinned frames: the band outside the window resizes it; plain
             # border rings (xrender) take no input
             gw.input_shape_combine_region(handle_band(cid, w, h) if skin else cairo.Region(), 0, 0)

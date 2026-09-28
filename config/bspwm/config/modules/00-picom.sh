@@ -7,7 +7,8 @@
 # CPU and make everything lag: the "lite" profile drops them here (the
 # rules file is generated, theme-config keeps the user's choice) and
 # PicomStart moves picom to xrender. Shadows stay: they cost ~1%.
-if [ "$("$HOME"/.config/bspwm/bin/PerfProfile)" = lite ]; then
+PERF=$("$HOME"/.config/bspwm/bin/PerfProfile)
+if [ "$PERF" = lite ]; then
     P_BLUR=false
     P_ANIMATIONS="#"
 fi
@@ -17,11 +18,13 @@ fi
 # geometry and would be left behind (picom-animations-framed.conf)
 if [ -n "${WIN_SKIN}" ]; then P_ANIM_FILE="picom-animations-framed.conf"; else P_ANIM_FILE="picom-animations.conf"; fi
 
-# ...and picom repaints the whole screen instead of the damaged parts: when
-# the translucent frame overlays are restacked (every focus change) its
-# damage tracking left stale pixels behind (the wallpaper showing through a
-# window in a frame's band until something redrew it)
-if [ -n "${WIN_SKIN}" ]; then P_DAMAGE=false; else P_DAMAGE=true; fi
+# ...and, on the GPU (Normal), picom repaints the whole screen instead of
+# the damaged parts: when the translucent frame overlays are restacked
+# (every focus change) its damage tracking could leave stale pixels (the
+# wallpaper showing through a window in a frame's band). In Lite that full
+# repaint costs ~10% more CPU on Xorg: there RoundBorders re-sets the
+# frame's shape after each restack, which makes picom repaint that area.
+if [ -n "${WIN_SKIN}" ] && [ "$PERF" != lite ]; then P_DAMAGE=false; else P_DAMAGE=true; fi
 
 sed -i "$HOME/.config/bspwm/config/picom/picom.conf" \
     -e "s/shadow-color = .*/shadow-color = \"${SHADOW_C}\"/" \

@@ -1,21 +1,40 @@
-#!/bin/sh
+#!/usr/bin/env python3
 # =============================================================
 # HeartbeatPolybar - decorative "system alive" neon pulse
 #
-# Renders a single dot that breathes in and out using the alpha
-# channel of an ARGB hex color, driven by a sine wave over time.
-# Meant to sit next to the launcher as a subtle futuristic accent.
+# A single dot that breathes in and out through the alpha channel of an
+# ARGB color, driven by a sine wave. One long-lived process (polybar
+# tail = true): it used to be a shell + date + awk spawned every 200 ms.
+# Normal: 10 frames a second, smooth. Lite (PerfProfile): 3 a second, and
+# only when the step is visible, so polybar and the compositor rest.
 #
 # Usage: HeartbeatPolybar [RRGGBB]   (default: 7dcfff)
 # =============================================================
 
-hex="${1:-7dcfff}"
-now_ns=$(date +%s%N)
+import math
+import os
+import subprocess
+import sys
+import time
 
-alpha=$(awk -v t="$now_ns" 'BEGIN {
-    phase = (t / 1000000000.0) * 2.6
-    v = (sin(phase) + 1) / 2
-    printf "%02x", int(60 + v * 195)
-}')
-
-printf "%%{F#%s%s}\xe2\x97\x8f%%{F-}\n" "$alpha" "$hex"
+color = (sys.argv[1] if len(sys.argv) > 1 else '7dcfff').lstrip('#')
+try:
+    lite = subprocess.run([os.path.expanduser('~/.config/bspwm/bin/PerfProfile')], capture_output=True,
+                          text=True, timeout=10).stdout.strip() == 'lite'
+except (OSError, subprocess.TimeoutExpired):
+    lite = False
+step = 0.33 if lite else 0.1
+last = None
+try:
+    while True:
+        v = (math.sin(time.monotonic() * 2.6) + 1) / 2
+        alpha = int(60 + v * 195)
+        if lite:
+            alpha = alpha // 24 * 24   # fewer distinct levels: fewer redraws
+        if alpha != last:
+            sys.stdout.write(f'%{{F#{alpha:02x}{color}}}●%{{F-}}\n')
+            sys.stdout.flush()
+            last = alpha
+        time.sleep(step)
+except (BrokenPipeError, KeyboardInterrupt):
+    pass

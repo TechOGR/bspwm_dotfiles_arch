@@ -151,7 +151,7 @@ render_lock_image() {
 
     if [ ! -f "$out" ]; then
         tmp="$CACHE_DIR/.render-$$.png"
-        set -- "$wall[0]" -resize "${resolution}^" -gravity center -extent "$resolution" +repage
+        set -- "${wall}[0]" -resize "${resolution}^" -gravity center -extent "$resolution" +repage
         [ "$LOCK_BLUR" -gt 0 ] 2>/dev/null && set -- "$@" -blur "0x$LOCK_BLUR"
         [ "$LOCK_DIM" -gt 0 ] 2>/dev/null && set -- "$@" -fill black -colorize "$LOCK_DIM%"
 

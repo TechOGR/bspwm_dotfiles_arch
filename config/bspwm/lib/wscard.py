@@ -208,6 +208,31 @@ def shape(cr, style, x, y, w, h, s):
         rounded(cr, x, y, w, h, _r(style, s))
 
 
+def alpha_region(surf, dx=0, dy=0, threshold=3):
+    """The pixels of an ARGB surface that are not (almost) transparent, as
+    a cairo.Region: the X shape of an overlay, so the compositor only
+    blends what is actually painted. Runs found with C-speed byte searches
+    on the alpha channel; equal rows merge into one rectangle."""
+    surf.flush()
+    W, H, stride = surf.get_width(), surf.get_height(), surf.get_stride()
+    data = bytes(surf.get_data())
+    pat = re.compile(b'[' + bytes([threshold]) + b'-\xff]+')   # alpha >= threshold
+    reg = cairo.Region()
+    prev, y0 = None, 0
+    for y in range(H + 1):
+        if y < H:
+            alpha = data[y * stride + 3:y * stride + W * 4:4]   # BGRA, little-endian
+            runs = tuple((m.start(), m.end()) for m in pat.finditer(alpha))
+        else:
+            runs = None
+        if runs != prev:
+            if prev:
+                for a0, a1 in prev:
+                    reg.union(cairo.RectangleInt(a0 + dx, y0 + dy, a1 - a0, y - y0))
+            prev, y0 = runs, y
+    return reg
+
+
 def window_outline(cr, style, x, y, w, h, radius):
     """shape() as a window frame draws it (same scale, radius and waves)."""
     _FRAME[0], _RADIUS[0] = True, float(radius)
@@ -283,25 +308,27 @@ WINDOW_SCALE = 0.8   # decorations of a window frame vs a lock card
 WINDOW_REACH = 64     # px they may draw outside the window (overlay margin)
 
 
-def paint_window(cr, style, x, y, w, h, radius, focused):
+def paint_window(cr, style, x, y, w, h, radius, focused, inner_glow=True):
     """The frame of a window in the style (bin/RoundBorders draws it right
     above the window): the card's frame and ornaments without its inside,
-    dimmed when the window has no focus."""
+    dimmed when the window has no focus. inner_glow=False (Lite) leaves out
+    the soft glow inside the edge: fewer translucent pixels to composite."""
     _FRAME[0], _RADIUS[0] = True, float(radius)
     try:
         cr.push_group()
         # a soft inner glow along the frame gives it depth
         with ws.tinted(style, ws.tint_target('windows')):
             glow = ws.rgb(ws.NATIVE.get(style, '#6fa8ff'))
-        cr.save()
-        shape(cr, style, x, y, w, h, WINDOW_SCALE)
-        cr.clip()
-        for width, a in ((22, 0.05), (12, 0.08), (5, 0.12)):
+        if inner_glow:
+            cr.save()
             shape(cr, style, x, y, w, h, WINDOW_SCALE)
-            cr.set_line_width(width)
-            cr.set_source_rgba(*glow, a)
-            cr.stroke()
-        cr.restore()
+            cr.clip()
+            for width, a in ((22, 0.05), (12, 0.08), (5, 0.12)):
+                shape(cr, style, x, y, w, h, WINDOW_SCALE)
+                cr.set_line_width(width)
+                cr.set_source_rgba(*glow, a)
+                cr.stroke()
+            cr.restore()
         paint_card(cr, style, x, y, w, h, WINDOW_SCALE, part='windows')
         cr.pop_group_to_source()
         cr.paint_with_alpha(1.0 if focused else 0.45)
