@@ -2487,7 +2487,7 @@ class RiceEditor(Gtk.Window):
     def refresh_decorations(self, parts):
         """Redraw what a tint changed, without re-applying the whole rice."""
         if 'bar' in parts or 'workspaces' in parts:
-            spawn([os.path.join(BIN, 'WorkspacePill'), '--restart'])
+            spawn([os.path.join(BIN, 'Respawn'), os.path.join(BIN, 'WorkspacePill'), '--restart'])
         if 'windows' in parts:
             # borders + glow shadow in the new colors, then the frames
             self.apply_modules('', '01-bspwm.sh', '00-picom.sh', reload_picom=True)
@@ -3219,7 +3219,7 @@ class RiceEditor(Gtk.Window):
             restart_picom()
             # the window frames (no inner glow in Lite) and the bar (the
             # heartbeat pulse runs slower in Lite) read the mode when they start
-            spawn([os.path.join(BIN, 'RoundBorders'), '--restart'])
+            spawn([os.path.join(BIN, 'Respawn'), os.path.join(BIN, 'RoundBorders'), '--restart'])
             subprocess.run([os.path.join(BIN, 'BarCtl'), 'apply'], stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL, timeout=30)
         self.perf_now = v

@@ -84,7 +84,10 @@ def daemon_pid():
 
 def pill(arg):
     """bin/WorkspacePill: the styled workspaces over the bar's center."""
-    subprocess.Popen([os.path.join(bc.BSPWM, 'bin/WorkspacePill'), arg], start_new_session=True,
+    cmd = [os.path.join(bc.BSPWM, 'bin/WorkspacePill'), arg]
+    if arg == '--restart':   # the running daemon: started again if it ever crashes
+        cmd.insert(0, os.path.join(bc.BSPWM, 'bin/Respawn'))
+    subprocess.Popen(cmd, start_new_session=True,
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 

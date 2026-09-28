@@ -1,0 +1,47 @@
+#!/bin/sh
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# Respawn - run a daemon of the rice and start it again if it crashes.
+#
+#   Respawn CMD [ARGS...]
+#
+# A clean exit (0: stopped with --stop / --restart, bspwm quitting,
+# another instance already running) or a kill on purpose (SIGTERM,
+# SIGINT, SIGKILL) ends it. Anything else (a Python error, an abort
+# from GDK, a segfault) starts the daemon again after a second, the
+# frames / bar decorations come back by themselves. More than 5 crashes
+# in a minute: it gives up (a daemon that can't start must not loop).
+# Crashes are logged to ~/.cache/$USER/respawn.log.
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+[ $# -gt 0 ] || { echo "usage: ${0##*/} CMD [ARGS...]" >&2; exit 2; }
+LOG="$HOME/.cache/${USER:-user}/respawn.log"
+mkdir -p "${LOG%/*}"
+name=${1##*/}
+crashes=0
+since=$(date +%s)
+
+while :; do
+    "$@"
+    rc=$?
+    case $rc in
+        0|130|137|143) exit "$rc" ;;    # clean exit / killed on purpose
+    esac
+    now=$(date +%s)
+    if [ $((now - since)) -gt 60 ]; then
+        since=$now
+        crashes=0
+    fi
+    crashes=$((crashes + 1))
+    printf '%s  %s exited with %s (crash %s in this minute)\n' "$(date '+%F %T')" "$name" "$rc" "$crashes" >> "$LOG"
+    if [ "$crashes" -gt 5 ]; then
+        printf '%s  %s: too many crashes, not restarting it\n' "$(date '+%F %T')" "$name" >> "$LOG"
+        exit "$rc"
+    fi
+    sleep 1
+done
