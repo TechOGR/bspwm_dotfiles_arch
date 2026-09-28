@@ -448,6 +448,7 @@ class TileLayout(Gtk.Window):
         cr.set_operator(cairo.OPERATOR_OVER)
         cr.set_source_surface(self.bg, 0, 0)
         cr.paint()
+        ui.backdrop_anim(self, cr, self.W, self.H)   # the theme's effect around the frame
         return False
 
     def on_tick(self, *_):

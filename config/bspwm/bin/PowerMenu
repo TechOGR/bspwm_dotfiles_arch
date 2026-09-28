@@ -208,6 +208,7 @@ button.ptile.armed .pglyph, button.ptile.armed .pname { color: @red; }
         cr.set_source_surface(self.bg, 0, 0)
         cr.paint()
         cr.set_operator(cairo.OPERATOR_OVER)
+        ui.backdrop_anim(self, cr, self.W, self.H)
         c = self.c
         cx, top = self.W / 2, self.H * 0.2
         ui.text(cr, time.strftime('%H:%M'), cx, top, 54, (*c['fg'], 0.95), bold=True, align='center', spacing=6)

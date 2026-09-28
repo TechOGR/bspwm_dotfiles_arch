@@ -565,6 +565,12 @@ class Dock(Gtk.Window):
         if getattr(self, 'skin', None):
             # the bar's skin (theme style) on the panel, drawn once and cached
             self.draw_skin(cr, px, py, pw, ph)
+            # the bar's effect around the dock too (lib/riceanim.py)
+            a = ui.panel_anim(self, style=self.skin[0], sector='bar')
+            if a.fx and self.shown >= 0.999:
+                key = (round(px), round(py), round(pw), round(ph))
+                a.outline_of(key, lambda c_: ui.rounded(c_, px, py, pw, ph, ph / 2))
+                a.draw(cr)
             return self.draw_items(cr, c, now, S, px, py, pw, ph)
 
         # glow + glass panel

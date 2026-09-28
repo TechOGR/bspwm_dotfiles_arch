@@ -623,6 +623,9 @@ class Launcher(Gtk.Window):
         cr.set_source_surface(bg, 0, 0)
         cr.paint()
         cr.set_operator(cairo.OPERATOR_OVER)
+        if self.style and self.themed_bg is not None:   # the theme's effect around the panel
+            a_ = self.panel.get_allocation()
+            ui.card_anim(self, cr, a_.x, a_.y, a_.width, a_.height, style=self.style)
         now = time.monotonic()
         acc, acc2 = self.c['blue'], self.c['magenta']
         # HUD title above the panel

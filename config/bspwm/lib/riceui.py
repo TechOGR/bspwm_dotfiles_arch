@@ -171,7 +171,7 @@ class PanelAnim:
     made on the first draw: panel_anim(widget). It repaints only where the
     effect was and is. A no-op when animations are off."""
 
-    def __init__(self, widget, style=None, inside=False):
+    def __init__(self, widget, style=None, inside=False, sector='win'):
         import time as _time
         self._time = _time
         self.widget, self.inside = widget, inside
@@ -183,7 +183,7 @@ class PanelAnim:
         try:
             import riceanim
             self.ra = riceanim
-            self.fx = riceanim.effect('win', self.style) if self.style else None
+            self.fx = riceanim.effect(sector, self.style) if self.style else None
         except Exception:
             self.ra = None
         if self.fx:
@@ -232,6 +232,23 @@ def panel_anim(widget, **kw):
     if a is None:
         a = widget._panel_anim = PanelAnim(widget, **kw)
     return a
+
+
+def card_anim(widget, cr, x, y, w, h, scale=1.0, style=None):
+    """The theme's window effect around a card drawn with wscard.paint_card
+    at x, y, w, h (the full-screen HUDs, the launcher's panel)."""
+    a = panel_anim(widget, style=style)
+    if not a.fx:
+        return
+    import wscard
+    a.outline_of((a.style, x, y, w, h, scale), lambda c: wscard.shape(c, a.style, x, y, w, h, scale))
+    a.draw(cr)
+
+
+def backdrop_anim(widget, cr, W, H):
+    """card_anim for the frame of backdrop() (KeyHelp, TileLayout, PowerMenu)."""
+    m = min(W, H) * 0.025
+    card_anim(widget, cr, m, m, W - 2 * m, H - 2 * m)
 
 
 def paint_theme_panel(cr, W, H, pal, inset=4, scale=0.55, anim=None):
