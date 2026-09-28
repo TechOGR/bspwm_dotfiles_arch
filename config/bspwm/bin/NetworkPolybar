@@ -4,11 +4,12 @@
 # Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
 #
 # NetworkPolybar - HUD network module for polybar (tail mode)
-#   ✔ Wi-Fi signal ramp / ethernet / offline glyph
-#   ✔ Live traffic trace: a sparkline tinted by intensity
-#   ✔ Download and upload speed in KB/s and MB/s (bytes, never bits),
-#     fixed width so the bar never jiggles
-#   ✔ Right click cycles the view: full -> compact -> name
+#   ✔ Only the arrows and the speeds: download and upload in KB/s and
+#     MB/s (bytes, never bits), fixed width so the bar never jiggles
+#   ✔ Arrows and framing in the theme's style (RICE_KIT): double
+#     chevrons for Storm, drops for Venom and Liquid, thin for Nature,
+#     boxes for Pixel, [brackets] for HUD, // for Cyberpunk...
+#   ✔ An idle direction dims; right click: both speeds <-> download only
 #   ✔ Colors from the rice palette (the bar restarts on palette change)
 #
 # Usage: NetworkPolybar            (polybar: tail = true)
@@ -25,8 +26,7 @@ mkdir -p "$CACHE_DIR"
 
 if [ "$1" = "--cycle" ]; then
     case $(cat "$MODE_FILE" 2>/dev/null) in
-        compact) echo name > "$MODE_FILE" ;;
-        name)    echo full > "$MODE_FILE" ;;
+        compact) echo full > "$MODE_FILE" ;;
         *)       echo compact > "$MODE_FILE" ;;
     esac
     exit 0
@@ -45,11 +45,31 @@ C_LINE=${blue:-#7aa2f7}
 C_DIM=${blackb:-#414868}
 C_TXT=${fg:-#c0caf5}
 
-HIST_LEN=8
-BLOCKS=(▁ ▂ ▃ ▄ ▅ ▆ ▇ █)
-hist=()
+# ── the theme's arrows: down, up, left / middle / right decoration
+case ${RICE_KIT:-$WIN_SKIN} in
+    storm) AD=󰄼 AU=󰄿 ;;
+    venom|liquid) AD=󰁊 AU=󰁢 ;;
+    butterfly|glass|holo) AD=󰳛 AU=󰳡 ;;
+    snake) AD=󰍝 AU=󰍠 ;;
+    fire) AD=󰁆 AU=󰁞 ;;
+    lava) AD=󰞒 AU=󰞕 ;;
+    nature|sketch) AD=󱦳 AU=󱦲 ;;
+    crystal) AD=󰁉 AU=󰁡 ;;
+    neon) AD=󰁇 AU=󰁟 ;;
+    cyber) AD=󰄼 AU=󰄿 ;;
+    hud) AD=󰶡 AU=󰶣 ;;
+    pixel) AD=󰜯 AU=󰜸 ;;
+    *) AD=󰜮 AU=󰜷 ;;
+esac
+L='' M='  ' R=''
+case ${RICE_KIT:-$WIN_SKIN} in
+    hud)   L="%{F$C_DIM}[%{F-}" M="%{F$C_DIM}] [%{F-}" R="%{F$C_DIM}]%{F-}" ;;
+    cyber) M=" %{F$C_DIM}//%{F-} " ;;
+    pixel) M=" %{F$C_DIM}▪%{F-} " ;;
+    sketch|nature|butterfly|minimal) M="  %{F$C_DIM}·%{F-}  " ;;
+esac
+
 prev_iface='' prev_rx=0 prev_tx=0 prev_t=0
-ssid='' signal=0 slow_tick=0
 
 active_iface() {
     local i
@@ -63,31 +83,22 @@ active_iface() {
     printf '%s' "$i"
 }
 
-# bytes/s -> fixed width "  0.0 KB/s" / " 12.4 MB/s"
+# bytes/s -> "12.4" + unit, fixed width
 human() {
     awk -v b="$1" 'BEGIN {
         k = b / 1024
-        if (k >= 1000) printf "%5.1f MB/s", k / 1024
-        else if (k >= 100) printf "%5.0f KB/s", k
-        else printf "%5.1f KB/s", k
+        if (k >= 1000) printf "%5.1f|MB/s", k / 1024
+        else if (k >= 100) printf "%5.0f|KB/s", k
+        else printf "%5.1f|KB/s", k
     }'
 }
 
-sparkline() { # uses global hist (rx+tx samples)
-    local max=1 v idx out='' col
-    for v in "${hist[@]}"; do (( v > max )) && max=$v; done
-    # an idle link should look idle, not autoscale noise to full height
-    (( max < 4096 )) && max=4096
-    for (( i = 0; i < HIST_LEN - ${#hist[@]}; i++ )); do out+="%{F$C_DIM}▁"; done
-    for v in "${hist[@]}"; do
-        idx=$(( v * 7 / max ))
-        if   (( idx >= 6 )); then col=$C_UP
-        elif (( idx >= 3 )); then col=$C_DOWN
-        elif (( idx >= 1 )); then col=$C_LINE
-        else col=$C_DIM; fi
-        out+="%{F$col}${BLOCKS[idx]}"
-    done
-    printf '%s%%{F-}' "$out"
+# one direction: arrow (dim when idle) + speed, the unit a bit dimmer
+part() { # arrow color bytes
+    local col=$2 txt=$C_TXT v
+    (( $3 < 512 )) && { col=$C_DIM; txt=$C_DIM; }
+    v=$(human "$3")
+    printf '%%{F%s}%%{T3}%s%%{T-}%%{F%s} %s%%{F%s} %s%%{F-}' "$col" "$1" "$txt" "${v%|*}" "$C_DIM" "${v#*|}"
 }
 
 while :; do
@@ -95,32 +106,12 @@ while :; do
     iface=$(active_iface)
 
     if [ -z "$iface" ]; then
-        hist=()
-        printf '%%{F%s}󰤮%%{F-} %%{F%s}▁▁▁▁▁▁▁▁%%{F-} %%{F%s}OFFLINE%%{F-}\n' "$C_LOW" "$C_DIM" "$C_LOW"
+        printf '%s%%{F%s}%%{T3}%s%%{T-} offline%%{F-}%s\n' "$L" "$C_LOW" "$(printf '\U000f0c9b')" "$R"
         prev_iface=''
         sleep 2
         continue
     fi
 
-    # ── icon (Wi-Fi details are refreshed every 5 s, nmcli is slow)
-    if [ -d "/sys/class/net/$iface/wireless" ]; then
-        if (( slow_tick % 5 == 0 )) && command -v nmcli >/dev/null 2>&1; then
-            IFS=: read -r signal ssid < <(nmcli -t -f active,signal,ssid dev wifi 2>/dev/null |
-                awk -F: '$1=="yes"{print $2":"$3; exit}')
-            signal=${signal:-0}
-        fi
-        if   (( signal >= 76 )); then icon=󰤨 icol=$C_OK
-        elif (( signal >= 51 )); then icon=󰤥 icol=$C_OK
-        elif (( signal >= 26 )); then icon=󰤢 icol=$C_MID
-        elif (( signal >= 1 ));  then icon=󰤟 icol=$C_LOW
-        else icon=󰤯 icol=$C_LOW; fi
-        name=${ssid:-$iface}
-    else
-        icon=󰈀 icol=$C_OK name=$iface
-    fi
-    slow_tick=$((slow_tick + 1))
-
-    # ── throughput
     read -r rx < "/sys/class/net/$iface/statistics/rx_bytes"
     read -r tx < "/sys/class/net/$iface/statistics/tx_bytes"
     now=$(date +%s%N)
@@ -132,19 +123,11 @@ while :; do
         up=$(( (tx - prev_tx) * 1000 / dt ));   (( up < 0 )) && up=0
     fi
     prev_iface=$iface prev_rx=$rx prev_tx=$tx prev_t=$now
-    hist+=($((down + up)))
-    (( ${#hist[@]} > HIST_LEN )) && hist=("${hist[@]: -HIST_LEN}")
 
-    D=$(human "$down") U=$(human "$up")
-    case $mode in
-        compact)
-            printf '%%{F%s}%s%%{F-} %%{F%s}󰁅%%{F%s}%s%%{F-}\n' "$icol" "$icon" "$C_DOWN" "$C_TXT" "$D" ;;
-        name)
-            printf '%%{F%s}%s%%{F-} %%{F%s}%s%%{F-} %%{F%s}%s%%{F-}\n' \
-                "$icol" "$icon" "$C_TXT" "${name:0:16}" "$C_DIM" "$iface" ;;
-        *)
-            printf '%%{F%s}%s%%{F-} %s %%{F%s}󰁅%%{F%s}%s %%{F%s}󰁝%%{F%s}%s%%{F-}\n' \
-                "$icol" "$icon" "$(sparkline)" "$C_DOWN" "$C_TXT" "$D" "$C_UP" "$C_TXT" "$U" ;;
-    esac
+    if [ "$mode" = compact ]; then
+        printf '%s%s%s\n' "$L" "$(part "$AD" "$C_DOWN" "$down")" "$R"
+    else
+        printf '%s%s%s%s%s\n' "$L" "$(part "$AD" "$C_DOWN" "$down")" "$M" "$(part "$AU" "$C_UP" "$up")" "$R"
+    fi
     sleep 1
 done

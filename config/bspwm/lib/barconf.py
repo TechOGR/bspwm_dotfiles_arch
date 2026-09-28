@@ -57,7 +57,7 @@ CATALOG = [
     ('cpu_wave', '󰻠', 'CPU', 'CPU load'),
     ('memory_bar', '󰍛', 'Memory', 'RAM used / total'),
     ('filesystem', '󰋊', 'Disk', 'Space used on /'),
-    ('network', '󰤨', 'Network', 'Traffic trace, ↓ ↑ in KB/s · MB/s'),
+    ('network', '󰤨', 'Network', 'Download and upload speed, arrows in the theme'),
     ('pulseaudio', '󰕾', 'Volume', 'Audio level'),
     ('mic', '󰍬', 'Microphone', 'Mute / unmute the mic'),
     ('date', '󰥔', 'Clock', 'Time · click for the date'),
