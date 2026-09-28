@@ -387,6 +387,9 @@ def layout(conf, mon, s):
     L['time_dy'] = -L['card_h'] / 2 - 92 * s
     L['date_dy'] = -L['card_h'] / 2 - 42 * s
     L['time_px'], L['date_px'] = 96 * s, 21 * s
+    # the themed clock plate around time + date (their baselines above)
+    L['clock_dy'] = -L['card_h'] / 2 - 104 * s
+    L['clock_w'], L['clock_h'] = 400 * s, 164 * s
     return L
 
 
@@ -473,6 +476,9 @@ def render(conf, media=True, preview=False, transparent=False):
             if card:
                 wscard.paint_card(ocr, style, x0, y0, cw, ch, s)
             wscard.paint_field(ocr, style, px, py, pw, ph, s)
+            # the clock plate: i3lock writes the live time and date on it
+            wscard.paint_clock(ocr, style, cx, cy + L['clock_dy'], L['clock_w'], L['clock_h'], s,
+                               tuple(v / 255 for v in bg))
             ov = cairo_rgba(over)
             if img.mode == 'RGBA':
                 img.alpha_composite(ov)
@@ -552,9 +558,10 @@ def render(conf, media=True, preview=False, transparent=False):
         # ── clock + date: i3lock draws them live; the preview fakes them
         if preview:
             now = datetime.now()
-            text(img, (cx, cy + L['time_dy']), now.strftime(conf['BL_CLOCK']), int(L['time_px']), fg,
+            tcol, dcol = clock_colors(conf, style)
+            text(img, (cx, cy + L['time_dy']), now.strftime(conf['BL_CLOCK']), int(L['time_px']), rgb(tcol),
                  style='ExtraBold')
-            text(img, (cx, cy + L['date_dy']), now.strftime(conf['BL_DATE']), int(L['date_px']), accent,
+            text(img, (cx, cy + L['date_dy']), now.strftime(conf['BL_DATE']), int(L['date_px']), rgb(dcol),
                  style='Regular')
             if on(conf, 'BL_LAYOUT'):
                 text(img, (cx, cy + L['layout_dy']), '󰌌  us', int(12 * s), fg, style='Regular')
@@ -586,12 +593,23 @@ def hx(color, alpha='ff'):
     return color.lstrip('#') + alpha
 
 
+def clock_colors(conf, style=None):
+    """(time, date) colors: the theme's when it has a style."""
+    if style and wscard:
+        try:
+            return wscard.clock_colors(style)
+        except Exception:
+            pass
+    return conf['BL_FG'], conf['BL_ACCENT']
+
+
 def i3lock_args(conf, image=None, transparent=False):
     """Layout + colors of i3lock-color, appended after betterlockscreen's."""
     _W, _H, mons = screen()
     s = scale_of(mons)
     L = layout(conf, mons[0], s)
     acc, fg = hx(conf['BL_ACCENT']), hx(conf['BL_FG'])
+    tcol, dcol = (hx(c) for c in clock_colors(conf, wscard.style_of() if wscard else None))
     ok, bad = hx(conf['BL_VERIFY']), hx(conf['BL_WRONG'])
     args = []
     if image:
@@ -604,7 +622,7 @@ def i3lock_args(conf, image=None, transparent=False):
         '--time-align', '0', '--date-align', '0',
         f'--time-font={FONT}:style=ExtraBold', f'--date-font={FONT}',
         f'--time-size={L["time_px"]:.0f}', f'--date-size={L["date_px"]:.0f}',
-        f'--time-color={fg}', f'--date-color={acc}',
+        f'--time-color={tcol}', f'--date-color={dcol}',
         '--greeter-text', '', '--noinput-text', '', '--lock-text', 'Locking…',
         '--verif-text', '󰦖  Verifying…', '--wrong-text', '󰀦  Wrong password',
         '--verif-pos', expr(L, L['verif_dy']), '--wrong-pos', expr(L, L['verif_dy']),

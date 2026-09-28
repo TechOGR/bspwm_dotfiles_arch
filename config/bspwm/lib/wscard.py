@@ -895,6 +895,50 @@ FIELD.update({'storm': ('#4f9dff', '#dff0ff'), 'venom': ('#ff1a2e', '#ff6a3a'),
               'butterfly': ('#ff7ae0', '#b07cff'), 'snake': ('#7dff2e', '#e8ff5a')})
 
 
+# ─────────────────────────────────────────────────────── lock clock
+def clock_colors(style):
+    """(time, date) colors of the lock clock in the style (hex)."""
+    with ws.tinted(style, ws.tint_target('locks')):
+        a, b = (ws.rgb(c) for c in FIELD.get(style, ('#c0caf5', '#7aa2f7')))
+    light = tuple(min(1.0, v * 0.35 + 0.65) for v in a)   # the time stays readable
+
+    def lum(c):
+        return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+    date = max((a, b), key=lambda c: (lum(c) >= 0.45, max(c) - min(c)))   # the more vivid readable one
+    while lum(date) < 0.5:
+        date = tuple(v + (1 - v) * 0.25 for v in date)
+    return ['#%02x%02x%02x' % tuple(round(v * 255) for v in c) for c in (light, date)]
+
+
+def paint_clock(cr, style, cx, cy, w, h, s, bg=(0.05, 0.06, 0.1)):
+    """The plate the lock clock is written on: the style's scene inside its
+    outline, veiled, framed like a window of the style (lightning, the
+    snake, vines, flames...), with a glow in the style's color where the
+    digits go. i3lock writes the live time and date over it."""
+    x, y = cx - w / 2, cy - h / 2
+    radius = min(h / 2, 26 * s)
+    cr.save()
+    window_outline(cr, style, x, y, w, h, radius)
+    cr.clip()
+    try:
+        import wsback
+        cr.set_source_surface(wsback.render(style, int(w), int(h), ws.tint_target('locks')), x, y)
+        cr.paint()
+    except Exception:
+        pass
+    cr.set_source_rgba(*bg, 0.62)
+    cr.paint()
+    with ws.tinted(style, ws.tint_target('locks')):
+        glow = ws.rgb(ws.NATIVE.get(style, '#6fa8ff'))
+    g = cairo.RadialGradient(cx, cy - h * 0.08, 0, cx, cy - h * 0.08, w * 0.45)
+    g.add_color_stop_rgba(0, *glow, 0.28)
+    g.add_color_stop_rgba(1, *glow, 0)
+    cr.set_source(g)
+    cr.paint()
+    cr.restore()
+    paint_window(cr, style, x, y, w, h, radius, True)
+
+
 # ═══════════════════════════════════════════ command line (ScreenLocker)
 def panel(src, dst, x, y, w, h, s, bg, style):
     """Frosted panel in the style's shape + its frame, onto an image."""
@@ -928,8 +972,24 @@ if __name__ == '__main__':
         h_ = bg.lstrip('#')
         panel(src, dst, int(x), int(y), int(w), int(h), float(s),
               tuple(int(h_[i:i + 2], 16) for i in (0, 2, 4)), style)
+    elif args[:1] == ['clockcolors'] and len(args) == 2:
+        print(*clock_colors(args[1]))
+    elif args[:1] == ['clock'] and len(args) == 10:
+        # clock SRC DST CX CY W H SCALE BG STYLE: the clock plate onto an image
+        src, dst, cx, cy, w, h, s, bg, style = args[1:]
+        from PIL import Image
+        img = Image.open(src).convert('RGBA')
+        over = cairo.ImageSurface(cairo.FORMAT_ARGB32, *img.size)
+        h_ = bg.lstrip('#')
+        paint_clock(cairo.Context(over), style, float(cx), float(cy), float(w), float(h), float(s),
+                    tuple(int(h_[i:i + 2], 16) / 255 for i in (0, 2, 4)))
+        over.flush()
+        ov = Image.frombuffer('RGBA', img.size, bytes(over.get_data()), 'raw', 'BGRa', over.get_stride(), 1)
+        img.alpha_composite(ov)
+        img.convert('RGB').save(dst, compress_level=1)
     else:
-        print('wscard.py style | panel SRC DST X Y W H SCALE BG STYLE', file=sys.stderr)
+        print('wscard.py style | panel SRC DST X Y W H SCALE BG STYLE | clock SRC DST CX CY W H SCALE BG STYLE'
+              ' | clockcolors STYLE', file=sys.stderr)
         sys.exit(1)
 
 
