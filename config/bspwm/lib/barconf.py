@@ -68,7 +68,7 @@ CATALOG = [
     ('uptime', '󰔟', 'Uptime', 'Time since boot'),
     ('sensors_temp', '󰔏', 'Temperature', 'CPU temperature'),
     ('gpu', '󰢮', 'GPU', 'GPU usage and temperature'),
-    ('heartbeat', '󰣐', 'Heartbeat', 'Decorative neon pulse'),
+    ('heartbeat', '󰣐', 'Heartbeat', "The theme's symbol, alive (decorative)"),
     ('song_wave', '󰝚', 'Now playing', 'MPD song ticker'),
     ('mpd', '󰎈', 'MPD', 'Short MPD status'),
     ('mpd_control', '󰐊', 'MPD control', 'Prev / play / next'),

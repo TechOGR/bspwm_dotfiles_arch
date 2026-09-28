@@ -1,40 +1,133 @@
 #!/usr/bin/env python3
 # =============================================================
-# HeartbeatPolybar - decorative "system alive" neon pulse
+# HeartbeatPolybar - the bar's "system alive" pulse, in the theme
 #
-# A single dot that breathes in and out through the alpha channel of an
-# ARGB color, driven by a sine wave. One long-lived process (polybar
-# tail = true): it used to be a shell + date + awk spawned every 200 ms.
-# Normal: 10 frames a second, smooth. Lite (PerfProfile): 3 a second, and
-# only when the step is visible, so polybar and the compositor rest.
+# Decorative: a symbol of the theme that lives in the bar, each with its
+# own rhythm and in the palette's colors: Storm's bolt flickers, Venom's
+# skull beats, the butterfly flaps its wings, the snake breathes, fire
+# trembles, water ripples, the neon bulb buzzes, pac-man chomps next to
+# a ghost... One long-lived process (polybar tail = true). Normal: 10
+# frames a second; Lite: 3, only printing when something changes.
+# Click: the modules list (modules.ini).
 #
-# Usage: HeartbeatPolybar [RRGGBB]   (default: 7dcfff)
+# Usage: HeartbeatPolybar [RRGGBB]   (color when the rice has no palette)
 # =============================================================
 
 import math
 import os
+import random
+import re
 import subprocess
 import sys
 import time
 
-color = (sys.argv[1] if len(sys.argv) > 1 else '7dcfff').lstrip('#')
-try:
-    lite = subprocess.run([os.path.expanduser('~/.config/bspwm/bin/PerfProfile')], capture_output=True,
-                          text=True, timeout=10).stdout.strip() == 'lite'
-except (OSError, subprocess.TimeoutExpired):
-    lite = False
-step = 0.33 if lite else 0.1
-last = None
-try:
+HOME = os.path.expanduser('~')
+BSPWM = os.path.join(HOME, '.config/bspwm')
+
+# theme: (glyphs, rhythm)   rhythm: breathe | beat | flicker | neon | frames | blink
+THEMES = {   # never the theme's own emblem (the launcher shows it next to this)
+    'storm': ((0xf0241, 0xf06d5), 'flicker'),          # a bolt crackling
+    'venom': ((0xf00a7,), 'beat'),                      # biohazard, beating
+    'butterfly': ((0xf1885, 0xf09f0), 'frames'),        # flower opening
+    'snake': ((0xf0208, 0xf0209), 'blink'),             # an eye that blinks
+    'fire': ((0xf05e2,), 'flicker'),                    # a candle
+    'lava': ((0xf0238,), 'flicker'),                    # a flame
+    'nature': ((0xf0e66, 0xf0c93), 'frames'),           # sprout, leaf
+    'liquid': ((0xf078d, 0xf0e0a), 'frames'),           # waves, drop: ripple
+    'glass': ((0xf1545,), 'breathe'),                   # shimmer
+    'crystal': ((0xf0ae2,), 'neon'),                    # a twinkling star
+    'neon': ((0xf140b,), 'neon'),                       # a buzzing neon bolt
+    'cyber': ((0xf061a,), 'beat'),                      # chip
+    'hud': ((0xf0437,), 'breathe'),                     # radar
+    'holo': ((0xf0768,), 'breathe'),                    # atom
+    'pixel': ((0xf0baf, 0xf02a0), 'frames'),            # pac-man, ghost
+    'sketch': ((0xf06d3,), 'breathe'),                  # a feather
+    'minimal': ((0xf05f6,), 'beat'),                    # heart pulse
+}
+
+
+def rice():
+    try:
+        return open(os.path.join(BSPWM, '.rice')).read().strip() or 'crackone'
+    except OSError:
+        return 'crackone'
+
+
+def theme():
+    try:
+        text = open(os.path.join(BSPWM, 'rices', rice(), 'theme-config.bash')).read()
+        for var in ('RICE_KIT', 'WIN_SKIN'):
+            m = re.search(rf'^{var}=["\']?(\w+)', text, re.M)
+            if m and m.group(1) in THEMES:
+                return m.group(1)
+    except OSError:
+        pass
+    return 'minimal'
+
+
+def colors(fallback):
+    pal = {}
+    try:
+        for line in open(os.path.join(BSPWM, 'rices', rice(), 'colors.ini')):
+            m = re.match(r'([\w-]+)\s*=\s*#([0-9a-fA-F]{6})', line.strip())
+            if m:
+                pal[m.group(1)] = m.group(2)
+    except OSError:
+        pass
+    a = pal.get('blue', fallback)
+    b = pal.get('purple', pal.get('cyan', a))
+    return [int(a[i:i + 2], 16) for i in (0, 2, 4)], [int(b[i:i + 2], 16) for i in (0, 2, 4)]
+
+
+def level(rhythm, t):
+    """(brightness 0..1, frame index) at time t."""
+    if rhythm == 'beat':   # lub-dub, rest
+        p = t % 1.4
+        v = max(math.exp(-((p - 0.10) / 0.07) ** 2), 0.7 * math.exp(-((p - 0.34) / 0.07) ** 2))
+        return 0.25 + 0.75 * v, 0
+    if rhythm == 'flicker':   # restless, bright
+        r = random.Random(int(t * 10))
+        return 0.55 + 0.45 * r.random() ** 0.5, 1 if r.random() < 0.12 else 0
+    if rhythm == 'neon':   # steady, a buzz now and then
+        r = random.Random(int(t * 10))
+        return (0.25 if r.random() < 0.06 else 0.95), 0
+    if rhythm == 'blink':   # open, a quick blink every few seconds
+        p = t % 3.8
+        return 0.85 + 0.15 * math.sin(t * 1.5), 1 if 3.55 < p < 3.72 else 0
+    if rhythm == 'frames':   # two frames in turn, breathing
+        return 0.55 + 0.45 * (math.sin(t * 2.2) + 1) / 2, int(t * 2.5) % 2
+    return 0.3 + 0.7 * (math.sin(t * 2.0) + 1) / 2, 0   # breathe
+
+
+def main():
+    fallback = (sys.argv[1] if len(sys.argv) > 1 else '7dcfff').lstrip('#')
+    try:
+        lite = subprocess.run([os.path.join(BSPWM, 'bin/PerfProfile')], capture_output=True, text=True,
+                              timeout=10).stdout.strip() == 'lite'
+    except (OSError, subprocess.TimeoutExpired):
+        lite = False
+    glyphs, rhythm = THEMES[theme()]
+    c1, c2 = colors(fallback)
+    step = 0.33 if lite else 0.1
+    last = None
+    t0 = time.monotonic()
     while True:
-        v = (math.sin(time.monotonic() * 2.6) + 1) / 2
-        alpha = int(60 + v * 195)
+        t = time.monotonic() - t0
+        v, fi = level(rhythm, t)
         if lite:
-            alpha = alpha // 24 * 24   # fewer distinct levels: fewer redraws
-        if alpha != last:
-            sys.stdout.write(f'%{{F#{alpha:02x}{color}}}●%{{F-}}\n')
+            v = round(v * 6) / 6
+        col = ''.join('%02x' % round(x + (y - x) * v) for x, y in zip(c1, c2))
+        alpha = round(90 + 165 * v)
+        out = f'%{{F#{alpha:02x}{col}}}%{{T3}}{chr(glyphs[fi % len(glyphs)])}%{{T-}}%{{F-}}'
+        if out != last:
+            sys.stdout.write(out + '\n')
             sys.stdout.flush()
-            last = alpha
+            last = out
         time.sleep(step)
-except (BrokenPipeError, KeyboardInterrupt):
-    pass
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (BrokenPipeError, KeyboardInterrupt):
+        pass
