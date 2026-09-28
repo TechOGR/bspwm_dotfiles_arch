@@ -2038,6 +2038,8 @@ class RiceEditor(Gtk.Window):
         flow.set_column_spacing(12)
         flow.set_row_spacing(12)
         self.kit_btns = {}
+        self.kit_arts = {}
+        self.kit_walls = {}   # key -> cairo surface of the theme's wallpaper (thumb)
         for key in ricekit.ORDER:
             kit = ricekit.KITS[key]
             b = Gtk.Button()
@@ -2050,9 +2052,11 @@ class RiceEditor(Gtk.Window):
                 W, H = w.get_allocated_width(), w.get_allocated_height()
                 rounded(cr, 0, 0, W, H, 10)
                 cr.clip()
-                ricekit.preview(cr, k, W, H)
+                ricekit.preview(cr, k, W, H, self.kit_walls.get(k))
                 return True
             art.connect('draw', draw)
+            self.kit_arts[key] = art
+            self.kit_wall_load(key)
             box.pack_start(art, True, True, 0)
             head = Gtk.Box(spacing=8)
             t = Gtk.Label(label=kit['name'], xalign=0)
@@ -2083,6 +2087,28 @@ class RiceEditor(Gtk.Window):
             sw.set_active(True)
             self.kit_parts[key] = sw
             c.pack_start(self.row(f'{icon}  {title}', desc, sw), False, False, 0)
+        # the theme's wallpaper: seen here, changed per theme
+        wrow = Gtk.Box(spacing=14)
+        self.kit_wall_box = ImageBox(self, 256, 144)
+        wrow.pack_start(self.kit_wall_box, False, False, 0)
+        wside = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        wside.set_valign(Gtk.Align.CENTER)
+        self.kit_wall_name = Gtk.Label(xalign=0)
+        self.kit_wall_name.get_style_context().add_class('row-title')
+        self.kit_wall_name.set_line_wrap(True)
+        self.kit_wall_name.set_max_width_chars(34)
+        wside.pack_start(self.kit_wall_name, False, False, 0)
+        self.kit_wall_note = Gtk.Label(xalign=0)
+        self.kit_wall_note.get_style_context().add_class('row-desc')
+        wside.pack_start(self.kit_wall_note, False, False, 0)
+        wbtns = Gtk.Box(spacing=8)
+        wbtns.pack_start(self.button('󰸉  Change…', 'ghost', lambda *_: self.kit_wall_pick()), False, False, 0)
+        wbtns.pack_start(self.button('󰜉  Reset', 'ghost', lambda *_: self.kit_wall_set(None)), False, False, 0)
+        wbtns.pack_start(self.button('󰄬  Set now', 'ghost', lambda *_: self.kit_wall_now()), False, False, 0)
+        wside.pack_start(wbtns, False, False, 0)
+        wrow.pack_start(wside, True, True, 0)
+        c.pack_start(self.row('󰸉  Theme wallpaper', 'the picture this theme puts on the desktop', wrow),
+                     False, False, 4)
         acts = Gtk.Box(spacing=8)
         acts.pack_start(self.button('󰸌  Apply whole theme', 'neon', lambda *_: self.kit_apply(all_parts=True)),
                         False, False, 0)
@@ -2098,6 +2124,113 @@ class RiceEditor(Gtk.Window):
         self.kit_sel = key
         self.mark_tiles(self.kit_btns, key)
         self.kit_title.set_text(ricekit.KITS[key]['name'].upper())
+        self.kit_wall_show()
+
+    # ── the wallpaper of each theme (ricekit.theme_wall, config/theme-walls.json)
+    def kit_wall_load(self, key):
+        """Load the thumbnail of a theme's wallpaper for its tile."""
+        path = ricekit.theme_wall(key)
+        if not path:
+            self.kit_walls.pop(key, None)
+            return
+
+        def load():
+            thumb = ensure_thumb(path)
+            return load_surface(thumb, 320, 180) if thumb else None
+
+        def done(surf):
+            self.kit_walls[key] = surf
+            art = self.kit_arts.get(key)
+            if art:
+                art.queue_draw()
+        run_bg(load, done)
+
+    def kit_wall_show(self):
+        key = self.kit_sel
+        path = ricekit.theme_wall(key)
+        own = os.path.basename(path) == ricekit.THEME_WALLS.get(key)
+        self.kit_wall_name.set_text(pretty_wall(path) if path else tr('No wallpaper'))
+        self.kit_wall_note.set_text(tr("the theme's own") if own else tr('chosen by you'))
+        self.kit_wall_box.surface = None
+        self.kit_wall_box.queue_draw()
+        if path:
+            self.kit_wall_box.set_image(path)
+
+    def kit_wall_set(self, path):
+        key = self.kit_sel
+        ricekit.set_theme_wall(key, path)
+        self.kit_wall_load(key)
+        self.kit_wall_show()
+        name = ricekit.KITS[key]['name']
+        self.toast(f'{name} → {pretty_wall(ricekit.theme_wall(key))}')
+        if ricekit.current() == key:   # the theme in use: the desktop follows
+            self.kit_wall_now()
+
+    def kit_wall_now(self):
+        path = ricekit.theme_wall(self.kit_sel)
+        if path:
+            self.set_wallpaper(path)
+
+    def kit_wall_pick(self):
+        """A gallery of the rice's wallpapers (+ any other image) for the
+        selected theme."""
+        key = self.kit_sel
+        dlg = Gtk.Dialog(title=f'{tr("Wallpaper of")} {ricekit.KITS[key]["name"]}', transient_for=self, modal=True)
+        dlg.set_default_size(980, 640)
+        dlg.get_style_context().add_class('rice-editor')
+        area = dlg.get_content_area()
+        area.set_border_width(12)
+        sc = Gtk.ScrolledWindow()
+        sc.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        flow = Gtk.FlowBox()
+        flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        flow.set_min_children_per_line(3)
+        flow.set_max_children_per_line(4)
+        flow.set_column_spacing(10)
+        flow.set_row_spacing(10)
+        cur = ricekit.theme_wall(key)
+        for path in list_walls():
+            b = Gtk.Button()
+            b.get_style_context().add_class('style-tile')
+            if path == cur:
+                b.get_style_context().add_class('active')
+            v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            img = ImageBox(self, 220, 124)
+            img.set_image(path)
+            v.pack_start(img, False, False, 0)
+            lb = Gtk.Label(label=pretty_wall(path), xalign=0)
+            lb.get_style_context().add_class('row-desc')
+            lb.set_ellipsize(Pango.EllipsizeMode.END)
+            lb.set_max_width_chars(24)
+            v.pack_start(lb, False, False, 0)
+            b.add(v)
+            b.connect('clicked', lambda *_, pth=path: (dlg.destroy(), self.kit_wall_set(pth)))
+            flow.add(b)
+        sc.add(flow)
+        area.pack_start(sc, True, True, 0)
+        other = self.button(tr('󰉏  Other image…'), 'ghost', lambda *_: self.kit_wall_file(dlg))
+        other.set_halign(Gtk.Align.START)
+        area.pack_start(other, False, False, 8)
+        dlg.show_all()
+
+    def kit_wall_file(self, parent_dlg):
+        dlg = Gtk.FileChooserDialog(title=tr('Other image…'), parent=self, action=Gtk.FileChooserAction.OPEN)
+        dlg.add_buttons('_Cancel', Gtk.ResponseType.CANCEL, '_Open', Gtk.ResponseType.OK)
+        f = Gtk.FileFilter()
+        f.set_name('Images')
+        for ext in ('png', 'jpg', 'jpeg', 'webp'):
+            f.add_pattern(f'*.{ext}')
+            f.add_pattern(f'*.{ext.upper()}')
+        dlg.add_filter(f)
+        dlg.set_current_folder(os.path.join(HOME, 'Imágenes') if os.path.isdir(os.path.join(HOME, 'Imágenes'))
+                               else HOME)
+        if dlg.run() == Gtk.ResponseType.OK and dlg.get_filename():
+            path = dlg.get_filename()
+            dlg.destroy()
+            parent_dlg.destroy()
+            self.kit_wall_set(path)
+        else:
+            dlg.destroy()
 
     def kit_apply(self, all_parts=False):
         key = self.kit_sel
@@ -2122,6 +2255,8 @@ class RiceEditor(Gtk.Window):
             self.bar_sync()
             if hasattr(self, 'ws_style_btns'):
                 self.mark_tiles(self.ws_style_btns, barconf.load().get('ws_style', 'classic'))
+            if 'wallpaper' in parts:
+                GLib.timeout_add(1500, lambda: (self.refresh_wall_views(), False)[1])
             self.toast(f'{name} applied ({", ".join(parts)})')
         run_bg(lambda: ricekit.apply(key, parts), done)
 

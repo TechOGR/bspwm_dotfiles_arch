@@ -94,6 +94,11 @@ ES = {
         'la cápsula pac-man de la barra', 'borders, corners, gaps, glow, blur, opacity':
         'bordes, esquinas, espacios, brillo, desenfoque, opacidad',
     'Apply whole theme': 'Aplicar el tema completo', 'Apply selected parts': 'Aplicar las partes elegidas',
+    "the theme's wallpaper (changeable in Themes)": 'el fondo del tema (se cambia en Temas)',
+    'Theme wallpaper': 'Fondo del tema', 'the picture this theme puts on the desktop':
+        'la imagen que este tema pone en el escritorio', 'Change…': 'Cambiar…', 'Reset': 'Restablecer',
+    'Set now': 'Poner ahora', 'Wallpaper of': 'Fondo de', 'Other image…': 'Otra imagen…',
+    "the theme's own": 'el propio del tema', 'chosen by you': 'elegido por ti', 'No wallpaper': 'Sin fondo',
     'Everything is re-applied live: bar, windows, terminals, menus':
         'Todo se vuelve a aplicar en vivo: barra, ventanas, terminales, menús',
     'in use': 'en uso', 'Apply': 'Aplicar', 'Pick at least one part': 'Elige al menos una parte',

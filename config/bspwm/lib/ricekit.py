@@ -30,7 +30,82 @@ PARTS = [
     ('bar', '󱔓', 'Bar', 'polybar drawn in the style'),
     ('workspaces', '󰮯', 'Workspaces', 'the pac-man pill of the bar'),
     ('windows', '󰖲', 'Windows', 'borders, corners, gaps, glow, blur, opacity'),
+    ('wallpaper', '󰸉', 'Wallpaper', "the theme's wallpaper (changeable in Themes)"),
 ]
+STYLE_PARTS = ('colors', 'bar', 'workspaces', 'windows')   # all of them = the whole theme (RICE_KIT)
+
+# The wallpaper each theme brings (rices/<rice>/walls). RiceEditor -> Themes
+# changes it per theme; the choice is kept in config/theme-walls.json.
+THEME_WALLS = {
+    'glass': 'anime-girl-blue-hair-4k-wallpaper-uhdpaper.com-894@5@m.jpg',
+    'cyber': 'neon-pink-sunset-scenery-digital-art-4k-wallpaper-uhdpaper.com-439@5@r.jpg',
+    'minimal': 'anime-girl-sunrise-4k-wallpaper-uhdpaper.com-507@5@f.jpg',
+    'pixel': 'spongebob-sponge-on-the-run-houses-uhdpaper.com-4K-7.355.jpg',
+    'liquid': 'pirate-ship-island-digital-art-4k-wallpaper-uhdpaper.com-659@2@b.jpg',
+    'hud': 'muichiro-tokito-demon-slayer-4k-wallpaper-uhdpaper.com-907@5@g.jpg',
+    'fire': 'kyojuro-rengoku-demon-slayer-4k-wallpaper-uhdpaper.com-844@5@h.jpg',
+    'nature': 'anime-girl-alone-sunflower-4k-wallpaper-uhdpaper.com-462@5@r.jpg',
+    'sketch': 'kenpachi-bleach-anime-4k-wallpaper-uhdpaper.com-143@5@q.jpg',
+    'crystal': 'rukia-bankai-bleach-tybw-art-4k-wallpaper-uhdpaper.com-280@5@r.jpg',
+    'lava': 'itachi-uchiha-crow-akatsuki-4k-wallpaper-uhdpaper.com-760@5@r.jpg',
+    'neon': 'super-saiyan-rose-dragon-ball-4k-wallpaper-uhdpaper.com-92@5@r.jpg',
+    'holo': 'alone-anime-girl-starry-night-sky-stars-scenery-4k-wallpaper-uhdpaper.com-225@5@i.jpg',
+    'storm': 'kakashi-hatake-4k-wallpaper-uhdpaper.com-89@5@r.jpg',
+    'venom': 'muzan-demon-slayer-4k-wallpaper-uhdpaper.com-916@5@g.jpg',
+    'butterfly': 'shinobu-kocho-demon-slayer-4k-wallpaper-uhdpaper.com-843@5@h.jpg',
+    'snake': 'sukuna-jujutsu-kaisen-4k-wallpaper-uhdpaper.com-765@5@r.jpg',
+}
+WALLS_CONF = os.path.join(os.path.expanduser('~/.config/bspwm'), 'config/theme-walls.json')
+
+
+def _walls_conf():
+    try:
+        import json
+        with open(WALLS_CONF) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def theme_wall(kit):
+    """The wallpaper of a theme (absolute path, '' when there is none):
+    the one chosen in RiceEditor, else the theme's own from the rice walls."""
+    walls = os.path.join(bc.rice_dir(), 'walls')
+    for cand in (_walls_conf().get(kit), THEME_WALLS.get(kit)):
+        if not cand:
+            continue
+        path = cand if os.path.isabs(cand) else os.path.join(walls, cand)
+        if os.path.isfile(path):
+            return path
+    return ''
+
+
+def set_theme_wall(kit, path):
+    """Keep path as the wallpaper of kit (None: back to the theme's own)."""
+    import json
+    d = _walls_conf()
+    walls = os.path.join(bc.rice_dir(), 'walls')
+    if path is None:
+        d.pop(kit, None)
+    else:
+        d[kit] = os.path.basename(path) if os.path.dirname(os.path.abspath(path)) == walls else path
+    tmp = WALLS_CONF + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(d, f, indent=2, sort_keys=True)
+        f.write('\n')
+    os.replace(tmp, WALLS_CONF)
+
+
+def paint_wall(path):
+    """Put path on screen now (like WallSelect): stops a video / slideshow
+    wallpaper, paints it and refreshes what follows the wallpaper."""
+    subprocess.Popen(['sh', '-c', '''
+        VideoWall --stop 2>/dev/null
+        [ -f /tmp/wall_refresh.pid ] && kill "$(cat /tmp/wall_refresh.pid)" 2>/dev/null
+        rm -f /tmp/wall_refresh.pid
+        feh --bg-fill "$1" && WallSync
+    ''', '_', path], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 # id: name, tagline, palette function, windows settings, dunst radius
 KITS = {
@@ -298,7 +373,7 @@ def _apply(kit, parts, run):
     ensure_palettes()
     # a theme brings its own colors back to what it applies
     import wspill
-    wspill.set_tint([{'colors': 'locks'}.get(p, p) for p in parts], None)
+    wspill.set_tint([{'colors': 'locks'}.get(p, p) for p in parts if p != 'wallpaper'], None)
     if 'colors' in parts:
         set_palette(k['palette'])
         pal = palette(kit)
@@ -325,12 +400,25 @@ def _apply(kit, parts, run):
         if 'workspaces' in parts:
             conf['ws_style'] = kit
         bc.save(conf)
-    if len(parts) == len(PARTS):
+    wall = theme_wall(kit) if 'wallpaper' in parts else ''
+    if wall:
+        set_var('ENGINE', 'Default')
+        set_var('DEFAULT_WALL', wall)
+    if all(p in parts for p in STYLE_PARTS):
         set_var('RICE_KIT', kit)
     if not run:
         return
     theme = os.path.join(bc.BSPWM, 'bin/Theme.sh')
-    cmd = [theme] if 'colors' in parts or 'windows' in parts else [os.path.join(bc.BSPWM, 'bin/BarCtl'), 'apply']
+    if 'colors' in parts or 'windows' in parts:
+        cmd = [theme]   # its wallpaper module paints DEFAULT_WALL too
+    elif 'bar' in parts or 'workspaces' in parts:
+        cmd = [os.path.join(bc.BSPWM, 'bin/BarCtl'), 'apply']
+    else:
+        cmd = None
+    if wall and cmd != [theme]:
+        paint_wall(wall)
+    if not cmd:
+        return
     try:
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=90,
                        start_new_session=True)
@@ -339,23 +427,34 @@ def _apply(kit, parts, run):
 
 
 # ═══════════════════════════════════════════════════════════ preview
-def preview(cr, kit, W, H):
-    """A small desktop in the theme: wallpaper tones, bar, workspaces and
-    two tiled windows (RiceEditor -> Themes tiles)."""
+def preview(cr, kit, W, H, wall=None):
+    """A small desktop in the theme: its wallpaper (a cairo surface, else
+    palette tones), bar, workspaces and two tiled windows (RiceEditor ->
+    Themes tiles)."""
     import math
     import cairo
     import wspill as ws
     pal = {k: ws.rgb(v) for k, v in palette(kit).items()}
     k = KITS[kit]
-    # wallpaper: palette glow blobs
     cr.set_source_rgb(*pal['bg'])
     cr.paint()
-    for fx, fy, key, a in ((0.2, 0.9, 'blue', 0.35), (0.85, 0.25, 'magenta', 0.30), (0.55, 0.6, 'cyan', 0.12)):
-        g = cairo.RadialGradient(W * fx, H * fy, 0, W * fx, H * fy, W * 0.55)
-        g.add_color_stop_rgba(0, *pal[key], a)
-        g.add_color_stop_rgba(1, *pal[key], 0)
-        cr.set_source(g)
+    if wall is not None:   # the theme's wallpaper, cover-scaled, a bit darker
+        sw, sh = wall.get_width(), wall.get_height()
+        sc = max(W / sw, H / sh)
+        cr.save()
+        cr.scale(sc, sc)
+        cr.set_source_surface(wall, (W / sc - sw) / 2, (H / sc - sh) / 2)
         cr.paint()
+        cr.restore()
+        cr.set_source_rgba(*pal['bg'], 0.25)
+        cr.paint()
+    else:   # palette glow blobs
+        for fx, fy, key, a in ((0.2, 0.9, 'blue', 0.35), (0.85, 0.25, 'magenta', 0.30), (0.55, 0.6, 'cyan', 0.12)):
+            g = cairo.RadialGradient(W * fx, H * fy, 0, W * fx, H * fy, W * 0.55)
+            g.add_color_stop_rgba(0, *pal[key], a)
+            g.add_color_stop_rgba(1, *pal[key], 0)
+            cr.set_source(g)
+            cr.paint()
     # bar + workspaces at a 1280 px wide virtual screen
     s = W / 820
     cr.save()
@@ -384,7 +483,10 @@ def preview(cr, kit, W, H):
             cr.set_source_rgba(*glow, a if focused else a * 0.5)
             cr.fill()
         ws.rounded(cr, x, y, colw, h, wr)
-        cr.set_source_rgba(*pal['black'], float(k['win']['P_ACTIVE_OPACITY' if focused else 'P_INACTIVE_OPACITY']))
+        alpha = float(k['win']['P_ACTIVE_OPACITY' if focused else 'P_INACTIVE_OPACITY'])
+        if wall is not None:   # let the theme's wallpaper show through the windows
+            alpha *= 0.5
+        cr.set_source_rgba(*pal['black'], alpha)
         cr.fill()
         if k['win']['BORDER_WIDTH']:
             ws.rounded(cr, x + bw / 2, y + bw / 2, colw - bw, h - bw, max(0, wr - bw / 2))
