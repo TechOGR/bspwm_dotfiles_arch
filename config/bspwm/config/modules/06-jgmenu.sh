@@ -11,8 +11,8 @@ _template="$_dir/menu.csv"
     sed '/^# Colors$/,$d' "$_target"
     cat << EOF
 # Colors
-color_menu_bg = ${jg_bg:-$bg} 97
-color_menu_border = ${blue} 70
+color_menu_bg = ${jg_bg:-$bg} 0
+color_menu_border = ${blue} 0
 color_norm_bg = #000000 0
 color_norm_fg = ${jg_fg:-$fg}
 color_sel_bg = ${blue} 16

@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# JgMenuSkin - the theme's panel (scene + the style's frame) under
+# jgmenu's submenus. jgmenu draws its @icon widgets (the themed tiles,
+# bin/ThemeSurfaces) on the main menu only: while a menu is open this
+# watches its windows and puts a themed window, the exact size of each
+# submenu, right under it (jgmenu's own background is transparent).
+# Started by bin/JgMenu with the menu, it quits when the menu closes.
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+import os
+import sys
+import time
+import ctypes
+
+sys.path.insert(0, os.path.expanduser('~/.config/bspwm/lib'))
+import riceui as ui  # noqa: E402
+from riceui import Gtk, Gdk, GLib, cairo  # noqa: E402
+import gi  # noqa: E402
+gi.require_version('GdkX11', '3.0')
+from gi.repository import GdkX11  # noqa: E402
+
+POLL_MS = 30
+
+
+class X:
+    """The jgmenu windows on screen, read with libX11 (no fork per poll)."""
+
+    class Attr(ctypes.Structure):
+        _fields_ = [('x', ctypes.c_int), ('y', ctypes.c_int), ('width', ctypes.c_int),
+                    ('height', ctypes.c_int), ('border_width', ctypes.c_int), ('depth', ctypes.c_int),
+                    ('visual', ctypes.c_void_p), ('root', ctypes.c_ulong), ('c_class', ctypes.c_int),
+                    ('bit_gravity', ctypes.c_int), ('win_gravity', ctypes.c_int),
+                    ('backing_store', ctypes.c_int), ('backing_planes', ctypes.c_ulong),
+                    ('backing_pixel', ctypes.c_ulong), ('save_under', ctypes.c_int),
+                    ('colormap', ctypes.c_ulong), ('map_installed', ctypes.c_int),
+                    ('map_state', ctypes.c_int), ('all_event_masks', ctypes.c_long),
+                    ('your_event_mask', ctypes.c_long), ('do_not_propagate_mask', ctypes.c_long),
+                    ('override_redirect', ctypes.c_int), ('screen', ctypes.c_void_p)]
+
+    class Hint(ctypes.Structure):
+        _fields_ = [('res_name', ctypes.c_void_p), ('res_class', ctypes.c_void_p)]   # raw: XFree'd
+
+    def __init__(self):
+        x = self.x = ctypes.CDLL('libX11.so.6')
+        x.XOpenDisplay.restype = ctypes.c_void_p
+        x.XOpenDisplay.argtypes = [ctypes.c_char_p]
+        x.XDefaultRootWindow.restype = ctypes.c_ulong
+        x.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+        x.XQueryTree.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong),
+                                 ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.POINTER(ctypes.c_ulong)),
+                                 ctypes.POINTER(ctypes.c_uint)]
+        x.XGetWindowAttributes.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(X.Attr)]
+        x.XGetClassHint.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(X.Hint)]
+        x.XFree.argtypes = [ctypes.c_void_p]
+        x.XSetErrorHandler.argtypes = [ctypes.c_void_p]
+        # a window can vanish between the tree and its attributes: ignore
+        self._handler = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)(lambda d, e: 0)
+        x.XSetErrorHandler(ctypes.cast(self._handler, ctypes.c_void_p))
+        self.dpy = x.XOpenDisplay(None)
+        self.root = x.XDefaultRootWindow(self.dpy)
+        self.cls = {}
+
+    def jgmenus(self):
+        """[(xid, x, y, w, h)] of the mapped jgmenu windows, bottom to top."""
+        c = ctypes
+        r, p, kids, n = c.c_ulong(), c.c_ulong(), c.POINTER(c.c_ulong)(), c.c_uint()
+        if not self.x.XQueryTree(self.dpy, self.root, c.byref(r), c.byref(p), c.byref(kids), c.byref(n)):
+            return []
+        wins = [kids[i] for i in range(n.value)]
+        if kids:
+            self.x.XFree(kids)
+        out = []
+        for w in wins:
+            if w not in self.cls:
+                h = X.Hint()
+                name = b''
+                if self.x.XGetClassHint(self.dpy, w, c.byref(h)):
+                    name = c.string_at(h.res_class) if h.res_class else b''
+                    for ptr in (h.res_name, h.res_class):
+                        if ptr:
+                            self.x.XFree(ptr)
+                self.cls[w] = name == b'jgmenu'
+            if not self.cls[w]:
+                continue
+            a = X.Attr()
+            if self.x.XGetWindowAttributes(self.dpy, w, c.byref(a)) and a.map_state == 2:
+                out.append((w, a.x, a.y, a.width, a.height))
+        return out
+
+
+def main():
+    _lock = ui.single_instance('jgmenuskin')  # noqa: F841
+    GLib.set_prgname('JgMenuSkin')
+    display = Gdk.Display.get_default()
+    display.error_trap_push()   # a submenu can close while we restack under it
+    import wscard  # noqa: F401  (the styles)
+    pal = ui.load_palette()
+    style = ui.theme_style()
+    xw = X()
+    st = {'main': None, 'unders': {}, 'seen': 0.0, 'start': time.monotonic(), 'cache': {}}
+
+    def panel(w, h):
+        key = (w, h)
+        if key not in st['cache']:
+            surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
+            ui.themed_panel(cairo.Context(surf), w, h, 3, pal, radius=14, veil=0.66, style=style)
+            st['cache'][key] = surf
+        return st['cache'][key]
+
+    def under(xid, x, y, w, h):
+        win = st['unders'].get(xid)
+        if win is None:
+            win = Gtk.Window(type=Gtk.WindowType.POPUP)
+            win.set_title('JgMenuSkin')
+            win.set_wmclass('JgMenuSkin', 'JgMenuSkin')
+            ui.rgba_window(win)
+            win.geo = None
+
+            def draw(wd, cr):
+                cr.set_operator(cairo.OPERATOR_SOURCE)
+                cr.set_source_surface(panel(*wd.geo[2:]), 0, 0)
+                cr.paint()
+                return True
+            win.connect('draw', draw)
+            st['unders'][xid] = win
+        if win.geo != (x, y, w, h):
+            win.geo = (x, y, w, h)
+            win.set_size_request(w, h)
+            win.resize(w, h)
+            win.move(x, y)
+            win.realize()
+            win.get_window().input_shape_combine_region(cairo.Region(), 0, 0)
+            win.show()
+            win.queue_draw()
+        try:   # right under its submenu
+            target = GdkX11.X11Window.foreign_new_for_display(display, xid)
+            win.get_window().restack(target, False)
+        except Exception:
+            pass
+
+    def poll():
+        menus = xw.jgmenus()
+        now = time.monotonic()
+        if menus:
+            st['seen'] = now
+            if st['main'] is None:
+                st['main'] = menus[0][0]   # the first one up is the main menu (it has its tiles)
+        live = set()
+        for xid, x, y, w, h in menus:
+            if xid == st['main']:
+                continue
+            live.add(xid)
+            under(xid, x, y, w, h)
+        for xid in list(st['unders']):
+            if xid not in live:
+                st['unders'].pop(xid).destroy()
+        # the menu closed (or never came): done
+        if (st['seen'] and now - st['seen'] > 0.6) or (not st['seen'] and now - st['start'] > 6):
+            Gtk.main_quit()
+            return False
+        return True
+
+    GLib.timeout_add(POLL_MS, poll)
+    Gtk.main()
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,9 @@
+#!/bin/sh
+# =============================================================
+# JgMenu - jgmenu in the theme: the menu, plus bin/JgMenuSkin that
+# puts the theme's panel under its submenus (jgmenu itself only draws
+# the themed tiles on the main menu). Bound to a right click on the
+# desktop (sxhkdrc).
+# =============================================================
+"$HOME"/.config/bspwm/bin/JgMenuSkin >/dev/null 2>&1 &
+exec jgmenu_run "$@"

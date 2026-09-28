@@ -99,7 +99,7 @@ super + alt + o
     win=$(xdotool getmouselocation --shell | sed -n 's/^WINDOW=\(.*\)/\1/p'); \
     type=$(xprop -id "$win" _NET_WM_WINDOW_TYPE 2>/dev/null); \
     case "$type" in *DESKTOP*) \
-        jgmenu_run ;; esac
+        JgMenu ;; esac
 
 # Power off, Reboot, Log out, kill an app, soft reload
 # (lock screen is super + shift + s)
