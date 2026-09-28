@@ -177,3 +177,10 @@ ANIMATED_WALL="$HOME/.config/bspwm/rices/crackone/walls/videos/animated_wall-1.m
 VIDEO_PAUSE="windows"	# Pause the video: never | windows (covered desktop) | fullscreen
 VIDEO_FIT="fill"		# fill (crop) | fit (bars) | stretch
 VIDEO_SPEED="1.0"		# Playback speed 0.25 - 2.0
+
+# Animations (RiceEditor -> Compositor -> Animations)
+# ANIM_MODE: auto (Normal only) | on | off -- ANIM_BAR / ANIM_WIN / ANIM_BACK: theme | off | effect
+ANIM_MODE="auto"
+ANIM_BAR="theme"
+ANIM_WIN="theme"
+ANIM_BACK="theme"

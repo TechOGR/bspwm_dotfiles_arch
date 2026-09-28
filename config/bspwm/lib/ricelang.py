@@ -212,6 +212,22 @@ ES = {
         'marcos, pac-man comiendo) · Lite: picom con xrender, sin desenfoque ni animaciones, temas estáticos '
         '(se mantienen sombras, esquinas y fundido). Para VMs sin 3D',
     '(applied)': '(aplicado)',
+    'No 3D acceleration here (VM): Normal may freeze. To see the animations keep Lite and set Animations → Animate: On':
+        'Sin aceleración 3D (VM): Normal puede congelarse. Para ver las animaciones deja Lite y pon '
+        'Animaciones → Animar: Sí',
+    'Animations': 'Animaciones', 'the themes in motion · each part with its own effect':
+        'los temas en movimiento · cada parte con su efecto', 'Animate': 'Animar',
+    'Auto: only in Normal · On: in Lite too (a VM can show them; they cost some CPU) · Off: still themes':
+        'Auto: solo en Normal · On: también en Lite (una VM puede mostrarlas; gastan algo de CPU) · Off: temas '
+        'estáticos', 'On': 'Sí', 'Off': 'No',
+    "The theme's own": 'El del tema', 'Bar and workspaces': 'Barra y escritorios',
+    'the polybar skin and the pac-man pill': 'la piel de la barra y la pastilla pac-man',
+    'Window frames': 'Marcos de ventana', 'the frame of the focused window': 'el marco de la ventana enfocada',
+    'Terminal textures': 'Texturas de terminal', 'the scene behind the terminals': 'la escena detrás de las terminales',
+    'Electric crackle': 'Chispas eléctricas', 'Rising embers': 'Brasas que suben',
+    'Flying butterflies / leaves': 'Mariposas / hojas volando', 'Flowing edge': 'Borde que fluye',
+    'Soft shimmer': 'Brillo suave', 'Breathing glow': 'Brillo que respira', 'Running lights': 'Luces que corren',
+    'Floating motes': 'Partículas flotando', 'Lightning flashes': 'Relámpagos', 'Light sweep': 'Barrido de luz',
     'suggested for this machine: Lite': 'recomendado para este equipo: Lite',
     'suggested for this machine: Normal': 'recomendado para este equipo: Normal',
     'Backend': 'Motor', 'glx is the fastest; xrender works everywhere': 'glx es el más rápido; xrender funciona en todas partes',

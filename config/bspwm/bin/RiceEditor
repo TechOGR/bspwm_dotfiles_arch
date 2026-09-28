@@ -81,6 +81,12 @@ except Exception:
     videowall = None
 
 
+try:
+    import riceanim  # noqa: E402  (the themes in motion)
+except Exception:
+    riceanim = None
+
+
 def avatar_path():
     if avatar:
         return avatar.current_path()
@@ -3155,6 +3161,24 @@ class RiceEditor(Gtk.Window):
                      False, False, 0)
         p.pack_start(c, False, False, 0)
 
+        c = self.card('󰐾', 'Animations', 'the themes in motion · each part with its own effect')
+        c.pack_start(self.row('Animate', 'Auto: only in Normal · On: in Lite too (a VM can show them; they cost '
+                              'some CPU) · Off: still themes',
+                              self.combo([('auto', 'Auto'), ('on', 'On'), ('off', 'Off')],
+                                         cfg.raw('ANIM_MODE', 'auto') or 'auto',
+                                         lambda v: self.set_anim('ANIM_MODE', v))), False, False, 0)
+        if riceanim:
+            edge = [('theme', "The theme's own"), ('off', 'Off')] + list(riceanim.EDGE_EFFECTS)
+            back = [('theme', "The theme's own"), ('off', 'Off')] + list(riceanim.BACK_EFFECTS)
+            for key, title, desc, opts in (
+                    ('ANIM_BAR', 'Bar and workspaces', 'the polybar skin and the pac-man pill', edge),
+                    ('ANIM_WIN', 'Window frames', 'the frame of the focused window', edge),
+                    ('ANIM_BACK', 'Terminal textures', 'the scene behind the terminals', back)):
+                c.pack_start(self.row(title, desc, self.combo(opts, cfg.raw(key, 'theme') or 'theme',
+                                                               lambda v, k=key: self.set_anim(k, v))),
+                             False, False, 0)
+        p.pack_start(c, False, False, 0)
+
         c = self.card('󰍹', 'Engine', 'needs a picom restart')
         c.pack_start(self.row('Backend', 'glx is the fastest; xrender works everywhere',
                               self.combo([('glx', 'glx'), ('egl', 'egl'), ('xrender', 'xrender')],
@@ -3212,6 +3236,12 @@ class RiceEditor(Gtk.Window):
         p.pack_start(c, False, False, 0)
         return p
 
+    def set_anim(self, key, v):
+        self.cfg.set(key, v)
+        spawn([os.path.join(BIN, 'RoundBorders'), '--reload'])
+        spawn([os.path.join(BIN, 'Respawn'), os.path.join(BIN, 'WorkspacePill'), '--restart'])
+        self.toast(f'Animations → {v}')
+
     def set_perf(self, v):
         def work():
             subprocess.run([PERF_PROFILE, 'set', v], timeout=10)
@@ -3224,6 +3254,9 @@ class RiceEditor(Gtk.Window):
             subprocess.run([os.path.join(BIN, 'BarCtl'), 'apply'], stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL, timeout=30)
         self.perf_now = v
+        if v == 'full' and perf_detect() == 'lite':
+            self.toast('No 3D acceleration here (VM): Normal may freeze. To see the animations keep Lite '
+                       'and set Animations → Animate: On', error=True)
         run_bg(work, lambda _r: self.toast(f'Performance → {"Lite" if v == "lite" else "Normal"} (applied)'))
 
     def set_backend(self, v):

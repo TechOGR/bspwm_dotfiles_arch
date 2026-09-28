@@ -360,7 +360,8 @@ def main():
         around every window. Lite leaves out the glow inside the edge."""
         info = win.info
         w, h, bw = info['w'], info['h'], info['bw']
-        key = (info['skin'], w, h, bw, st['conf']['r'], info.get('tint'), st['conf']['lite'], info.get('tiled'))
+        key = (info['skin'], w, h, bw, st['conf']['r'], info.get('tint'), st['conf']['lite'], info.get('tiled'),
+               anim['win'])
         cache = getattr(win, 'cache', None)
         if not cache or cache[0] != key:
             surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
@@ -370,7 +371,7 @@ def main():
             reg = wscard.alpha_region(surf)
             reg.union(handle_band(win.cid, w, h))
             outline = None
-            if anim['on']:   # the path the light runs along, and room for its glow
+            if anim['win']:   # the path the effect runs along, and room for it (sparks, embers...)
                 cr = cairo.Context(surf)
                 wscard.window_outline(cr, info['skin'], E + bw / 2, E + bw / 2, fw - bw, fh - bw,
                                       min(st['conf']['r'], fw / 2, fh / 2))
@@ -380,7 +381,7 @@ def main():
                 bc_.move_to(*outline[0][0])
                 for p_ in outline[0][1:]:
                     bc_.line_to(*p_)
-                bc_.set_line_width(22)
+                bc_.set_line_width(60)
                 bc_.stroke()
                 reg.union(wscard.alpha_region(band))
             cache = win.cache = (key, surf, reg, outline)
@@ -400,9 +401,9 @@ def main():
             cache = frame_cache(win)
             cr.set_source_surface(cache[1], 0, 0)
             cr.paint_with_alpha(1.0 if info['focused'] else 0.45)
-            if anim['on'] and info['focused'] and cache[3]:
+            if anim['win'] and info['focused'] and cache[3]:
                 with wscard.ws.tinted(info['skin'], info.get('tint')):
-                    riceanim.draw_comets(cr, info['skin'], cache[3], anim['t'], width=1.8)
+                    riceanim.draw_edge(cr, anim['win'], info['skin'], cache[3], anim['t'])
             return True
         r = max(0.0, st['conf']['r'] - bw / 2)
         x, y, ww, hh = bw / 2, bw / 2, w - bw, h - bw
@@ -576,10 +577,10 @@ def main():
         cr.set_operator(cairo.OPERATOR_SOURCE)
         cr.set_source_surface(cache[1], 0, 0)
         cr.paint()
-        if anim['on']:   # a slow light crossing the texture
+        if anim['back']:   # the texture in motion (motes, lightning, a light sweep)
             cr.set_operator(cairo.OPERATOR_OVER)
             with wscard.ws.tinted(st['conf']['skin'], st['conf']['tint']):
-                riceanim.sweep(cr, st['conf']['skin'], i['w'], i['h'], anim['t'])
+                riceanim.draw_back(cr, anim['back'], st['conf']['skin'], i['w'], i['h'], anim['t'])
         return True
 
     def sync_backs(restack_all):
@@ -767,7 +768,7 @@ def main():
         return False
 
     # ── Normal mode: light runs along the focused frame, crosses the textures
-    anim = {'on': False, 't': 0.0, 'box': None, 'n': 0, 'timer': None}
+    anim = {'on': False, 't': 0.0, 'box': None, 'n': 0, 'timer': None, 'win': None, 'back': None}
     t_start = time.monotonic()
 
     def anim_tick():
@@ -776,35 +777,39 @@ def main():
         skin = st['conf']['skin'] if st['conf'] else None
         if not skin:
             return True
-        for win in st['rings'].values():
+        full = anim['win'] in riceanim.FULL
+        for win in st['rings'].values() if anim['win'] and not (full and anim['n'] % 2) else ():
             info = getattr(win, 'info', {})
             cache = getattr(win, 'cache', None)
             if not (info.get('focused') and win.get_visible() and cache and cache[3]):
                 continue
             import cairo as _c
             scratch = _c.Context(_c.ImageSurface(_c.FORMAT_A8, 1, 1))
-            box = riceanim.draw_comets(scratch, skin, cache[3], anim['t'], width=1.8)
+            box = riceanim.draw_edge(scratch, anim['win'], skin, cache[3], anim['t'])
             for b in (getattr(win, 'anim_box', None), box):
                 if b:
                     win.queue_draw_area(int(b[0]) - 2, int(b[1]) - 2, int(b[2] - b[0]) + 4, int(b[3] - b[1]) + 4)
             win.anim_box = box
-        if anim['n'] % 3 == 0:   # the textures at a third of the rate (slow light)
+        if anim['back'] and anim['n'] % 2 == 0:   # the textures at half the rate
             for win in st['backs'].values():
                 if win.get_visible():
                     win.queue_draw()
         return True
 
     def anim_config():
-        on = bool(wscard) and riceanim.enabled() and (not st['conf'].get('lite') or os.environ.get('RICE_ANIM') == '1')
-        if on != anim['on']:
+        skin = st['conf']['skin']
+        new = (riceanim.effect('win', skin), riceanim.effect('back', skin)) if wscard and skin else (None, None)
+        on = any(new)
+        if new != (anim['win'], anim['back']) or on != anim['on']:
+            anim['win'], anim['back'] = new
             anim['on'] = on
+            if anim['timer']:
+                GLib.source_remove(anim['timer'])
+                anim['timer'] = None
             for w_ in list(st['rings'].values()) + list(st['backs'].values()):
                 w_.cache = None   # outlines are only kept while animated
             if on:
-                anim['timer'] = GLib.timeout_add(1000 // riceanim.FPS, anim_tick)
-            elif anim['timer']:
-                GLib.source_remove(anim['timer'])
-                anim['timer'] = None
+                anim['timer'] = GLib.timeout_add(1000 // riceanim.fps(), anim_tick)
 
     def schedule(restack_all=False):
         # several events within 10 ms: one sync, and a restack if any asked

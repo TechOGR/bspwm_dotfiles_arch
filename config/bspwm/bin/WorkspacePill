@@ -145,10 +145,10 @@ def main():
             cr.set_source_surface(skin_cache['surf'], 0, 0)
             cr.paint()
             cr.set_operator(cairo.OPERATOR_OVER)
-            if anim['on'] and bar_style != 'strip':
+            if anim['skin'] and bar_style != 'strip':
                 with wspill.tinted(skin, wspill.tint_target('bar')):
                     for k, out in enumerate(skin_cache['outlines']):
-                        riceanim.draw_comets(cr, skin, out, anim['t'], width=1.6, seed=k)
+                        riceanim.draw_edge(cr, anim['skin'], skin, out, anim['t'], seed=k, scale=0.8)
             return True
 
         def skin_rects():
@@ -275,11 +275,11 @@ def main():
                 with wspill.soft_edges(cr, m['win_h'], top=m['ext'], bottom=m['ext']), \
                         wspill.tinted(style, wspill.tint_target('workspaces')):
                     wspill.paint(cr, style, m, [d[1] for d in st['desks']])
-                    if anim['on'] and style != 'classic':   # light around the pill
+                    if anim['pill'] and style != 'classic':   # the pill's edge in motion
                         px, py, pw, ph = wspill.pill_rect(m)
                         wspill.rounded(cr, px + 0.5, py + 0.5, pw - 1, ph - 1, (ph - 1) / 2)
-                        riceanim.draw_comets(cr, style, riceanim.flat_points(cr), anim['t'] * 1.3,
-                                             width=1.4, seed=5, scale=0.8)
+                        riceanim.draw_edge(cr, anim['pill'], style, riceanim.flat_points(cr), anim['t'],
+                                           seed=5, scale=0.6)
             finally:
                 wspill.MOUTH[0] = wspill.ANIM_T[0] = None
         return True
@@ -373,20 +373,22 @@ def main():
     win.connect('draw', on_draw)
 
     # ── Normal mode: the pill and the bar move (lib/riceanim.py)
-    anim = {'on': riceanim.enabled(), 't': 0.0, 'box': None}
+    anim = {'pill': riceanim.effect('bar', style) if has_pill else None,
+            'skin': riceanim.effect('bar', skin) if skin else None, 't': 0.0, 'box': None}
+    anim['on'] = bool(anim['pill'] or anim['skin'])
     t0 = time.monotonic()
 
     def tick():
         anim['t'] = time.monotonic() - t0
         if win.get_visible():
             win.queue_draw()   # small window: all of it
-        if skin_win and skin_win.get_visible() and skin_cache['outlines']:
+        if anim['skin'] and skin_win and skin_win.get_visible() and skin_cache['outlines']:
             # repaint only where the comets were and are now
             import cairo as _c
             scratch = _c.Context(_c.ImageSurface(_c.FORMAT_A8, 1, 1))
             box = None
             for k, out in enumerate(skin_cache['outlines']):
-                b = riceanim.draw_comets(scratch, skin, out, anim['t'], width=1.6, seed=k)
+                b = riceanim.draw_edge(scratch, anim['skin'], skin, out, anim['t'], seed=k, scale=0.8)
                 if b:
                     box = b if box is None else (min(box[0], b[0]), min(box[1], b[1]),
                                                  max(box[2], b[2]), max(box[3], b[3]))
@@ -398,7 +400,7 @@ def main():
         return True
     if anim['on'] and (has_pill or skin):
         wspill.FRAME_CACHE = {}
-        GLib.timeout_add(1000 // riceanim.FPS, tick)
+        GLib.timeout_add(1000 // riceanim.fps(), tick)
     win.connect('button-press-event', on_press)
     win.connect('scroll-event', on_scroll)
     win.connect('realize', lambda *_: place())
