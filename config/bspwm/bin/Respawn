@@ -26,19 +26,43 @@ name=${1##*/}
 crashes=0
 since=$(date +%s)
 
+# The daemon touches $RESPAWN_BEAT every few seconds (RoundBorders,
+# WorkspacePill): if that stops for 20 s it is hung (its frames frozen on
+# screen), it is killed and started again like after a crash.
+BEAT="$HOME/.cache/${USER:-user}/respawn-$name.beat"
+ERR="$HOME/.cache/${USER:-user}/respawn-$name.err"
+export RESPAWN_BEAT="$BEAT"
+
 while :; do
-    "$@"
+    rm -f "$BEAT"
+    [ -f "$ERR" ] && [ "$(wc -c < "$ERR")" -gt 200000 ] && tail -c 100000 "$ERR" > "$ERR.tmp" && mv -f "$ERR.tmp" "$ERR"
+    "$@" 2>>"$ERR" &
+    pid=$!
+    hung=0
+    trap 'kill "$pid" 2>/dev/null; exit 0' TERM INT
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep 5
+        if [ -f "$BEAT" ] && [ $(( $(date +%s) - $(stat -c %Y "$BEAT") )) -gt 20 ]; then
+            printf '%s  %s hung (no heartbeat for 20 s): killed\n' "$(date '+%F %T')" "$name" >> "$LOG"
+            kill -9 "$pid" 2>/dev/null
+            hung=1
+        fi
+    done
+    wait "$pid"
     rc=$?
-    case $rc in
-        0|130|137|143) exit "$rc" ;;    # clean exit / killed on purpose
-    esac
+    if [ "$hung" = 0 ]; then
+        case $rc in
+            0|130|137|143) exit "$rc" ;;    # clean exit / killed on purpose
+        esac
+    fi
     now=$(date +%s)
     if [ $((now - since)) -gt 60 ]; then
         since=$now
         crashes=0
     fi
     crashes=$((crashes + 1))
-    printf '%s  %s exited with %s (crash %s in this minute)\n' "$(date '+%F %T')" "$name" "$rc" "$crashes" >> "$LOG"
+    printf '%s  %s exited with %s (crash %s in this minute, see %s)\n' "$(date '+%F %T')" "$name" "$rc" \
+        "$crashes" "$ERR" >> "$LOG"
     if [ "$crashes" -gt 5 ]; then
         printf '%s  %s: too many crashes, not restarting it\n' "$(date '+%F %T')" "$name" >> "$LOG"
         exit "$rc"

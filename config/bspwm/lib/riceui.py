@@ -215,6 +215,7 @@ class PanelAnim:
     def _tick(self):
         if not self.alive:
             return False
+        Gdk.Display.get_default().sync()   # a round trip: Xlib's 16-bit request counter must not wrap (xcb aborts)
         if not (self.outline and self.widget.get_visible()):
             return True
         box = self.draw(cairo.Context(cairo.ImageSurface(cairo.FORMAT_A8, 1, 1)))

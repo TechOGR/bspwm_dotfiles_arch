@@ -90,6 +90,19 @@ def main():
         return
 
     GLib.set_prgname('WorkspacePill')
+
+    # heartbeat for bin/Respawn: a hung main loop stops touching it
+    beat = os.environ.get('RESPAWN_BEAT')
+    if beat:
+        def _beat():
+            try:
+                with open(beat, 'a'):
+                    os.utime(beat)
+            except OSError:
+                pass
+            return True
+        _beat()
+        GLib.timeout_add_seconds(4, _beat)
     # X errors on other programs' windows are expected: a window can close
     # between an event and our read of it (polybar restarting) (BadWindow). GDK aborts
     # the program on an untrapped X error, and then every frame / texture
@@ -379,6 +392,7 @@ def main():
     t0 = time.monotonic()
 
     def tick():
+        Gdk.Display.get_default().sync()   # a round trip: Xlib's 16-bit request counter must not wrap (xcb aborts)
         anim['t'] = time.monotonic() - t0
         if win.get_visible():
             win.queue_draw()   # small window: all of it

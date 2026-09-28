@@ -195,6 +195,7 @@ def main():
             pass
 
     def poll():
+        Gdk.Display.get_default().sync()   # a round trip: Xlib's 16-bit request counter must not wrap (xcb aborts)
         menus = xw.jgmenus()
         now = time.monotonic()
         if menus:

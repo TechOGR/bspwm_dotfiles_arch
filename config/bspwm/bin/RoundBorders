@@ -112,44 +112,23 @@ def theme_var(name):
 
 
 class Stacking:
-    """bspwm's _NET_CLIENT_LIST_STACKING (bottom to top) read with libX11
-    on a connection of its own (GDK's get_window_stack() comes back empty
-    under bspwm and property_get can't be called from Python)."""
+    """bspwm's _NET_CLIENT_LIST_STACKING (bottom to top). GDK's
+    get_window_stack() comes back empty under bspwm and property_get can't
+    be called from Python; raw libX11 calls from this process (ctypes, on a
+    connection of our own or on GDK's) broke xcb's request sequence
+    ("Unknown sequence number while processing queue"): the daemon aborted
+    or hung. xprop runs apart, only when the stacking changes."""
 
-    def __init__(self):
-        import ctypes
-        self.c = ctypes
-        x = self.x = ctypes.CDLL('libX11.so.6')
-        x.XOpenDisplay.restype = ctypes.c_void_p
-        x.XOpenDisplay.argtypes = [ctypes.c_char_p]
-        x.XDefaultRootWindow.restype = ctypes.c_ulong
-        x.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
-        x.XInternAtom.restype = ctypes.c_ulong
-        x.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
-        x.XGetWindowProperty.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_long,
-                                         ctypes.c_long, ctypes.c_int, ctypes.c_ulong,
-                                         ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_int),
-                                         ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_ulong),
-                                         ctypes.POINTER(ctypes.c_void_p)]
-        x.XFree.argtypes = [ctypes.c_void_p]
-        self.dpy = x.XOpenDisplay(None)
-        self.root = x.XDefaultRootWindow(self.dpy) if self.dpy else 0
-        self.atom = x.XInternAtom(self.dpy, b'_NET_CLIENT_LIST_STACKING', 0) if self.dpy else 0
+    def __init__(self, gdk_display=None):
+        pass
 
     def read(self):
-        if not self.dpy:
-            return []
-        c = self.c
-        typ, fmt, n, after, data = c.c_ulong(), c.c_int(), c.c_ulong(), c.c_ulong(), c.c_void_p()
-        ok = self.x.XGetWindowProperty(self.dpy, self.root, self.atom, 0, 4096, 0, 33,   # 33 = XA_WINDOW
-                                       c.byref(typ), c.byref(fmt), c.byref(n), c.byref(after), c.byref(data))
-        if ok != 0 or not data.value:
-            return []
         try:
-            arr = c.cast(data, c.POINTER(c.c_ulong))
-            return [arr[i] for i in range(n.value)]
-        finally:
-            self.x.XFree(data)
+            out = subprocess.run(['xprop', '-root', '-notype', '_NET_CLIENT_LIST_STACKING'],
+                                 capture_output=True, text=True, timeout=2).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            return []
+        return [int(w, 16) for w in re.findall(r'0x[0-9a-fA-F]+', out.partition('#')[2])]
 
 
 def perf_lite():
@@ -183,6 +162,19 @@ def main():
         wscard = None
     _lock = ui.single_instance('roundborders')  # noqa: F841  writes LOCK
     GLib.set_prgname('RoundBorders')
+
+    # heartbeat for bin/Respawn: a hung main loop stops touching it
+    beat = os.environ.get('RESPAWN_BEAT')
+    if beat:
+        def _beat():
+            try:
+                with open(beat, 'a'):
+                    os.utime(beat)
+            except OSError:
+                pass
+            return True
+        _beat()
+        GLib.timeout_add_seconds(4, _beat)
     # X errors on other programs' windows are expected: a window can close
     # between an event and our restack/shape of it (BadWindow). GDK aborts
     # the program on an untrapped X error, and then every frame / texture
@@ -676,7 +668,7 @@ def main():
                 pass
         Gtk.main_do_event(ev)
 
-    stacking = Stacking()
+    stacking = Stacking(Gdk.Display.get_default())
     root_win = Gdk.get_default_root_window()
     root_win.set_events(root_win.get_events() | Gdk.EventMask.PROPERTY_CHANGE_MASK)
     Gdk.event_handler_set(on_gdk_event)
@@ -772,6 +764,7 @@ def main():
     t_start = time.monotonic()
 
     def anim_tick():
+        Gdk.Display.get_default().sync()   # a round trip: Xlib's 16-bit request counter must not wrap (xcb aborts)
         anim['t'] = time.monotonic() - t_start
         anim['n'] += 1
         skin = st['conf']['skin'] if st['conf'] else None
