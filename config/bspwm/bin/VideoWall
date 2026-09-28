@@ -32,6 +32,7 @@ import threading
 
 sys.path.insert(0, os.path.join(os.path.expanduser('~'), '.config/bspwm/lib'))
 import videowall as vw  # noqa: E402
+import bspcsafe  # noqa: E402,F401  every bspc call has a time limit (no bspwm freeze)
 
 os.makedirs(vw.RUNTIME, exist_ok=True)
 PID_WALL = os.path.join(vw.RUNTIME, 'videowall.pid')

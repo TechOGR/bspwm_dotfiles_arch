@@ -18,7 +18,3 @@ bspc config presel_feedback_color "${blue}"
 
 # Rounded borders for picom's xrender backend (does nothing with GLX)
 "$HOME"/.config/bspwm/bin/RoundBorders --restart >/dev/null 2>&1 &
-
-# Resize from any border or corner: the pointer turns into the arrow of
-# that border (invisible input-only handles in the gaps, bin/ResizeHandles)
-"$HOME"/.config/bspwm/bin/ResizeHandles --restart >/dev/null 2>&1 &

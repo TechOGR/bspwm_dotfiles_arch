@@ -28,6 +28,7 @@ import subprocess
 sys.path.insert(0, os.path.expanduser('~/.config/bspwm/lib'))
 import barconf as bc  # noqa: E402
 import wspill  # noqa: E402
+import bspcsafe  # noqa: E402,F401  every bspc call has a time limit (no bspwm freeze)
 
 LOCK = os.path.join(bc.HOME, '.cache', os.environ.get('USER', 'user'), '.workspacepill.lock')
 

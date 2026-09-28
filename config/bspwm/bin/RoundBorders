@@ -4,6 +4,8 @@
 # Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
 #
 # RoundBorders - window frames: the theme's style around every window
+# (and the ring just outside a framed window resizes it: the pointer takes
+# the arrow of that border or corner, dragging moves it)
 # (WIN_SKIN, RiceEditor -> Windows / Themes) and, without a style, borders
 # that follow picom's rounded corners on xrender (the "lite" profile).
 #
@@ -34,6 +36,8 @@ import json
 import time
 import signal
 import subprocess
+sys.path.insert(0, os.path.join(os.path.expanduser('~'), '.config/bspwm/lib'))
+import bspcsafe  # noqa: E402,F401  every bspc call has a time limit (no bspwm freeze)
 
 HOME = os.path.expanduser('~')
 BSPWM = os.path.join(HOME, '.config/bspwm')
@@ -146,6 +150,7 @@ def main():
             'xrender': xrender(),
             'r': corner_radius(),
             'bw': int(bspc('config', 'border_width') or 0),
+            'gap': int(bspc('config', 'window_gap') or 0),
             'focused': hexcolor(bspc('config', 'focused_border_color')),
             'normal': hexcolor(bspc('config', 'normal_border_color')),
         }
@@ -226,6 +231,70 @@ def main():
 
     E = wscard.WINDOW_REACH if wscard else 0   # room for ornaments outside the window
     INNER, CORNER = 26, 80                     # glow inside the edge / corner ornaments
+
+    # ── resize from the frame: the ring just outside each window (in the gap)
+    # takes the pointer, shows the arrow of that border / corner and drags it
+    CORNER = 22
+    CURSORS = {'top': 'n-resize', 'bottom': 's-resize', 'left': 'w-resize', 'right': 'e-resize',
+               'top_left': 'nw-resize', 'top_right': 'ne-resize', 'bottom_left': 'sw-resize',
+               'bottom_right': 'se-resize'}
+    cursors = {}
+
+    def cursor(name):
+        if name not in cursors:
+            try:
+                cursors[name] = Gdk.Cursor.new_from_name(Gdk.Display.get_default(), CURSORS[name])
+            except Exception:
+                cursors[name] = None
+        return cursors[name]
+
+    def handle_band(cid, w, h):
+        """The input region of a frame overlay (w x h, window at E..): a band
+        just outside the window's border."""
+        t = 10 if cid not in st['tiled'] else max(5, st['conf'].get('gap', 0) // 2 + 1)
+        reg = cairo.Region(cairo.RectangleInt(E - t, E - t, w - 2 * E + 2 * t, h - 2 * E + 2 * t))
+        reg.subtract(cairo.Region(cairo.RectangleInt(E, E, w - 2 * E, h - 2 * E)))
+        return reg
+
+    def handle_at(win, ex, ey):
+        w0, h0 = win.info['w'] - 2 * E, win.info['h'] - 2 * E
+        horiz = 'left' if ex < E + CORNER else 'right' if ex > E + w0 - CORNER else ''
+        vert = 'top' if ey < E + CORNER else 'bottom' if ey > E + h0 - CORNER else ''
+        return f'{vert}_{horiz}' if vert and horiz else vert or horiz or None
+
+    def on_motion(win, ev):
+        d = st.get('drag')
+        if d:
+            now = time.monotonic()
+            if now - d['last'] < 0.012:
+                return True
+            dx = int(ev.x_root - d['x']) if 'left' in d['name'] or 'right' in d['name'] else 0
+            dy = int(ev.y_root - d['y']) if 'top' in d['name'] or 'bottom' in d['name'] else 0
+            if dx or dy:
+                subprocess.run(['bspc', 'node', hex(d['cid']), '-z', d['name'], str(dx), str(dy)],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                d['x'] += dx
+                d['y'] += dy
+                d['last'] = now
+            return True
+        name = handle_at(win, ev.x, ev.y)
+        if name and getattr(win, 'cursor_name', None) != name:
+            win.cursor_name = name
+            win.get_window().set_cursor(cursor(name))
+        return True
+
+    def on_press(win, ev):
+        if ev.button != 1 or not getattr(win, 'cid', None):
+            return False
+        name = handle_at(win, ev.x, ev.y)
+        if name:
+            st['drag'] = {'cid': win.cid, 'name': name, 'x': ev.x_root, 'y': ev.y_root, 'last': 0}
+            subprocess.run(['bspc', 'node', hex(win.cid), '-f'], capture_output=True)
+        return True
+
+    def on_release(_win, _ev):
+        st['drag'] = None
+        return True
 
     def frame_region(w, h):
         """Bands around the edges (E outside, INNER inside) + corner squares."""
@@ -498,10 +567,16 @@ def main():
                 if vis:
                     win.set_visual(vis)
                 win.info = {}
+                win.cid = cid
                 win.connect('draw', draw)
+                win.add_events(Gdk.EventMask.POINTER_MOTION_MASK | Gdk.EventMask.BUTTON_PRESS_MASK |
+                               Gdk.EventMask.BUTTON_RELEASE_MASK)
+                win.connect('motion-notify-event', on_motion)
+                win.connect('button-press-event', on_press)
+                win.connect('button-release-event', on_release)
                 st['rings'][cid] = win
             info = {'x': x, 'y': y, 'w': w, 'h': h, 'bw': bw, 'focused': foc, 'skin': skin,
-                    'tint': st['conf']['tint']}
+                    'tint': st['conf']['tint'], 'tiled': cid in st['tiled']}
             if not new and not win.get_visible():   # back from another desktop
                 win.show()
                 restack(cid, win, 'above', True)
@@ -529,7 +604,9 @@ def main():
             gw = win.get_window()
             r = min(st['conf']['r'], w // 2, h // 2)
             gw.shape_combine_region(frame_region(w, h) if skin else ring_region(w, h, bw, r), 0, 0)
-            gw.input_shape_combine_region(cairo.Region(), 0, 0)
+            # skinned frames: the band outside the window resizes it; plain
+            # border rings (xrender) take no input
+            gw.input_shape_combine_region(handle_band(cid, w, h) if skin else cairo.Region(), 0, 0)
             if new:
                 win.connect('map-event', lambda w, _e, c=cid: (restack(c, w, 'above', True), False)[1])
                 win.show()
