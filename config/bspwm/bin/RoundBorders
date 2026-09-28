@@ -466,6 +466,19 @@ def main():
             except Exception:
                 pass
 
+    vw_cache = {'t': -9.0, 'ids': []}
+
+    def videowall_ids():
+        """The video wallpaper's windows, looked up at most every 3 s (a fork
+        of xdotool costs ~90 ms: it delayed a terminal's background by 200 ms
+        when coming back to its desktop)."""
+        now = time.monotonic()
+        if now - vw_cache['t'] > 3:
+            vw_cache['t'] = now
+            vw_cache['ids'] = subprocess.run(['xdotool', 'search', '--class', '^VideoWall$'],
+                                             capture_output=True, text=True).stdout.split()
+        return vw_cache['ids']
+
     def covering(cid):
         """Is the window over (or under) another one on screen?"""
         r = st.get('rects', {}).get(cid)
@@ -497,8 +510,7 @@ def main():
                     pass
             gw.lower()
             # a video wallpaper (VideoWall) sits at the bottom too: go over it
-            vids = subprocess.run(['xdotool', 'search', '--class', '^VideoWall$'], capture_output=True,
-                                  text=True).stdout.split()
+            vids = videowall_ids()
             for v in vids[-1:]:
                 try:
                     gw.restack(GdkX11.X11Window.foreign_new_for_display(Gdk.Display.get_default(),
@@ -531,8 +543,21 @@ def main():
             gw.shape_combine_region(reg, 0, 0)
 
     def draw_back(win, cr):
+        """The terminal's themed background, rendered once per size / style /
+        tint and kept in memory: coming back to a desktop only repaints it
+        (reading the scene from the disk cache took up to 400 ms, the
+        terminal showed without its texture meanwhile)."""
         i = win.info
-        wscard.paint_backdrop(cr, st['conf']['skin'], i['w'], i['h'], max(0, st['conf']['r'] - i['bw']))
+        key = (st['conf']['skin'], i['w'], i['h'], st['conf']['r'], i['bw'], st['conf']['tint'])
+        cache = getattr(win, 'back_cache', None)
+        if not cache or cache[0] != key:
+            surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, i['w'], i['h'])
+            wscard.paint_backdrop(cairo.Context(surf), st['conf']['skin'], i['w'], i['h'],
+                                  max(0, st['conf']['r'] - i['bw']))
+            cache = win.back_cache = (key, surf)
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_source_surface(cache[1], 0, 0)
+        cr.paint()
         return True
 
     def sync_backs(restack_all):
