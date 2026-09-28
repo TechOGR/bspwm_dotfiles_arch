@@ -30,10 +30,11 @@ HOME = os.path.expanduser('~')
 OUT = os.path.join(HOME, '.cache', 'rice-surfaces')
 ROFI = os.path.join(HOME, '.config/bspwm/config/rofi-themes')
 JG_W, JG_H = 288, 576        # jgmenu's main menu window (menu_width 273 + icon room, its items)
-M = 16                       # room for the frame's ornaments inside the picture
+M = 3     # the frame right at the window's edge: picom's shadow and rounded corners (14 px, as
+          # the menus' own) then hug the theme's frame instead of drawing a second border around it
 
 
-def render(path, W, H, pal, style, radius=18):
+def render(path, W, H, pal, style, radius=14):
     surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, W, H)
     cr = cairo.Context(surf)
     ui.themed_panel(cr, W, H, M, pal, radius=radius, veil=0.66, style=style)
@@ -88,7 +89,7 @@ def main():
     for name, fw, fh in (('clipboard', 0.47, 0.42), ('pass', 0.37, 0.40)):
         png = os.path.join(OUT, f'rofi-{name}.png')
         render(png, int(SW * fw), int(SH * fh), pal, style)
-        rasi(name, png, M + 18)
+        rasi(name, png, M + 26)
 
 
 if __name__ == '__main__':
