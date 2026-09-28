@@ -212,6 +212,12 @@ _have_theme themes "$gtk_theme" || gtk_theme="TechOGR"
 _have_theme icons "$gtk_icons" || gtk_icons="Papirus-Dark"
 _have_theme icons "$gtk_icons" || gtk_icons="Adwaita"
 
+# The folders in the theme (palette gradient + the theme's emblem): a theme
+# of their own that inherits the configured one (bin/ThemeIcons)
+if [ "${THEME_FOLDERS:-true}" = "true" ] && "$HOME"/.config/bspwm/bin/ThemeIcons "$gtk_icons" >/dev/null 2>&1; then
+    gtk_icons="Rice-Folders"
+fi
+
 # Sidebar bookmarks (Thunar / GTK file chooser). They need absolute paths,
 # so they're written here for the current $HOME instead of shipped: the old
 # repo copy pointed to /home/onelcrack/... and every entry failed to open.
