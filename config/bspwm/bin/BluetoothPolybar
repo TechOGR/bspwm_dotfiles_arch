@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+# =============================================================
+# BluetoothPolybar - Bluetooth in the bar, in the theme
+#
+# Long-lived (polybar tail = true), every 5 s or at once on SIGUSR1:
+#   no adapter        nothing (the module hides)
+#   service stopped / radio blocked / off    the crossed glyph, dim
+#   on                the glyph in the accent
+#   connected         the device's kind + its name (and battery %)
+# Left click: BtCenter · right click: power on / off.
+#
+#   BluetoothPolybar            the module
+#   BluetoothPolybar --toggle   power on / off
+# =============================================================
+
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+
+HOME = os.path.expanduser('~')
+BSPWM = os.path.join(HOME, '.config/bspwm')
+KIND = {'audio-headset': '\U000f02cb', 'audio-headphones': '\U000f02cb', 'audio-card': '\U000f04c3',
+        'input-keyboard': '\U000f0313', 'input-mouse': '\U000f037d', 'input-gaming': '\U000f0297',
+        'phone': '\U000f011c'}
+
+
+def run(*args, timeout=6):
+    try:
+        return subprocess.run(args, capture_output=True, text=True, timeout=timeout).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return ''
+
+
+if sys.argv[1:2] == ['--toggle']:
+    on = 'Powered: yes' in run('bluetoothctl', 'show')
+    run('bluetoothctl', 'power', 'off' if on else 'on', timeout=10)
+    run('pkill', '-USR1', '-f', 'bin/BluetoothPolybar')
+    sys.exit(0)
+
+
+def colors():
+    pal = {}
+    try:
+        rice = open(os.path.join(BSPWM, '.rice')).read().strip()
+        for line in open(os.path.join(BSPWM, 'rices', rice, 'colors.ini')):
+            m = re.match(r'([\w-]+)\s*=\s*(#[0-9a-fA-F]{6})', line.strip())
+            if m:
+                pal[m.group(1)] = m.group(2)
+    except OSError:
+        pass
+    return pal
+
+
+def render(pal):
+    if not (os.path.isdir('/sys/class/bluetooth') and os.listdir('/sys/class/bluetooth')):
+        return ''
+    dim, acc, fg = pal.get('blue-gray', '#555555'), pal.get('blue', '#7aa2f7'), pal.get('fg', '#c0caf5')
+    off = f'%{{F{dim}}}%{{T3}}\U000f00b2%{{T-}}%{{F-}}'
+    if run('systemctl', 'is-active', 'bluetooth').strip() != 'active':
+        return off
+    show = run('bluetoothctl', 'show')
+    if 'Powered: yes' not in show:
+        return off
+    connected = re.findall(r'^Device ([0-9A-F:]{17}) (.+)$', run('bluetoothctl', 'devices', 'Connected'), re.M)
+    if not connected:
+        return f'%{{F{acc}}}%{{T3}}\U000f00af%{{T-}}%{{F-}}'
+    mac, name = connected[0]
+    info = run('bluetoothctl', 'info', mac)
+    icon = (re.search(r'Icon: (\S+)', info) or [None, ''])[1]
+    bat = re.search(r'Battery Percentage: \S+ \((\d+)\)', info)
+    name = name.strip()
+    name = name if len(name) <= 14 else name[:13] + '…'
+    more = f' +{len(connected) - 1}' if len(connected) > 1 else ''
+    b = f' %{{F{dim}}}{bat.group(1)}%%{{F-}}' if bat else ''
+    return (f'%{{F{acc}}}%{{T3}}{KIND.get(icon, chr(0xf00b1))}%{{T-}}%{{F-}} '
+            f'%{{F{fg}}}{name}{more}%{{F-}}{b}')
+
+
+def main():
+    wake = {'now': False}
+    signal.signal(signal.SIGUSR1, lambda *_: wake.update(now=True))
+    last = None
+    while True:
+        out = render(colors())
+        if out != last:
+            print(out, flush=True)
+            last = out
+        for _ in range(10):
+            if wake['now']:
+                wake['now'] = False
+                break
+            time.sleep(0.5)
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (BrokenPipeError, KeyboardInterrupt):
+        pass

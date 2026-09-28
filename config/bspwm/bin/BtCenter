@@ -1,0 +1,279 @@
+#!/usr/bin/env python3
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# BtCenter - Bluetooth, in the theme
+#   ✔ Adapter: power, discoverable, name, address
+#   ✔ Your devices (paired): kind, connected, battery; connect /
+#     disconnect, trust, forget
+#   ✔ Nearby devices: scan, pair + trust + connect in one click
+#   ✔ Guides when the service is stopped (enable it) or the radio is
+#     blocked (rfkill), says so when there is no adapter
+# Everything through bluetoothctl, in the background.
+#
+#   BtCenter            the window (bluetooth module, left click)
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+import os
+import re
+import sys
+
+sys.path.insert(0, os.path.expanduser('~/.config/bspwm/lib'))
+import riceui as ui  # noqa: E402
+import riceapp as ra  # noqa: E402
+from riceui import Gtk, GLib  # noqa: E402
+
+T = ra.translator({
+    'Bluetooth': 'Bluetooth', 'Power': 'Encendido', 'Visible': 'Visible', 'Your devices': 'Tus dispositivos',
+    'Nearby': 'Cercanos', 'Scan': 'Buscar', 'Scanning…': 'Buscando…', 'Connect': 'Conectar',
+    'Disconnect': 'Desconectar', 'Forget': 'Olvidar', 'Trust': 'Confiar', 'Pair': 'Emparejar',
+    'connected': 'conectado', 'paired': 'emparejado', 'trusted': 'de confianza', 'battery': 'batería',
+    'No Bluetooth adapter': 'No hay adaptador Bluetooth',
+    'This machine has no Bluetooth radio (or it is disabled in the firmware / VM).':
+        'Este equipo no tiene radio Bluetooth (o está desactivada en la BIOS / VM).',
+    'The Bluetooth service is stopped': 'El servicio Bluetooth está detenido',
+    'Start it now and at every boot': 'Iniciarlo ahora y en cada arranque',
+    'The radio is blocked (airplane mode / rfkill)': 'La radio está bloqueada (modo avión / rfkill)',
+    'Unblock': 'Desbloquear', 'Nothing paired yet': 'Aún no hay nada emparejado',
+    'Press Scan to find devices nearby': 'Pulsa Buscar para encontrar dispositivos cercanos',
+    'Done': 'Hecho', 'Failed': 'Falló', 'Adapter': 'Adaptador', 'off': 'apagado', 'on': 'encendido',
+    'Opened in a terminal': 'Abierto en una terminal', 'devices': 'dispositivos',
+})
+
+KIND = {   # bluetoothctl Icon -> glyph
+    'audio-headset': '\U000f02cb', 'audio-headphones': '\U000f02cb', 'audio-card': '\U000f04c3',
+    'input-keyboard': '\U000f0313', 'input-mouse': '\U000f037d', 'input-gaming': '\U000f0297',
+    'phone': '\U000f011c', 'computer': '\U000f0322', 'input-tablet': '\U000f04f6', 'camera-video': '\U000f0567',
+}
+
+
+def bt(*args, timeout=20):
+    return ra.cmd(['bluetoothctl', *args], timeout=timeout)
+
+
+def state():
+    """{'service', 'adapter', 'blocked', 'powered', 'discoverable', 'name', 'addr'}"""
+    s = {'service': ra.cmd(['systemctl', 'is-active', 'bluetooth'])[1].strip() == 'active',
+         'adapter': os.path.isdir('/sys/class/bluetooth') and bool(os.listdir('/sys/class/bluetooth'))}
+    rc, out, _e = ra.cmd(['rfkill', 'list', 'bluetooth'])
+    s['blocked'] = 'Soft blocked: yes' in out or 'Hard blocked: yes' in out
+    if s['service'] and s['adapter']:
+        _rc, show, _e = bt('show', timeout=6)
+        s['powered'] = 'Powered: yes' in show
+        s['discoverable'] = 'Discoverable: yes' in show
+        m = re.search(r'Alias: (.+)', show)
+        s['name'] = m.group(1).strip() if m else ''
+        m = re.search(r'Controller ([0-9A-F:]{17})', show)
+        s['addr'] = m.group(1) if m else ''
+    return s
+
+
+def devices(which=None):
+    _rc, out, _e = bt('devices', *([which] if which else []), timeout=8)
+    devs = []
+    for mac, name in re.findall(r'^Device ([0-9A-F:]{17}) (.+)$', out, re.M):
+        _rc, info, _e = bt('info', mac, timeout=6)
+        get = lambda k: (re.search(rf'^\s*{k}: (.+)$', info, re.M) or [None, ''])[1].strip()  # noqa: E731
+        bat = re.search(r'Battery Percentage: \S+ \((\d+)\)', info)
+        devs.append({'mac': mac, 'name': name.strip(), 'icon': get('Icon'), 'paired': get('Paired') == 'yes',
+                     'connected': get('Connected') == 'yes', 'trusted': get('Trusted') == 'yes',
+                     'battery': int(bat.group(1)) if bat else None})
+    return devs
+
+
+class BtCenter(ra.CenterWindow):
+    def __init__(self):
+        super().__init__('BtCenter', T('Bluetooth'), '\U000f00af', (900, 660))
+        self.switches = {}
+        for key, text in (('power', T('Power')), ('discoverable', T('Visible'))):
+            box = Gtk.Box(spacing=8)
+            box.pack_start(ra.label(text, 'key'), False, False, 0)
+            sw = Gtk.Switch()
+            sw.set_valign(Gtk.Align.CENTER)
+            sw.handler = sw.connect('state-set', lambda s, on, k=key: self.on_switch(k, on))
+            box.pack_start(sw, False, False, 0)
+            self.switches[key] = sw
+            self.head_right.pack_start(box, False, False, 6)
+        self.main = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        self.body.pack_start(self.scroller(self.main), True, True, 0)
+        self.nearby = []
+        self.refresh()
+        GLib.timeout_add_seconds(5, lambda: (self.refresh(quiet=True), True)[1])
+
+    def set_switch(self, key, on, sensitive=True):
+        sw = self.switches[key]
+        sw.handler_block(sw.handler)
+        sw.set_active(on)
+        sw.set_state(on)
+        sw.handler_unblock(sw.handler)
+        sw.set_sensitive(sensitive)
+
+    def on_switch(self, key, on):
+        args = ['power' if key == 'power' else 'discoverable', 'on' if on else 'off']
+        self.action(args)
+        return False
+
+    def refresh(self, quiet=False):
+        if getattr(self, 'busy', False):
+            return
+        def work():
+            s = state()   # no adapter / service: bluetoothctl would only wait
+            return s, devices('Paired') if s['adapter'] and s['service'] and not s['blocked'] else []
+        if getattr(self, 'reading', False):
+            return
+        self.reading = True
+        ra.run_bg(work, lambda r: (setattr(self, 'reading', False), self.show(r)))
+
+    def show(self, r):
+        if isinstance(r, Exception):
+            return
+        s, paired = r
+        key = (tuple(sorted(s.items())), tuple(tuple(sorted(d.items())) for d in paired),
+               tuple(d['mac'] for d in self.nearby))
+        if key == getattr(self, 'last', None):
+            return
+        self.last = key
+        ra.clear(self.main)
+        on = bool(s.get('powered'))
+        self.set_switch('power', on, s['adapter'] and s['service'])
+        self.set_switch('discoverable', bool(s.get('discoverable')), on)
+        self.subtitle.set_text(f"{s.get('name', '')}  {s.get('addr', '')}  ·  {T('on') if on else T('off')}"
+                               if s['adapter'] and s['service'] else '')
+        if not s['adapter']:
+            self.notice('\U000f00b2', T('No Bluetooth adapter'),
+                        T('This machine has no Bluetooth radio (or it is disabled in the firmware / VM).'))
+            return
+        if not s['service']:
+            self.notice('\U000f00b2', T('The Bluetooth service is stopped'), '',
+                        (T('Start it now and at every boot'),
+                         lambda: self.term('sudo systemctl enable --now bluetooth.service')))
+            return
+        if s['blocked']:
+            self.notice('\U000f001d', T('The radio is blocked (airplane mode / rfkill)'), '',
+                        (T('Unblock'), lambda: self.run(['rfkill', 'unblock', 'bluetooth'])))
+        card = ra.section(f"{T('Your devices')}  ·  {len(paired)}", '\U000f00b1')
+        if not paired:
+            card.pack_start(ra.label(T('Nothing paired yet'), 'sub'), False, False, 0)
+        for d in sorted(paired, key=lambda d: (not d['connected'], d['name'].lower())):
+            card.pack_start(self.dev_row(d, True, on), False, False, 0)
+        self.main.pack_start(card, False, False, 0)
+        near = ra.section(T('Nearby'), '\U000f0437')
+        sb = ra.button(T('Scan'), self.scan, 'nbtn', '\U000f04e6')
+        sb.set_sensitive(on)
+        near.head.pack_end(sb, False, False, 0)
+        fresh = [d for d in self.nearby if d['mac'] not in {p['mac'] for p in paired}]
+        if not fresh:
+            near.pack_start(ra.label(T('Press Scan to find devices nearby'), 'sub'), False, False, 0)
+        for d in fresh:
+            near.pack_start(self.dev_row(d, False, on), False, False, 0)
+        self.main.pack_start(near, False, False, 0)
+        self.main.show_all()
+
+    def notice(self, glyph, title, text, action=None):
+        card = ra.section(title, glyph)
+        if text:
+            card.pack_start(ra.label(text, 'sub', wrap=True), False, False, 0)
+        if action:
+            b = ra.button(action[0], action[1], 'nbtn accent')
+            b.set_halign(Gtk.Align.START)
+            card.pack_start(b, False, False, 0)
+        self.main.pack_start(card, False, False, 0)
+        self.main.show_all()
+
+    def dev_row(self, d, paired, on):
+        row = Gtk.Box(spacing=10)
+        row.pack_start(ra.label(KIND.get(d['icon'], '\U000f00af'), 'rglyph'), False, False, 0)
+        t = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        t.pack_start(ra.label(d['name'], 'val', ellipsize=True), False, False, 0)
+        t.pack_start(ra.label(d['mac'], 'key'), False, False, 0)
+        row.pack_start(t, True, True, 0)
+        if d.get('battery') is not None:
+            row.pack_start(ra.label(f"\U000f007e {d['battery']}%", 'chip' if d['battery'] > 20 else 'chip bad'),
+                           False, False, 0)
+        if d['connected']:
+            row.pack_start(ra.label(T('connected'), 'chip ok'), False, False, 0)
+        elif d.get('trusted'):
+            row.pack_start(ra.label(T('trusted'), 'chip'), False, False, 0)
+        mac = d['mac']
+        if paired:
+            b = ra.button(T('Disconnect') if d['connected'] else T('Connect'),
+                          lambda: self.action(['disconnect' if d['connected'] else 'connect', mac], timeout=25),
+                          'nbtn' if d['connected'] else 'nbtn accent')
+            b.set_sensitive(on)
+            row.pack_start(b, False, False, 0)
+            if not d.get('trusted'):
+                row.pack_start(ra.button(T('Trust'), lambda: self.action(['trust', mac]), 'nbtn'), False, False, 0)
+            row.pack_start(ra.button('', lambda: self.action(['remove', mac]), 'nbtn danger', '\U000f0a7a',
+                                     T('Forget')), False, False, 0)
+        else:
+            row.pack_start(ra.button(T('Pair'), lambda: self.pair(mac), 'nbtn accent', '\U000f00b1'),
+                           False, False, 0)
+        return row
+
+    def scan(self):
+        self.say(T('Scanning…'))
+
+        def work():
+            bt('--timeout', '10', 'scan', 'on', timeout=15)
+            return [d for d in devices() if not d['paired']]
+
+        def done(r):
+            self.nearby = [] if isinstance(r, Exception) else r
+            self.say(f'{len(self.nearby)} {T("devices")}')
+            self.last = None
+            self.refresh()
+        ra.run_bg(work, done)
+
+    def pair(self, mac):
+        self.say(f'{T("Pair")} {mac}…')
+
+        def work():
+            rc, _o, err = bt('pair', mac, timeout=40)
+            if rc == 0:
+                bt('trust', mac)
+                rc, _o, err = bt('connect', mac, timeout=25)
+            return rc, err
+
+        ra.run_bg(work, self.after)
+
+    def action(self, args, timeout=20):
+        self.busy = True
+        self.say('bluetoothctl ' + ' '.join(args) + ' …')
+        ra.run_bg(lambda: bt(*args, timeout=timeout)[::2], self.after)
+
+    def run(self, args):
+        ra.run_bg(lambda: ra.cmd(args)[::2], self.after)
+
+    def after(self, r):
+        self.busy = False
+        if isinstance(r, Exception):
+            self.say(f'{T("Failed")}: {r}', True)
+        else:
+            rc, err = r
+            self.say(T('Done') if rc == 0 else f'{T("Failed")}: {err.splitlines()[-1] if err else rc}', rc != 0)
+        self.last = None
+        self.refresh()
+        # the bar module shows it at once
+        ra.cmd(['pkill', '-USR1', '-f', 'bin/BluetoothPolybar'])
+
+    def term(self, command):
+        ra.terminal(command, T('Bluetooth'))
+        self.say(T('Opened in a terminal') + f':  {command}')
+
+
+def main():
+    _lock = ui.single_instance('btcenter', toggle=True)  # noqa: F841
+    GLib.set_prgname('BtCenter')
+    ra.float_rule('BtCenter')
+    w = BtCenter()
+    ui.quit_on_sigterm(w.destroy)
+    w.show_all()
+    Gtk.main()
+
+
+if __name__ == '__main__':
+    main()

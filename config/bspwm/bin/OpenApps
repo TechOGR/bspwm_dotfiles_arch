@@ -30,7 +30,7 @@ case "$1" in
 		RofiPass
 		;;
 	--bluetooth)
-		rofi-bluetooth
+		BtCenter || rofi-bluetooth
 		;;
 	--clipboard)
 		ClipMenu || clipcat-menu
