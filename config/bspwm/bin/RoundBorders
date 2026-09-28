@@ -111,6 +111,47 @@ def theme_var(name):
     return m.group(1) if m else ''
 
 
+class Stacking:
+    """bspwm's _NET_CLIENT_LIST_STACKING (bottom to top) read with libX11
+    on a connection of its own (GDK's get_window_stack() comes back empty
+    under bspwm and property_get can't be called from Python)."""
+
+    def __init__(self):
+        import ctypes
+        self.c = ctypes
+        x = self.x = ctypes.CDLL('libX11.so.6')
+        x.XOpenDisplay.restype = ctypes.c_void_p
+        x.XOpenDisplay.argtypes = [ctypes.c_char_p]
+        x.XDefaultRootWindow.restype = ctypes.c_ulong
+        x.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+        x.XInternAtom.restype = ctypes.c_ulong
+        x.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+        x.XGetWindowProperty.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_long,
+                                         ctypes.c_long, ctypes.c_int, ctypes.c_ulong,
+                                         ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_int),
+                                         ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_ulong),
+                                         ctypes.POINTER(ctypes.c_void_p)]
+        x.XFree.argtypes = [ctypes.c_void_p]
+        self.dpy = x.XOpenDisplay(None)
+        self.root = x.XDefaultRootWindow(self.dpy) if self.dpy else 0
+        self.atom = x.XInternAtom(self.dpy, b'_NET_CLIENT_LIST_STACKING', 0) if self.dpy else 0
+
+    def read(self):
+        if not self.dpy:
+            return []
+        c = self.c
+        typ, fmt, n, after, data = c.c_ulong(), c.c_int(), c.c_ulong(), c.c_ulong(), c.c_void_p()
+        ok = self.x.XGetWindowProperty(self.dpy, self.root, self.atom, 0, 4096, 0, 33,   # 33 = XA_WINDOW
+                                       c.byref(typ), c.byref(fmt), c.byref(n), c.byref(after), c.byref(data))
+        if ok != 0 or not data.value:
+            return []
+        try:
+            arr = c.cast(data, c.POINTER(c.c_ulong))
+            return [arr[i] for i in range(n.value)]
+        finally:
+            self.x.XFree(data)
+
+
 def win_skin():
     """WIN_SKIN of theme-config.bash: the style window frames are drawn in."""
     return theme_var('WIN_SKIN')
@@ -429,6 +470,11 @@ def main():
         gw = win.get_window()
         if not gw:
             return
+        # picom (xrender + use-damage) doesn't repaint what a restacked window
+        # covers when its contents stay the same: a frame moved over a window
+        # kept showing the wallpaper in its band. A repaint (from the cached
+        # frame, cheap) marks the area damaged.
+        win.queue_draw()
         if where == 'below':
             win.mode = 'under' if covering(cid) else 'bottom'
             target = foreign_win(cid) if win.mode == 'under' else None
@@ -522,14 +568,47 @@ def main():
 
     def tiled_top():
         """The highest tiled window in the X stack (_NET_CLIENT_LIST_STACKING)."""
-        try:
-            stack = [w.get_xid() for w in Gdk.Screen.get_default().get_window_stack() or []]
-        except Exception:
-            stack = []
+        stack = stacking.read()
         for xid in reversed(stack):
             if xid in st['tiled']:
                 return xid
         return None
+
+    def fast_restack():
+        """bspwm just changed the stacking (it rewrites the root's
+        _NET_CLIENT_LIST_STACKING as it restacks): put every frame back over
+        its window and every background under its terminal right now, with
+        no bspc round trip. Waiting for the bspc event, the 10 ms batch and
+        the queries (~40 ms) let a raised window cover its frames, a frame
+        stay over a window just opened on top, a terminal show the window
+        behind it instead of its scene - the flicker on focus."""
+        stack = stacking.read()
+        if stack == st.get('stack'):
+            return
+        st['stack'] = stack
+        st['tiled_top'] = next((x for x in reversed(stack) if x in st['tiled']), None)
+        for cid, win in st['backs'].items():
+            if win.get_visible() and getattr(win, 'mode', None) == 'under':
+                restack(cid, win, 'below')
+        for xid in stack:   # bottom to top: upper windows' frames end higher
+            win = st['rings'].get(xid)
+            if win is not None and win.get_visible():
+                restack(xid, win)
+        Gdk.Display.get_default().flush()
+
+    def on_gdk_event(ev):
+        if ev.type == Gdk.EventType.PROPERTY_NOTIFY and ev.window == root_win:
+            try:
+                if ev.property.atom.name() == '_NET_CLIENT_LIST_STACKING':
+                    fast_restack()
+            except Exception:
+                pass
+        Gtk.main_do_event(ev)
+
+    stacking = Stacking()
+    root_win = Gdk.get_default_root_window()
+    root_win.set_events(root_win.get_events() | Gdk.EventMask.PROPERTY_CHANGE_MASK)
+    Gdk.event_handler_set(on_gdk_event)
 
     def sync(restack_all=False):
         st['timer'] = None
