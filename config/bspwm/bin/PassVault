@@ -1,0 +1,422 @@
+#!/usr/bin/env python3
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# PassVault - the password manager of the rice (pass + GPG, rofi, the
+# theme's panel). super + alt + x
+#
+#   ✔ Guided setup: installs pass, picks or creates a GPG key, inits
+#   ✔ Search every entry (folders shown as paths)
+#   ✔ Copy password / username / URL / OTP code (pass-otp)
+#   ✔ Auto-type username + password, or the password only
+#   ✔ New entry: username, URL, and a generated password (length and
+#     symbols chosen) or your own (typed twice, hidden)
+#   ✔ Regenerate a password keeping the other fields, rename, edit
+#     (terminal), delete (confirmed), git sync when the store is a repo
+#   ✔ Lock: forget the cached GPG passphrase right now
+#
+# Security:
+#   · a copied secret is cleared after CLIP_TIME seconds (only if it is
+#     still what the clipboard holds) and never enters the clipboard
+#     history: clipcat's watcher is paused while it is there
+#   · secrets never go through a command line (visible in ps): pass
+#     reads them from stdin, xdotool types them from a private file
+#   · never in notifications; typed passwords are hidden in rofi
+#
+#   PassVault           the menu
+#   PassVault --type    pick an entry and type it (like RofiPass --type)
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+import os
+import re
+import secrets
+import shutil
+import string
+import subprocess
+import sys
+import tempfile
+import time
+
+HOME = os.path.expanduser('~')
+BSPWM = os.path.join(HOME, '.config/bspwm')
+STORE = os.environ.get('PASSWORD_STORE_DIR', os.path.join(HOME, '.password-store'))
+THEME = os.path.join(BSPWM, 'config/rofi-themes/Pass.rasi')
+CLIP_TIME = int(os.environ.get('PASSVAULT_CLIP_TIME', '30'))
+
+
+def es():
+    try:
+        sys.path.insert(0, os.path.join(BSPWM, 'lib'))
+        import ricelang
+        return ricelang.get_lang() == 'es'
+    except Exception:
+        return True
+
+
+ES = es()
+TR = {
+    'Search': 'Buscar', 'New entry': 'Nueva entrada', 'Generate a password': 'Generar una contraseña',
+    'Lock the vault': 'Bloquear la bóveda', 'Sync (git)': 'Sincronizar (git)',
+    'Copy password': 'Copiar contraseña', 'Copy username': 'Copiar usuario', 'Copy URL': 'Copiar URL',
+    'Copy OTP code': 'Copiar código OTP', 'Type username + password': 'Escribir usuario + contraseña',
+    'Type password': 'Escribir contraseña', 'Show': 'Mostrar', 'Regenerate password': 'Regenerar contraseña',
+    'Rename': 'Renombrar', 'Edit (terminal)': 'Editar (terminal)', 'Delete': 'Eliminar',
+    'Name (folders with /, e.g. web/github)': 'Nombre (carpetas con /, p. ej. web/github)',
+    'Username or email (optional)': 'Usuario o correo (opcional)', 'URL (optional)': 'URL (opcional)',
+    'Password': 'Contraseña', 'Generate one': 'Generar una', 'Type my own': 'Escribir la mía',
+    'Length': 'Longitud', 'With symbols': 'Con símbolos', 'Letters and numbers only': 'Solo letras y números',
+    'Type it': 'Escríbela', 'Again, to confirm': 'Otra vez, para confirmar',
+    "They don't match": 'No coinciden', 'Saved': 'Guardada', 'Copied': 'Copiada',
+    'cleared from the clipboard in': 'se borra del portapapeles en', 'seconds': 'segundos',
+    'Delete it?': '¿Eliminarla?', 'Yes, delete': 'Sí, eliminar', 'Cancel': 'Cancelar',
+    'Vault locked: the passphrase will be asked again': 'Bóveda bloqueada: se volverá a pedir la frase de paso',
+    'already exists: overwrite?': 'ya existe: ¿sobrescribir?', 'Overwrite': 'Sobrescribir',
+    'New name': 'Nuevo nombre', 'No username in this entry': 'Esta entrada no tiene usuario',
+    'No URL in this entry': 'Esta entrada no tiene URL',
+    'No OTP in this entry (or pass-otp missing)': 'Sin OTP en esta entrada (o falta pass-otp)',
+    'pass is not installed': 'pass no está instalado', 'Install it (terminal)': 'Instalarlo (terminal)',
+    'The vault is not set up yet': 'La bóveda aún no está configurada',
+    'Use this GPG key': 'Usar esta clave GPG', 'Create a new GPG key (terminal)': 'Crear una clave GPG nueva (terminal)',
+    'Vault ready': 'Bóveda lista', 'Could not decrypt (wrong passphrase?)': 'No se pudo descifrar (¿frase de paso incorrecta?)',
+    'Generated and copied': 'Generada y copiada', 'Typed': 'Escrita', 'Renamed': 'Renombrada',
+    'Deleted': 'Eliminada', 'Synced': 'Sincronizada', 'Failed': 'Falló', 'entries': 'entradas',
+    'Enter: actions · type to search': 'Enter: acciones · escribe para buscar', 'Hidden': 'Oculta',
+    'Reveal': 'Revelar', 'reveal: shown in clear on screen': 'revelar: se muestra en claro en pantalla',
+}
+
+
+def T(s):
+    return TR.get(s, s) if ES else s
+
+
+# ═══════════════════════════════════════════════════════════ UI
+def rofi(items, prompt, mesg=None, password=False, lines=None, custom=True):
+    args = ['rofi', '-dmenu', '-i', '-p', prompt, '-theme', THEME]
+    if not custom:
+        args += ['-no-custom']
+    if mesg:
+        args += ['-mesg', mesg]
+    if password:
+        args += ['-password']
+    if lines is not None:
+        args += ['-l', str(lines)]
+    try:
+        r = subprocess.run(args, input='\n'.join(items), capture_output=True, text=True)
+    except OSError:
+        return None
+    return r.stdout.rstrip('\n') if r.returncode == 0 else None
+
+
+def ask(prompt, mesg=None, password=False):
+    return rofi([], prompt, mesg, password, lines=0)
+
+
+def choose(options, prompt, mesg=None):
+    """options: [(glyph, text)] -> the text chosen."""
+    shown = [f'{g}  {t}' for g, t in options]
+    r = rofi(shown, prompt, mesg, lines=min(10, len(shown)), custom=False)
+    if r is None:
+        return None
+    for (g, t), s in zip(options, shown):
+        if r == s:
+            return t
+    return None
+
+
+def notify(title, body='', icon='dialog-password'):
+    subprocess.Popen(['dunstify', '-a', 'PassVault', '-i', icon, '-h', 'string:x-dunst-stack-tag:passvault',
+                      title, body], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+# ═══════════════════════════════════════════════════════════ pass
+def pass_(*args, input_=None, timeout=120):
+    try:
+        p = subprocess.run(['pass', *args], input=input_, capture_output=True, text=True, timeout=timeout)
+        return p.returncode, p.stdout, p.stderr.strip()
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return 1, '', str(e)
+
+
+def entries():
+    out = []
+    for root, dirs, files in os.walk(STORE):
+        dirs[:] = [d for d in dirs if not d.startswith('.')]
+        for f in files:
+            if f.endswith('.gpg'):
+                out.append(os.path.relpath(os.path.join(root, f), STORE)[:-4])
+    return sorted(out, key=str.lower)
+
+
+def decrypt(name):
+    rc, out, _err = pass_('show', name)
+    return out if rc == 0 else None
+
+
+def fields(content):
+    lines = content.split('\n')
+    info = {'password': lines[0] if lines else ''}
+    for line in lines[1:]:
+        if line.strip().startswith('otpauth://'):
+            info.setdefault('otpauth', line.strip())
+            continue
+        m = re.match(r'^\s*(user(?:name)?|login|email|url|otpauth)\s*:\s*(.*)$', line, re.I)
+        if m:
+            k = m.group(1).lower()
+            k = 'user' if k in ('user', 'username', 'login', 'email') else k
+            info.setdefault(k, m.group(2).strip())
+    return info
+
+
+def generate(length=24, symbols=True):
+    alphabet = string.ascii_letters + string.digits + ('!@#$%^&*()-_=+[]{};:,.?' if symbols else '')
+    while True:
+        pw = ''.join(secrets.choice(alphabet) for _ in range(length))
+        if (any(c.islower() for c in pw) and any(c.isupper() for c in pw) and any(c.isdigit() for c in pw)
+                and (not symbols or any(not c.isalnum() for c in pw))):
+            return pw
+
+
+# ═══════════════════════════════════════════════════════ secrets out
+def copy_secret(value, what):
+    """The secret to the clipboard, out of clipcat's history, cleared after
+    CLIP_TIME s if it is still there."""
+    clipcat = shutil.which('clipcatctl') is not None
+    if clipcat:
+        subprocess.run(['clipcatctl', 'disable-watcher'], capture_output=True)
+    p = subprocess.Popen(['xclip', '-selection', 'clipboard'], stdin=subprocess.PIPE,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    p.communicate(value.encode())
+    notify(f'{what}: {T("Copied")}', f'{T("cleared from the clipboard in")} {CLIP_TIME} {T("seconds")}')
+    # the clearing runs detached, the menu can close
+    if os.fork() == 0:
+        os.setsid()
+        time.sleep(CLIP_TIME)
+        try:
+            cur = subprocess.run(['xclip', '-selection', 'clipboard', '-o'], capture_output=True,
+                                 timeout=5).stdout.decode(errors='replace')
+        except Exception:
+            cur = ''
+        if cur == value:
+            subprocess.run(['xclip', '-selection', 'clipboard', '/dev/null'], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
+        if clipcat:
+            subprocess.run(['clipcatctl', 'enable-watcher'], capture_output=True)
+        os._exit(0)
+
+
+def type_text(*parts):
+    """xdotool types parts separated by Tab, from a private file (never argv)."""
+    time.sleep(0.4)   # the menu is gone, the target window has the focus back
+    fd, path = tempfile.mkstemp(prefix='.pv-', dir=os.environ.get('XDG_RUNTIME_DIR', '/tmp'))
+    try:
+        for i, part in enumerate(parts):
+            os.ftruncate(fd, 0)
+            os.lseek(fd, 0, 0)
+            os.write(fd, part.encode())
+            subprocess.run(['xdotool', 'type', '--clearmodifiers', '--delay', '12', '--file', path])
+            if i < len(parts) - 1:
+                subprocess.run(['xdotool', 'key', 'Tab'])
+    finally:
+        os.close(fd)
+        os.unlink(path)
+
+
+# ═══════════════════════════════════════════════════════════ setup
+def setup():
+    """True when pass and the store are ready (guides through it)."""
+    if not shutil.which('pass'):
+        r = choose([('\U000f0162', T('Install it (terminal)'))], 'PassVault', T('pass is not installed'))
+        if r:
+            sys.path.insert(0, os.path.join(BSPWM, 'lib'))
+            import riceapp
+            riceapp.terminal('sudo pacman -S --needed pass pass-otp xclip xdotool', 'PassVault')
+        return False
+    if os.path.isfile(os.path.join(STORE, '.gpg-id')):
+        return True
+    out = subprocess.run(['gpg', '--list-secret-keys', '--with-colons'], capture_output=True, text=True).stdout
+    keys, cur = [], None
+    for line in out.splitlines():
+        f = line.split(':')
+        if f[0] == 'sec':
+            cur = f[4]
+        elif f[0] == 'uid' and cur:
+            keys.append((cur, f[9]))
+            cur = None
+    opts = [('\U000f030b', f'{uid}  [{kid[-8:]}]') for kid, uid in keys]
+    opts.append(('\U000f0415', T('Create a new GPG key (terminal)')))
+    r = choose(opts, 'PassVault', T('The vault is not set up yet'))
+    if not r:
+        return False
+    if r == T('Create a new GPG key (terminal)'):
+        sys.path.insert(0, os.path.join(BSPWM, 'lib'))
+        import riceapp
+        riceapp.terminal('gpg --full-generate-key && echo && echo "Now open PassVault again (super+alt+x)."',
+                         'PassVault')
+        return False
+    kid = next(k for k, u in keys if r.endswith(f'[{k[-8:]}]'))
+    rc, _o, err = pass_('init', kid)
+    notify(T('Vault ready') if rc == 0 else T('Failed'), err if rc else '')
+    return rc == 0
+
+
+# ═══════════════════════════════════════════════════════════ actions
+def new_entry(name=None):
+    name = name or ask(T('New entry'), T('Name (folders with /, e.g. web/github)'))
+    if not name or '..' in name.split('/'):
+        return
+    if os.path.isfile(os.path.join(STORE, name + '.gpg')):
+        if choose([('\U000f0a79', T('Overwrite'))], name, T('already exists: overwrite?')) != T('Overwrite'):
+            return
+    user = ask(T('Username or email (optional)'))
+    if user is None:
+        return
+    url = ask(T('URL (optional)'))
+    if url is None:
+        return
+    pw = password_source()
+    if not pw:
+        return
+    content = pw + ('\nusername: ' + user if user else '') + ('\nurl: ' + url if url else '') + '\n'
+    rc, _o, err = pass_('insert', '-m', '-f', name, input_=content)
+    if rc == 0:
+        notify(f'{name}: {T("Saved")}')
+        copy_secret(pw, name)
+    else:
+        notify(T('Failed'), err)
+
+
+def password_source():
+    r = choose([('\U000f0bc5', T('Generate one')), ('\U000f07f5', T('Type my own'))], T('Password'))
+    if r == T('Generate one'):
+        return generated()
+    if r == T('Type my own'):
+        a = ask(T('Type it'), password=True)
+        if not a:
+            return None
+        b = ask(T('Again, to confirm'), password=True)
+        if a != b:
+            notify(T("They don't match"))
+            return None
+        return a
+    return None
+
+
+def generated():
+    L = choose([('\U000f0bc5', f'{n}') for n in (16, 20, 24, 32, 48)], T('Length'))
+    if not L:
+        return None
+    s = choose([('\U000f0bc5', T('With symbols')), ('\U000f0bc5', T('Letters and numbers only'))], T('Password'))
+    if not s:
+        return None
+    return generate(int(L), s == T('With symbols'))
+
+
+def entry_menu(name, typing=False):
+    content = decrypt(name)
+    if content is None:
+        notify(T('Could not decrypt (wrong passphrase?)'))
+        return
+    info = fields(content)
+    if typing:
+        type_text(*([info['user']] if info.get('user') else []), info['password'])
+        return
+    has_otp = 'otpauth' in info
+    opts = [('\U000f030b', T('Copy password')), ('\U000f0004', T('Copy username')),
+            ('\U000f0339', T('Copy URL'))] + ([('\U000f0565', T('Copy OTP code'))] if has_otp else []) + [
+        ('\U000f030c', T('Type username + password')), ('\U000f030c', T('Type password')),
+        ('\U000f0208', T('Show')), ('\U000f0450', T('Regenerate password')), ('\U000f0cb4', T('Rename')),
+        ('\U000f03eb', T('Edit (terminal)')), ('\U000f0a7a', T('Delete'))]
+    sub = '  ·  '.join(x for x in (info.get('user', ''), info.get('url', '')) if x)
+    r = choose(opts, name, sub or None)
+    if r == T('Copy password'):
+        copy_secret(info['password'], name)
+    elif r == T('Copy username'):
+        copy_secret(info['user'], name) if info.get('user') else notify(T('No username in this entry'))
+    elif r == T('Copy URL'):
+        copy_secret(info['url'], name) if info.get('url') else notify(T('No URL in this entry'))
+    elif r == T('Copy OTP code'):
+        rc, out, _e = pass_('otp', name)
+        copy_secret(out.strip(), f'{name} OTP') if rc == 0 else notify(T('No OTP in this entry (or pass-otp missing)'))
+    elif r == T('Type username + password'):
+        type_text(*([info['user']] if info.get('user') else []), info['password'])
+    elif r == T('Type password'):
+        type_text(info['password'])
+    elif r == T('Show'):
+        masked = '•' * min(24, len(info['password']))
+        lines = [f"{T('Password')}: {masked}"] + [f'{k}: {v}' for k, v in info.items() if k != 'password']
+        if choose([('\U000f0208', T('Reveal'))], name, '\n'.join(lines) + '\n\n' +
+                  T('reveal: shown in clear on screen')) == T('Reveal'):
+            rofi([], name, info['password'], lines=0)
+    elif r == T('Regenerate password'):
+        pw = password_source()
+        if pw:
+            rest = content.split('\n', 1)[1] if '\n' in content else ''
+            rc, _o, err = pass_('insert', '-m', '-f', name, input_=pw + '\n' + rest)
+            if rc == 0:
+                copy_secret(pw, name)
+            else:
+                notify(T('Failed'), err)
+    elif r == T('Rename'):
+        new = ask(T('New name'))
+        if new and '..' not in new.split('/'):
+            rc, _o, err = pass_('mv', name, new)
+            notify(T('Renamed') if rc == 0 else T('Failed'), new if rc == 0 else err)
+    elif r == T('Edit (terminal)'):
+        sys.path.insert(0, os.path.join(BSPWM, 'lib'))
+        import riceapp
+        riceapp.terminal(f'pass edit {shlex_quote(name)}', 'PassVault')
+    elif r == T('Delete'):
+        if choose([('\U000f0156', T('Cancel')), ('\U000f0a7a', T('Yes, delete'))], name,
+                  T('Delete it?')) == T('Yes, delete'):
+            rc, _o, err = pass_('rm', '-f', name)
+            notify(T('Deleted') if rc == 0 else T('Failed'), name if rc == 0 else err)
+
+
+def shlex_quote(s):
+    import shlex
+    return shlex.quote(s)
+
+
+def main():
+    typing = '--type' in sys.argv
+    if not setup():
+        return
+    items = entries()
+    top = [] if typing else [('\U000f0415', T('New entry')), ('\U000f0bc5', T('Generate a password')),
+                             ('\U000f033e', T('Lock the vault'))]
+    if not typing and os.path.isdir(os.path.join(STORE, '.git')):
+        top.append(('\U000f04e6', T('Sync (git)')))
+    rows = [f'{g}  {t}' for g, t in top] + [f'\U000f0341  {e}' for e in items]
+    r = rofi(rows, T('Search'), f'{len(items)} {T("entries")}  ·  {T("Enter: actions · type to search")}',
+             lines=min(12, len(rows)))
+    if not r:
+        return
+    for g, t in top:
+        if r == f'{g}  {t}':
+            if t == T('New entry'):
+                new_entry()
+            elif t == T('Generate a password'):
+                pw = generated()
+                if pw:
+                    copy_secret(pw, T('Generated and copied'))
+            elif t == T('Lock the vault'):
+                subprocess.run(['gpgconf', '--reload', 'gpg-agent'], capture_output=True)
+                notify(T('Vault locked: the passphrase will be asked again'))
+            elif t == T('Sync (git)'):
+                rc1, _o, e1 = pass_('git', 'pull', '--rebase')
+                rc2, _o, e2 = pass_('git', 'push')
+                notify(T('Synced') if rc1 == rc2 == 0 else T('Failed'), (e1 + '\n' + e2).strip())
+            return
+    name = r.split('  ', 1)[1] if '  ' in r else r
+    if name in items:
+        entry_menu(name, typing)
+    elif not typing:   # a name that doesn't exist: create it
+        new_entry(name)
+
+
+if __name__ == '__main__':
+    main()
