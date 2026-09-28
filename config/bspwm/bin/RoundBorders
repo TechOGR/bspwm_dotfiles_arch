@@ -42,7 +42,14 @@ import bspcsafe  # noqa: E402,F401  every bspc call has a time limit (no bspwm f
 HOME = os.path.expanduser('~')
 BSPWM = os.path.join(HOME, '.config/bspwm')
 PICOM_CONF = os.path.join(BSPWM, 'config/picom/picom.conf')
-LOCK = os.path.join(HOME, '.cache', os.environ.get('USER', 'user'), '.roundborders.lock')
+# Two processes: the frames, and (--backdrops) the terminals' textures. A
+# terminal-sized texture window in the same process as the frames made
+# Xlib lose its request sequence (an abort every ~16 s, every frame gone);
+# apart, each one is fine, and one failing never takes the other along.
+ROLE = 'backs' if '--backdrops' in sys.argv else 'frames'
+LOCK_NAME = 'roundborders-back' if ROLE == 'backs' else 'roundborders'
+LOCK = os.path.join(HOME, '.cache', os.environ.get('USER', 'user'), f'.{LOCK_NAME}.lock')
+BACK_LOCK = os.path.join(HOME, '.cache', os.environ.get('USER', 'user'), '.roundborders-back.lock')
 # picom-rules.conf gives these square corners: no ring for them
 SQUARE = {'mpv', 'Viewnior', 'retroarch'}
 # translucent terminals get the theme's background drawn under them; they
@@ -53,9 +60,9 @@ TERMINALS = {'kitty', 'alacritty', 'com.mitchellh.ghostty', 'st', 'st-256color',
              'foot', 'wezterm', 'org.wezfurlong.wezterm', 'xfce4-terminal', 'bspwm-scratch'}
 
 
-def running_pid():
+def running_pid(lock=None):
     try:
-        with open(LOCK) as f:
+        with open(lock or LOCK) as f:
             pid = int(f.read().strip() or 0)
         os.kill(pid, 0)
         return pid
@@ -64,7 +71,11 @@ def running_pid():
 
 
 def cli():
-    arg = sys.argv[1] if len(sys.argv) > 1 else ''
+    arg = next((a for a in sys.argv[1:] if a in ('--stop', '--restart', '--reload')), '')
+    if ROLE == 'frames' and arg in ('--stop', '--reload'):   # the textures' process follows
+        bpid = running_pid(BACK_LOCK)
+        if bpid:
+            os.kill(bpid, signal.SIGTERM if arg == '--stop' else signal.SIGHUP)
     pid = running_pid()
     sig = {'--stop': signal.SIGTERM, '--restart': signal.SIGTERM, '--reload': signal.SIGHUP}.get(arg)
     if sig and pid:
@@ -160,7 +171,11 @@ def main():
         import riceanim
     except Exception:
         wscard = None
-    _lock = ui.single_instance('roundborders')  # noqa: F841  writes LOCK
+    _lock = ui.single_instance(LOCK_NAME)  # noqa: F841  writes LOCK
+    if ROLE == 'frames':   # the textures in a process of their own (restarted if it crashes)
+        subprocess.Popen([os.path.join(BSPWM, 'bin/Respawn'), os.path.abspath(sys.argv[0]), '--backdrops',
+                          '--restart'], start_new_session=True, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
     GLib.set_prgname('RoundBorders')
 
     # heartbeat for bin/Respawn: a hung main loop stops touching it
@@ -193,7 +208,7 @@ def main():
         skin = skin if wscard and skin in wscard.CARDS else ''
         st['conf'] = {
             'skin': skin,
-            'backdrop': bool(skin) and theme_var('WIN_BACKDROP') != 'false',
+            'backdrop': ROLE == 'backs' and bool(skin) and theme_var('WIN_BACKDROP') != 'false',
             'tint': wscard and wscard.ws.tint_target('windows'),
             'xrender': xrender(),
             'r': corner_radius(),
@@ -553,6 +568,18 @@ def main():
         if reg is not None and gw is not None:
             gw.shape_combine_region(reg, 0, 0)
 
+    def set_back_pixmap(win):
+        """The terminal's themed background as the window's X background."""
+        i = win.info
+        gw = win.get_window()
+        if not gw:
+            return
+        xs = gw.create_similar_surface(cairo.CONTENT_COLOR, i['w'], i['h'])
+        draw_back(win, cairo.Context(xs))
+        win.back_pixmap = xs   # keep it alive
+        gw.set_background_pattern(cairo.SurfacePattern(xs))
+        gw.invalidate_rect(None, False)
+
     def draw_back(win, cr):
         """The terminal's themed background, rendered once per size / style /
         tint and kept in memory: coming back to a desktop only repaints it
@@ -588,14 +615,15 @@ def main():
             win = st['backs'].get(cid)
             new = win is None
             if new:
+                # the X server paints it (its background pixmap): GTK redrawing
+                # a terminal-sized translucent window made Xlib lose its request
+                # sequence ("Unknown sequence number while processing queue"),
+                # the daemon aborted every ~16 s and every frame vanished
                 win = Gtk.Window(type=Gtk.WindowType.POPUP)
                 win.set_title('RoundBorders')
                 win.set_app_paintable(True)
-                vis = win.get_screen().get_rgba_visual()
-                if vis:
-                    win.set_visual(vis)
                 win.info = {}
-                win.connect('draw', draw_back)
+                win.connect('draw', lambda *_a: True)
                 st['backs'][cid] = win
             info = {'x': x, 'y': y, 'w': w, 'h': h, 'bw': bw, 'skin': st['conf']['skin'],
                     'tint': st['conf']['tint'], 'r': st['conf']['r']}
@@ -627,7 +655,7 @@ def main():
                 GLib.timeout_add(500, lambda w=win, c=cid: (w.get_window() and restack(c, w, 'below', True), False)[1])
             if new:
                 restack(cid, win, 'below', True)
-            win.queue_draw()
+            set_back_pixmap(win)
 
     def tiled_top():
         """The highest tiled window in the X stack (_NET_CLIENT_LIST_STACKING)."""
@@ -680,8 +708,10 @@ def main():
         if top != st.get('tiled_top'):
             st['tiled_top'] = top
             restack_all = True   # the tiled frames follow the new top
+        if ROLE == 'backs':
+            sync_backs(restack_all)
+            return False
         shape_clients(want)
-        sync_backs(restack_all)
         # monocle: only the tiled window on top shows its frame (the ones
         # under it, same place, would draw over it)
         if top in want:
@@ -783,15 +813,16 @@ def main():
                 if b:
                     win.queue_draw_area(int(b[0]) - 2, int(b[1]) - 2, int(b[2] - b[0]) + 4, int(b[3] - b[1]) + 4)
             win.anim_box = box
-        if anim['back'] and anim['n'] % 2 == 0:   # the textures at half the rate
+        if anim['back'] and anim['n'] % 3 == 0:   # the textures, a few times a second
             for win in st['backs'].values():
-                if win.get_visible():
-                    win.queue_draw()
+                if win.get_visible() and getattr(win, 'info', None):
+                    set_back_pixmap(win)
         return True
 
     def anim_config():
         skin = st['conf']['skin']
-        new = (riceanim.effect('win', skin), riceanim.effect('back', skin)) if wscard and skin else (None, None)
+        new = (riceanim.effect('win', skin) if ROLE == 'frames' else None,
+               riceanim.effect('back', skin) if ROLE == 'backs' else None) if wscard and skin else (None, None)
         on = any(new)
         if new != (anim['win'], anim['back']) or on != anim['on']:
             anim['win'], anim['back'] = new

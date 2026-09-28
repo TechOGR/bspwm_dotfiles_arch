@@ -23,6 +23,7 @@
 LOG="$HOME/.cache/${USER:-user}/respawn.log"
 mkdir -p "${LOG%/*}"
 name=${1##*/}
+case " $* " in *" --backdrops "*) name="$name-backdrops" ;; esac
 crashes=0
 since=$(date +%s)
 

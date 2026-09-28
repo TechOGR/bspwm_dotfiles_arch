@@ -208,27 +208,36 @@ def shape(cr, style, x, y, w, h, s):
         rounded(cr, x, y, w, h, _r(style, s))
 
 
-def alpha_region(surf, dx=0, dy=0, threshold=3):
+def alpha_region(surf, dx=0, dy=0, threshold=3, cell=4):
     """The pixels of an ARGB surface that are not (almost) transparent, as
     a cairo.Region: the X shape of an overlay, so the compositor only
-    blends what is actually painted. Runs found with C-speed byte searches
-    on the alpha channel; equal rows merge into one rectangle."""
+    blends what is actually painted. Computed on a grid of cell x cell px
+    (a block is in if anything in it is): a hand-drawn frame (Pencil) gave
+    105 000 one-pixel rectangles, 8 s of work and an X request so large the
+    connection broke; on the grid it is a few thousand, in milliseconds."""
     surf.flush()
-    W, H, stride = surf.get_width(), surf.get_height(), surf.get_stride()
-    data = bytes(surf.get_data())
-    pat = re.compile(b'[' + bytes([threshold]) + b'-\xff]+')   # alpha >= threshold
+    W, H = surf.get_width(), surf.get_height()
+    gw, gh = (W + cell - 1) // cell, (H + cell - 1) // cell
+    small = cairo.ImageSurface(cairo.FORMAT_A8, gw, gh)
+    sc = cairo.Context(small)
+    sc.scale(1 / cell, 1 / cell)
+    sc.set_source_surface(surf, 0, 0)
+    sc.get_source().set_filter(cairo.FILTER_GOOD)   # averages each block
+    sc.paint()
+    small.flush()
+    stride = small.get_stride()
+    data = bytes(small.get_data())
+    pat = re.compile(b'[' + bytes([max(1, threshold // 2)]) + b'-\xff]+')
     reg = cairo.Region()
     prev, y0 = None, 0
-    for y in range(H + 1):
-        if y < H:
-            alpha = data[y * stride + 3:y * stride + W * 4:4]   # BGRA, little-endian
-            runs = tuple((m.start(), m.end()) for m in pat.finditer(alpha))
-        else:
-            runs = None
+    for y in range(gh + 1):
+        runs = tuple((m.start(), m.end()) for m in pat.finditer(data[y * stride:y * stride + gw])) \
+            if y < gh else None
         if runs != prev:
             if prev:
                 for a0, a1 in prev:
-                    reg.union(cairo.RectangleInt(a0 + dx, y0 + dy, a1 - a0, y - y0))
+                    reg.union(cairo.RectangleInt(a0 * cell + dx, y0 * cell + dy, (a1 - a0) * cell,
+                                                 (y - y0) * cell))
             prev, y0 = runs, y
     return reg
 
