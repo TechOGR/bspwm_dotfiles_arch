@@ -108,6 +108,10 @@ list_updates() {
 # Execute it accordingly
 case "$1" in
     --sync-polybar)
+        # the update center saves the details and wakes the bar module
+        if [ -x "$HOME/.config/bspwm/bin/UpdateCenter" ]; then
+            exec "$HOME/.config/bspwm/bin/UpdateCenter" --check
+        fi
         check_updates ;;
     --print-updates)
         list_updates

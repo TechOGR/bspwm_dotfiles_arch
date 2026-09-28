@@ -1,0 +1,392 @@
+#!/usr/bin/env python3
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# UpdateCenter - system updates, in the theme
+#   ✔ Official (checkupdates, safe: never touches the real sync db) and
+#     AUR (paru / yay) updates: package, installed -> new version, filter
+#   ✔ Critical updates flagged (kernel, systemd, glibc, drivers, ucode):
+#     "restart after updating"
+#   ✔ Arch news newer than your last upgrade, to read before updating
+#   ✔ Last upgrade, orphan packages, package cache size
+#   ✔ Update all / official / AUR, clean the cache, remove orphans: in a
+#     floating terminal (sudo asks there, never here)
+#   ✔ Details of a package on click (pacman -Si)
+#
+#   UpdateCenter            the window (polybar updates module, left click)
+#   UpdateCenter --check    check and save the result for the bar
+#                           (systemd timer every 15 min, pacman hook)
+#
+# Results: ~/.cache/rice-updates.json (+ ~/.cache/Updates.txt, the count)
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import time
+
+HOME = os.path.expanduser('~')
+CACHE = os.path.join(os.environ.get('XDG_CACHE_HOME', os.path.join(HOME, '.cache')), 'rice-updates.json')
+COUNT = os.path.join(os.environ.get('XDG_CACHE_HOME', os.path.join(HOME, '.cache')), 'Updates.txt')
+CRITICAL = re.compile(r'^(linux(-[\w-]+)?|linux-firmware.*|systemd|glibc|mesa|nvidia.*|xorg-server|'
+                      r'(amd|intel)-ucode|grub|mkinitcpio|dracut|pacman|openssl|cachyos-.*kernel.*)$')
+NEWS_URL = 'https://archlinux.org/feeds/news/'
+
+
+# ═══════════════════════════════════════════════════════════ checking
+def aur_helper():
+    for h in ('paru', 'yay'):
+        if shutil.which(h):
+            return h
+    return None
+
+
+def parse(out):
+    pkgs = []
+    for line in out.splitlines():
+        m = re.match(r'^(\S+)\s+(\S+)\s+->\s+(\S+)', line.strip())
+        if m:
+            pkgs.append({'name': m.group(1), 'old': m.group(2), 'new': m.group(3),
+                         'critical': bool(CRITICAL.match(m.group(1)))})
+    return pkgs
+
+
+def last_upgrade():
+    try:
+        with open('/var/log/pacman.log', 'rb') as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 400000))
+            tail = f.read().decode(errors='replace')
+        found = re.findall(r'^\[([^\]]+)\] \[PACMAN\] starting full system upgrade', tail, re.M)
+        return found[-1] if found else ''
+    except OSError:
+        return ''
+
+
+def news(since=''):
+    """The latest Arch news [(date, title, link, new)] (a few seconds at most)."""
+    try:
+        import urllib.request
+        from email.utils import parsedate_to_datetime
+        with urllib.request.urlopen(NEWS_URL, timeout=6) as r:
+            xml = r.read().decode(errors='replace')
+    except Exception:
+        return None
+    items = []
+    for it in re.findall(r'<item>(.*?)</item>', xml, re.S)[:4]:
+        title = re.search(r'<title>(.*?)</title>', it, re.S)
+        link = re.search(r'<link>(.*?)</link>', it, re.S)
+        date = re.search(r'<pubDate>(.*?)</pubDate>', it, re.S)
+        try:
+            d = parsedate_to_datetime(date.group(1)).strftime('%Y-%m-%d') if date else ''
+        except Exception:
+            d = ''
+        import html
+        items.append({'date': d, 'title': html.unescape(re.sub(r'<[^>]+>', '', title.group(1))).strip() if title else '',
+                      'link': link.group(1).strip() if link else '', 'new': bool(since and d and d >= since[:10])})
+    return items
+
+
+def check():
+    """Check updates; save and return the result. Keeps the last good
+    lists when offline."""
+    try:
+        prev = json.load(open(CACHE))
+    except (OSError, ValueError):
+        prev = {}
+    procs = {'official': subprocess.Popen(['checkupdates'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                          text=True)}
+    helper = aur_helper()
+    if helper:
+        procs['aur'] = subprocess.Popen([helper, '-Qua'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                        text=True)
+    res = {}
+    offline = False
+    for k, p in procs.items():
+        try:
+            out, _ = p.communicate(timeout=120)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            out = ''
+        if k == 'official' and p.returncode == 1:   # 1: error (network), 2: no updates
+            offline = True
+            res[k] = prev.get(k, [])
+        else:
+            res[k] = parse(out)
+    res.setdefault('aur', [])
+    last = last_upgrade()
+    fresh = news(last)
+    data = {'time': time.time(), 'offline': offline, 'official': res['official'], 'aur': res['aur'],
+            'helper': helper, 'last_upgrade': last, 'news': fresh if fresh is not None else prev.get('news', [])}
+    data['total'] = len(data['official']) + len(data['aur'])
+    data['critical'] = sum(p['critical'] for p in data['official'] + data['aur'])
+    for path, text in ((CACHE, json.dumps(data, indent=1)), (COUNT, f"{data['total']}\n")):
+        with open(path + '.tmp', 'w') as f:
+            f.write(text)
+        os.replace(path + '.tmp', path)
+    # the bar module reads it at once
+    subprocess.run(['pkill', '-USR1', '-f', 'bin/UpdatesPolybar'], stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL)
+    return data
+
+
+def system_facts():
+    orphans = subprocess.run(['pacman', '-Qdtq'], capture_output=True, text=True).stdout.split()
+    size = 0
+    try:
+        for e in os.scandir('/var/cache/pacman/pkg'):
+            if e.is_file(follow_symlinks=False):
+                size += e.stat().st_size
+    except OSError:
+        pass
+    return orphans, size
+
+
+# ═══════════════════════════════════════════════════════════ window
+def window():
+    sys.path.insert(0, os.path.join(HOME, '.config/bspwm/lib'))
+    import riceui as ui
+    import riceapp as ra
+    from riceui import Gtk, GLib
+
+    T = ra.translator({
+        'Updates': 'Actualizaciones', 'Checking…': 'Comprobando…', 'Up to date': 'Al día',
+        'updates available': 'actualizaciones disponibles', 'Official': 'Oficiales', 'AUR': 'AUR',
+        'Update all': 'Actualizar todo', 'Official only': 'Solo oficiales', 'AUR only': 'Solo AUR',
+        'Check again': 'Comprobar de nuevo', 'Filter…': 'Filtrar…', 'critical': 'crítico',
+        'Restart after updating: kernel, drivers or core libraries are in the list':
+            'Reinicia después de actualizar: hay kernel, controladores o librerías base en la lista',
+        'Arch news': 'Noticias de Arch', 'new since your last upgrade: read before updating':
+            'nuevas desde tu última actualización: léelas antes de actualizar',
+        'System': 'Sistema', 'Last full upgrade': 'Última actualización completa',
+        'Orphan packages': 'Paquetes huérfanos', 'Package cache': 'Caché de paquetes',
+        'Clean cache': 'Limpiar caché', 'Remove orphans': 'Quitar huérfanos', 'Details': 'Detalles',
+        'Nothing to update': 'Nada que actualizar', 'offline: showing the last check':
+            'sin conexión: se muestra la última comprobación', 'never': 'nunca', 'checked': 'comprobado',
+        'Opened in a terminal': 'Abierto en una terminal', 'No AUR helper (paru / yay)': 'Sin ayudante AUR (paru / yay)',
+    })
+
+    class UpdateCenter(ra.CenterWindow):
+        def __init__(self):
+            super().__init__('UpdateCenter', T('Updates'), '\U000f03d6', (1080, 740))
+            self.data = None
+            self.filter = ''
+            self.big = ra.label('…', 'big')
+            self.head_right.pack_start(self.big, False, False, 0)
+            self.head_right.pack_start(ra.button(T('Check again'), self.refresh, 'nbtn', '\U000f04e6'),
+                                       False, False, 0)
+            # left: the packages · right: news, system, actions
+            left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+            self.search = Gtk.Entry()
+            self.search.set_placeholder_text(T('Filter…'))
+            self.search.connect('changed', lambda e: (setattr(self, 'filter', e.get_text().lower()), self.fill()))
+            left.pack_start(self.search, False, False, 0)
+            self.warn = ra.label('', 'chip mid', wrap=True)
+            self.warn.set_no_show_all(True)
+            left.pack_start(self.warn, False, False, 0)
+            self.list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+            left.pack_start(self.scroller(self.list), True, True, 0)
+            self.body.pack_start(left, True, True, 0)
+            right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+            right.set_size_request(340, -1)
+            self.acts = ra.section(T('Updates'), '\U000f03d5')
+            right.pack_start(self.acts, False, False, 0)
+            self.newsbox = ra.section(T('Arch news'), '\U000f1004')
+            right.pack_start(self.newsbox, False, False, 0)
+            self.sysbox = ra.section(T('System'), '\U000f0565')
+            right.pack_start(self.sysbox, False, False, 0)
+            self.detail = ra.section(T('Details'), '\U000f03d7')
+            self.detail.set_no_show_all(True)
+            right.pack_start(self.detail, False, False, 0)
+            self.body.pack_start(self.scroller(right), False, False, 0)
+            self.connect('focus-in-event', lambda *_: self.reload_cache())
+            self.reload_cache(initial=True)
+            ra.run_bg(system_facts, self.show_system)
+
+        # ── data
+        def reload_cache(self, initial=False):
+            try:
+                data = json.load(open(CACHE))
+            except (OSError, ValueError):
+                data = None
+            if data != self.data:
+                self.data = data
+                self.fill()
+            if initial and (not data or time.time() - data.get('time', 0) > 900):
+                self.refresh()
+            return False
+
+        def refresh(self):
+            self.say(T('Checking…'))
+            self.big.set_text('…')
+            ra.run_bg(check, lambda d: (setattr(self, 'data', None if isinstance(d, Exception) else d),
+                                        self.fill(), self.say('' if not isinstance(d, Exception) else str(d), True)))
+
+        # ── view
+        def fill(self):
+            d = self.data or {'official': [], 'aur': [], 'total': 0, 'critical': 0, 'news': []}
+            ra.clear(self.list)
+            total = d.get('total', 0)
+            self.big.set_text(str(total) if total else '\U000f05e0')
+            when = time.strftime('%H:%M', time.localtime(d['time'])) if d.get('time') else T('never')
+            self.subtitle.set_text((f'{total} {T("updates available")}' if total else T('Up to date')) +
+                                   f'  ·  {T("checked")} {when}' +
+                                   (f'  ·  {T("offline: showing the last check")}' if d.get('offline') else ''))
+            if d.get('critical'):
+                self.warn.set_text('\U000f110c  ' + T('Restart after updating: kernel, drivers or core libraries '
+                                                      'are in the list'))
+                self.warn.show()
+            else:
+                self.warn.hide()
+            for kind, pkgs in (('Official', d.get('official', [])), ('AUR', d.get('aur', []))):
+                pkgs = [p for p in pkgs if self.filter in p['name'].lower()]
+                if not pkgs:
+                    continue
+                self.list.pack_start(ra.label(f'{T(kind).upper()}  ·  {len(pkgs)}', 'stitle'), False, False, 4)
+                for p in sorted(pkgs, key=lambda p: (not p['critical'], p['name'])):
+                    self.list.pack_start(self.row(p, kind), False, False, 0)
+            if not total:
+                self.list.pack_start(ra.label('\U000f0791  ' + T('Nothing to update'), 'sub'), False, False, 20)
+            self.list.show_all()
+            self.fill_actions(d)
+            self.fill_news(d.get('news') or [])
+
+        def row(self, p, kind):
+            b = Gtk.Button()
+            b.get_style_context().add_class('row')
+            box = Gtk.Box(spacing=10)
+            box.pack_start(ra.label('\U000f110c' if p['critical'] else '\U000f03d5',
+                                    'rglyph crit' if p['critical'] else 'rglyph'), False, False, 0)
+            box.pack_start(ra.label(p['name'], 'val', ellipsize=True), True, True, 0)
+            if p['critical']:
+                box.pack_start(ra.label(T('critical'), 'chip bad'), False, False, 0)
+            box.pack_start(ra.label(p['old'], 'old'), False, False, 0)
+            box.pack_start(ra.label('→', 'key'), False, False, 0)
+            box.pack_start(ra.label(p['new'], 'new'), False, False, 0)
+            b.add(box)
+            b.connect('clicked', lambda *_: self.details(p['name'], kind))
+            return b
+
+        def fill_actions(self, d):
+            for ch in self.acts.get_children()[1:]:
+                ch.destroy()
+            n_off, n_aur = len(d.get('official', [])), len(d.get('aur', []))
+            helper = d.get('helper') or aur_helper()
+            grid = Gtk.Box(spacing=10, homogeneous=True)
+            for k, n in ((T('Official'), n_off), (T('AUR'), n_aur)):
+                col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+                col.pack_start(ra.label(str(n), 'big'), False, False, 0)
+                col.pack_start(ra.label(k.upper(), 'key'), False, False, 0)
+                grid.pack_start(col, True, True, 0)
+            self.acts.pack_start(grid, False, False, 0)
+            if helper:
+                allc = f'{helper} -Syu'
+            else:
+                allc = 'sudo pacman -Syu'
+            self.acts.pack_start(ra.button(T('Update all'), lambda: self.run(allc), 'nbtn accent', '\U000f0162'),
+                                 False, False, 0)
+            row = Gtk.Box(spacing=8, homogeneous=True)
+            row.pack_start(ra.button(T('Official only'), lambda: self.run('sudo pacman -Syu'), 'nbtn'),
+                           True, True, 0)
+            aurb = ra.button(T('AUR only'), lambda: self.run(f'{helper} -Sua'), 'nbtn')
+            aurb.set_sensitive(bool(helper and n_aur))
+            if not helper:
+                aurb.set_tooltip_text(T('No AUR helper (paru / yay)'))
+            row.pack_start(aurb, True, True, 0)
+            self.acts.pack_start(row, False, False, 0)
+            self.acts.show_all()
+
+        def fill_news(self, items):
+            for ch in self.newsbox.get_children()[1:]:
+                ch.destroy()
+            if any(i.get('new') for i in items):
+                self.newsbox.pack_start(ra.label(T('new since your last upgrade: read before updating'),
+                                                 'chip mid', wrap=True), False, False, 0)
+            for it in items[:4]:
+                b = Gtk.Button()
+                b.get_style_context().add_class('row')
+                v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+                v.pack_start(ra.label(it['title'], 'val', wrap=True), False, False, 0)
+                v.pack_start(ra.label(it['date'] + ('  ·  NEW' if it.get('new') else ''), 'key'), False, False, 0)
+                b.add(v)
+                b.connect('clicked', lambda *_, u=it['link']: subprocess.Popen(['xdg-open', u],
+                                                                               start_new_session=True))
+                self.newsbox.pack_start(b, False, False, 0)
+            self.newsbox.show_all()
+
+        def show_system(self, r):
+            if isinstance(r, Exception):
+                return
+            orphans, size = r
+            for ch in self.sysbox.get_children()[1:]:
+                ch.destroy()
+            last = (self.data or {}).get('last_upgrade') or last_upgrade()
+            for k, v in ((T('Last full upgrade'), last[:16].replace('T', '  ') or T('never')),
+                         (T('Orphan packages'), str(len(orphans))),
+                         (T('Package cache'), f'{size / 1024 ** 3:.2f} GiB')):
+                row = Gtk.Box(spacing=10)
+                row.pack_start(ra.label(k, 'key'), True, True, 0)
+                row.pack_start(ra.label(v, 'val'), False, False, 0)
+                self.sysbox.pack_start(row, False, False, 0)
+            btns = Gtk.Box(spacing=8, homogeneous=True)
+            clean = ('sudo paccache -rk2 && sudo paccache -ruk0' if shutil.which('paccache')
+                     else 'sudo pacman -Sc')
+            btns.pack_start(ra.button(T('Clean cache'), lambda: self.run(clean), 'nbtn', '\U000f00e2'),
+                            True, True, 0)
+            ob = ra.button(T('Remove orphans'), lambda: self.run('sudo pacman -Rns $(pacman -Qdtq)'),
+                           'nbtn danger', '\U000f0a7a')
+            ob.set_sensitive(bool(orphans))
+            btns.pack_start(ob, True, True, 0)
+            self.sysbox.pack_start(btns, False, False, 0)
+            self.sysbox.show_all()
+
+        def details(self, name, kind):
+            def read():
+                args = [aur_helper() or 'pacman', '-Si', name] if kind == 'AUR' else ['pacman', '-Si', name]
+                return ra.cmd(args, timeout=30)[1]
+
+            def done(out):
+                for ch in self.detail.get_children()[1:]:
+                    ch.destroy()
+                info = dict(re.findall(r'^([A-Za-z ]+?)\s*:\s*(.*)$', out if isinstance(out, str) else '', re.M))
+                self.detail.pack_start(ra.label(name, 'val'), False, False, 0)
+                for k in ('Description', 'Repository', 'Download Size', 'Installed Size', 'URL', 'Build Date'):
+                    if info.get(k):
+                        row = Gtk.Box(spacing=10)
+                        row.pack_start(ra.label(k, 'key'), False, False, 0)
+                        row.pack_start(ra.label(info[k], 'mono', wrap=True, xalign=1), True, True, 0)
+                        self.detail.pack_start(row, False, False, 0)
+                self.detail.set_no_show_all(False)
+                self.detail.show_all()
+            ra.run_bg(read, done)
+
+        def run(self, command):
+            # at the end: check again (the pacman hook does it too)
+            ra.terminal(f'{command}; {os.path.abspath(sys.argv[0])} --check >/dev/null 2>&1',
+                        T('Updates'))
+            self.say(T('Opened in a terminal') + f':  {command}')
+
+    _lock = ui.single_instance('updatecenter', toggle=True)  # noqa: F841
+    GLib.set_prgname('UpdateCenter')
+    ra.float_rule('UpdateCenter')
+    w = UpdateCenter()
+    ui.quit_on_sigterm(w.destroy)
+    w.show_all()
+    Gtk.main()
+
+
+if __name__ == '__main__':
+    if sys.argv[1:2] == ['--check']:
+        d = check()
+        print(f"{d['total']} updates ({len(d['official'])} official, {len(d['aur'])} AUR, "
+              f"{d['critical']} critical){' - offline' if d['offline'] else ''}")
+    else:
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+        window()

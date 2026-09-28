@@ -91,7 +91,6 @@ SLOTS = [
     ('mplayer', 'label', 'music', 'label-font'),
     ('clipboard', 'label', 'clip', 'label-font'),
     ('sysmonitor', 'label', 'monitor', 'label-font'),
-    ('updates', 'format-prefix', 'update', 'format-prefix-font'),
     ('xkeyboard', 'format-prefix', 'kb', 'format-prefix-font'),
     ('colorpicker', 'label', 'picker', 'label-font'),
 ]

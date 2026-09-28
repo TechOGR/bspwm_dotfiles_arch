@@ -1,29 +1,92 @@
-#!/bin/sh
+#!/usr/bin/env python3
 # =============================================================
-# UpdatesPolybar - cyberpunk HUD pending-updates pill for polybar
+# UpdatesPolybar - pending updates in the bar, in the theme
 #
-# Reads the pacman/AUR update count that bin/Updates already keeps
-# cached at $HOME/.cache/Updates.txt (refreshed by a pacman hook,
-# see misc/polybar-update.hook, and by `checkupdates`/paru inside
-# bin/Updates). This script only handles presentation: a calm
-# neon-lime pill when the system is current, and a neon-red "alert"
-# pill with a hazard glyph the moment updates are pending, so the
-# capsule itself functions as the futuristic status indicator.
+# Long-lived (polybar tail = true): shows what bin/UpdateCenter --check
+# saved (the systemd timer runs it every 15 min, the pacman hook after
+# every upgrade; it signals this module at once):
+#   up to date   a check mark, dim
+#   N updates    the package glyph + N in the accent
+#   critical     the restart glyph + N, in red (kernel, drivers...)
+#   news         a dot when there are Arch news newer than your upgrade
+# Left click: UpdateCenter · right click: check now.
+#
+#   UpdatesPolybar            the module
+#   UpdatesPolybar --refresh  check now (right click)
 # =============================================================
 
-UPDATE_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/Updates.txt"
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
 
-total=$(cat "$UPDATE_FILE" 2>/dev/null)
-case "$total" in
-    ''|*[!0-9]*) total=0 ;;
-esac
+HOME = os.path.expanduser('~')
+BSPWM = os.path.join(HOME, '.config/bspwm')
+CACHE = os.path.join(os.environ.get('XDG_CACHE_HOME', os.path.join(HOME, '.cache')), 'rice-updates.json')
 
-if [ "$total" -gt 0 ]; then
-    color="#FF2D55"
-    icon="\xef\x81\xb9"
-else
-    color="#B6FF3D"
-    icon="\xef\x81\xb9"
-fi
+if sys.argv[1:2] == ['--refresh']:
+    subprocess.Popen([os.path.join(BSPWM, 'bin/UpdateCenter'), '--check'], start_new_session=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    sys.exit(0)
 
-printf "%%{T2}%%{F%s}%b%%{F-}%%{T-} %s\n" "$color" "$icon" "$total"
+
+def colors():
+    pal = {}
+    try:
+        rice = open(os.path.join(BSPWM, '.rice')).read().strip()
+        for line in open(os.path.join(BSPWM, 'rices', rice, 'colors.ini')):
+            m = re.match(r'([\w-]+)\s*=\s*(#[0-9a-fA-F]{6})', line.strip())
+            if m:
+                pal[m.group(1)] = m.group(2)
+    except OSError:
+        pass
+    return pal
+
+
+def render(pal):
+    try:
+        d = json.load(open(CACHE))
+    except (OSError, ValueError):
+        return f'%{{F{pal.get("blue-gray", "#555")}}}%{{T3}}\U000f06b0%{{T-}}%{{F-}}'
+    total, crit = d.get('total', 0), d.get('critical', 0)
+    dim = pal.get('blue-gray', '#555555')
+    news = any(n.get('new') for n in d.get('news') or [])
+    dot = f' %{{F{pal.get("yellow", "#e0af68")}}}●%{{F-}}' if news and total else ''
+    if not total:
+        return f'%{{F{dim}}}%{{T3}}\U000f0791%{{T-}}%{{F-}}'
+    if crit:
+        c = pal.get('red', '#f7768e')
+        return f'%{{F{c}}}%{{T3}}\U000f110c%{{T-}} {total}%{{F-}}{dot}'
+    c = pal.get('blue', '#7aa2f7')
+    return f'%{{F{c}}}%{{T3}}\U000f03d5%{{T-}}%{{F-}} %{{F{pal.get("fg", "#c0caf5")}}}{total}%{{F-}}{dot}'
+
+
+def main():
+    state = {'wake': False}
+    signal.signal(signal.SIGUSR1, lambda *_: state.update(wake=True))
+    last, mtime = None, None
+    while True:
+        try:
+            m = os.path.getmtime(CACHE)
+        except OSError:
+            m = None
+        if m != mtime or state['wake'] or last is None:
+            mtime, state['wake'] = m, False
+            out = render(colors())
+            if out != last:
+                print(out, flush=True)
+                last = out
+        for _ in range(30):   # 30 s, or at once on SIGUSR1
+            if state['wake']:
+                break
+            time.sleep(1)
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (BrokenPipeError, KeyboardInterrupt):
+        pass

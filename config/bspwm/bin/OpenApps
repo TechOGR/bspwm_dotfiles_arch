@@ -21,7 +21,7 @@ case "$1" in
 		Term --floating
 		;;
 	--checkupdates)
-		Term --checkupdates
+		UpdateCenter || Term --checkupdates
 		;;
 	--netmanager)
 		NetCenter || NetManagerDM
