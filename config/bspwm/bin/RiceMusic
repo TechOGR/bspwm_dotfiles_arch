@@ -1,0 +1,752 @@
+#!/usr/bin/env python3
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# RiceMusic - the rice's music player, in the theme (super + m)
+#   ✔ Controls whatever plays: YouTube, YouTube Music, Spotify, the browser,
+#     mpv, VLC, MPD... it says where from and follows the one playing;
+#     click a source to pin it
+#   ✔ The REAL spectrum of what sounds (lib/ricespectrum.py), 7 styles:
+#     bars · mirror · wave · radial · LEDs · blocks · terrain (each theme its own)
+#   ✔ 10-band equalizer for ALL the sound, with presets (lib/riceeq.py)
+#   ✔ MPD library: search, queue, play, update · ncmpcpp one click away
+#   ✔ Keys: Space play · ←→ seek · ↑↓ volume · N / P next / previous ·
+#     Tab next source · 1-7 spectrum · E equalizer on/off · Esc close
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+import json
+import math
+import os
+import subprocess
+import sys
+import threading
+import time
+
+sys.path.insert(0, os.path.expanduser('~/.config/bspwm/lib'))
+import riceui as ui  # noqa: E402
+import riceapp as ra  # noqa: E402
+import ricemedia as rm  # noqa: E402
+import ricespectrum as rs  # noqa: E402
+import riceeq  # noqa: E402
+from riceui import Gtk, Gdk, GLib, GdkPixbuf, cairo  # noqa: E402
+
+HOME = os.path.expanduser('~')
+CONF = os.path.join(HOME, '.config/bspwm/config/music.json')
+ES = ra.lang_es()
+T = ra.translator({
+    'Music': 'Música', 'Nothing playing': 'No suena nada', 'Spectrum': 'Espectro', 'Equalizer': 'Ecualizador',
+    'Library': 'Biblioteca', 'Sources': 'Fuentes', 'automatic': 'automático', 'Presets': 'Preajustes',
+    'Reset': 'Restablecer', 'Search in your music…': 'Buscar en tu música…', 'Queue': 'Cola',
+    'Update library': 'Actualizar biblioteca', 'Open ncmpcpp': 'Abrir ncmpcpp', 'Music folder': 'Carpeta de música',
+    'Your MPD library is empty: copy music to': 'Tu biblioteca de MPD está vacía: copia música a',
+    'and press Update library.': 'y pulsa Actualizar biblioteca.',
+    'The queue is empty': 'La cola está vacía', 'Updating the library…': 'Actualizando la biblioteca…',
+    'For all the sound (browser, Spotify, MPD…)': 'Para todo el sonido (navegador, Spotify, MPD…)',
+    'Equalizer on': 'Ecualizador encendido', 'Equalizer off': 'Ecualizador apagado',
+    'Space play · ←→ seek · ↑↓ volume · N/P next/prev · Tab source · 1-7 spectrum · E equalizer · Esc close':
+        'Espacio reproducir · ←→ avanzar · ↑↓ volumen · N/P sig./ant. · Tab fuente · 1-7 espectro · '
+        'E ecualizador · Esc cerrar',
+    'no sources: play something (YouTube, Spotify, MPD…)': 'sin fuentes: reproduce algo (YouTube, Spotify, MPD…)',
+    'songs': 'canciones', 'Add': 'Añadir', 'Play': 'Reproducir', 'results': 'resultados',
+    'Pinned: click again to follow the one playing': 'Fijada: pulsa otra vez para seguir la que suena',
+})
+
+
+def load_conf():
+    try:
+        return json.load(open(CONF))
+    except (OSError, ValueError):
+        return {}
+
+
+def save_conf(c):
+    os.makedirs(os.path.dirname(CONF), exist_ok=True)
+    with open(CONF + '.tmp', 'w') as f:
+        json.dump(c, f)
+    os.replace(CONF + '.tmp', CONF)
+
+
+def spectrum_style(style):
+    s = load_conf().get('spectrum', 'auto')
+    return rs.THEME_STYLE.get(style, 'bars') if s not in rs.STYLES else s
+
+
+def mix(a, b, t):
+    return tuple(a[i] + (b[i] - a[i]) * t for i in range(3))
+
+
+def txt(cr, s, x, y, size, rgba, bold=False, width=None, lines=1, align='left', font=None):
+    """Text in a box: wrapped to `lines`, ellipsized. -> its height."""
+    from gi.repository import Pango, PangoCairo
+    lay = PangoCairo.create_layout(cr)
+    lay.set_font_description(Pango.FontDescription(f'{font or ui.FONT} {"Bold " if bold else ""}{size}'))
+    if width:
+        lay.set_width(int(width * Pango.SCALE))
+        lay.set_ellipsize(Pango.EllipsizeMode.END)
+        if lines > 1:
+            lay.set_wrap(Pango.WrapMode.WORD_CHAR)
+            lay.set_height(-lines)
+        lay.set_alignment({'right': Pango.Alignment.RIGHT, 'center': Pango.Alignment.CENTER}.get(
+            align, Pango.Alignment.LEFT))
+    lay.set_text(s, -1)
+    cr.move_to(x, y)
+    cr.set_source_rgba(*rgba)
+    PangoCairo.show_layout(cr, lay)
+    return lay.get_pixel_size()[1]
+
+
+# ═══════════════════════════════════════════════════════════ hero (cover + titles)
+class Hero(Gtk.DrawingArea):
+    COVER = 210
+
+    def __init__(self, win):
+        super().__init__()
+        self.win = win
+        self.pix = None
+        self.set_size_request(-1, self.COVER + 24)
+        self.connect('draw', self.draw)
+
+    def set_art(self, path):
+        pix = None
+        if path:
+            try:
+                p = GdkPixbuf.Pixbuf.new_from_file(path)
+                s = self.COVER * 2 / min(p.get_width(), p.get_height())
+                p = p.scale_simple(max(1, int(p.get_width() * s)), max(1, int(p.get_height() * s)),
+                                   GdkPixbuf.InterpType.BILINEAR)
+                x, y = (p.get_width() - self.COVER * 2) // 2, (p.get_height() - self.COVER * 2) // 2
+                pix = p.new_subpixbuf(max(0, x), max(0, y), self.COVER * 2, self.COVER * 2)
+            except (GLib.Error, TypeError, ValueError):
+                pix = None
+        self.pix = pix
+        self.queue_draw()
+
+    def draw(self, _w, cr):
+        W = self.get_allocated_width()
+        w = self.win
+        C = self.COVER
+        x0, y0 = 6, 10
+        acc = w.acc
+        # radial spectrum around the cover (the radial style) / a soft glow
+        if w.spec_style == 'radial':
+            rs.draw(cr, 'radial', x0 - 20, y0 - 20, C + 40, C + 40, w.an, w.cols, w.t(), bands=36,
+                    center=(x0 + C / 2, y0 + C / 2), radius=C / 2 + 4)
+        else:
+            lv = sum(w.an.frame()[0][:8]) / 8 if w.an else 0
+            g = cairo.RadialGradient(x0 + C / 2, y0 + C / 2, C * 0.3, x0 + C / 2, y0 + C / 2, C * 0.75)
+            g.add_color_stop_rgba(0, *acc, 0.25 + lv * 0.35)
+            g.add_color_stop_rgba(1, *acc, 0)
+            cr.set_source(g)
+            cr.paint()
+        cr.save()
+        if w.spec_style == 'radial':
+            cr.arc(x0 + C / 2, y0 + C / 2, C / 2, 0, 2 * math.pi)
+        else:
+            ui.rounded(cr, x0, y0, C, C, 22)
+        cr.clip()
+        if self.pix:
+            cr.scale(0.5, 0.5)
+            Gdk.cairo_set_source_pixbuf(cr, self.pix, x0 * 2, y0 * 2)
+            cr.paint()
+        else:
+            g = cairo.LinearGradient(x0, y0, x0 + C, y0 + C)
+            g.add_color_stop_rgb(0, *mix(w.c['bg'], acc, 0.35))
+            g.add_color_stop_rgb(1, *mix(w.c['bg'], w.acc2, 0.25))
+            cr.set_source(g)
+            cr.paint()
+            cr.restore()
+            cr.save()
+            ui.glyph(cr, (w.st or {}).get('source', ('\U000f075a',))[0], x0 + C / 2, y0 + C / 2, C * 0.34,
+                     (*w.c['fg'], 0.85))
+        cr.restore()
+        if w.spec_style != 'radial':
+            ui.rounded(cr, x0 + 0.5, y0 + 0.5, C - 1, C - 1, 22)
+            cr.set_source_rgba(*acc, 0.6)
+            cr.set_line_width(1.5)
+            cr.stroke()
+        # the texts
+        st = w.st or {}
+        tx = x0 + C + 30
+        tw = W - tx - 6
+        src = st.get('source')
+        y = y0 + 8
+        if src:
+            txt(cr, f'{src[0]}  {rm.label(src).upper()}', tx, y, 9, (*acc, 1), bold=True, width=tw,
+                font=f'{ui.FONT}, {ui.ICON_FONT}')
+            y += 30
+        title = st.get('title') or T('Nothing playing')
+        y += txt(cr, title, tx, y, 20, (*w.c['fg'], 1), bold=True, width=tw, lines=2) + 6
+        if st.get('artist'):
+            y += txt(cr, st['artist'], tx, y, 12, (*acc, 0.95), width=tw) + 2
+        if st.get('album'):
+            txt(cr, st['album'], tx, y, 10, (*w.c['fg'], 0.55), width=tw)
+        return True
+
+
+# ═══════════════════════════════════════════════════════════ progress
+class Progress(Gtk.DrawingArea):
+    def __init__(self, win):
+        super().__init__()
+        self.win = win
+        self.drag = None
+        self.set_size_request(-1, 34)
+        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK |
+                        Gdk.EventMask.POINTER_MOTION_MASK)
+        self.connect('draw', self.draw)
+        self.connect('button-press-event', lambda _w, e: self._at(e.x, True))
+        self.connect('motion-notify-event', lambda _w, e: self.drag is not None and self._at(e.x, False))
+        self.connect('button-release-event', self.release)
+
+    def _at(self, x, start):
+        W = self.get_allocated_width()
+        self.drag = max(0.0, min(1.0, (x - 50) / max(1, W - 100)))
+        self.queue_draw()
+        return True
+
+    def release(self, *_):
+        if self.drag is not None and self.win.st and self.win.st.get('length'):
+            self.win.seek_to(self.drag * self.win.st['length'])
+        self.drag = None
+        return True
+
+    def draw(self, _w, cr):
+        W, H = self.get_allocated_width(), self.get_allocated_height()
+        w = self.win
+        st = w.st or {}
+        length = st.get('length') or 0
+        pos = w.position()
+        f = self.drag if self.drag is not None else (pos / length if length else 0)
+        x, y, bw = 50, H / 2 - 3, W - 100
+        ui.level_bar(cr, w.style, x, y, bw, 6, f, w.pal) if w.style else None
+        if not w.style:
+            ui.rounded(cr, x, y, bw, 6, 3)
+            cr.set_source_rgba(*w.c['fg'], 0.12)
+            cr.fill()
+            ui.rounded(cr, x, y, bw * f, 6, 3)
+            cr.set_source_rgba(*w.acc, 1)
+            cr.fill()
+        txt(cr, rm.fmt_time(f * length if self.drag is not None else pos), 0, H / 2 - 8, 9,
+            (*w.c['fg'], 0.7), width=42, align='right')
+        txt(cr, rm.fmt_time(length) if length else '--:--', W - 42, H / 2 - 8, 9, (*w.c['fg'], 0.7), width=42)
+        return True
+
+
+# ═══════════════════════════════════════════════════════════ spectrum
+class Spectrum(Gtk.DrawingArea):
+    def __init__(self, win, height=190):
+        super().__init__()
+        self.win = win
+        self.set_size_request(-1, height)
+        self.connect('draw', self.draw)
+
+    def draw(self, _w, cr):
+        W, H = self.get_allocated_width(), self.get_allocated_height()
+        w = self.win
+        style = w.spec_style
+        if style == 'radial':      # the radial one is around the cover: here the terrain under it
+            style = 'terrain'
+        rs.draw(cr, style, 4, 4, W - 8, H - 8, w.an, w.cols, w.t(), bands=56 if style != 'wave' else None)
+        return True
+
+
+# ═══════════════════════════════════════════════════════════ the window
+class RiceMusic(ra.CenterWindow):
+    def __init__(self):
+        super().__init__('RiceMusic', T('Music'), '\U000f075a', (1240, 800))
+        self.be = rm.Backend()
+        self.players, self.player, self.pinned, self.st = None, None, False, None
+        self.pos_at = (0.0, time.monotonic())
+        self.art_url = None
+        self.t0 = time.monotonic()
+        # RICE_SPECTRUM_DEVICE: another monitor to listen to (tests: a silent null sink)
+        self.an = rs.Analyzer(bands=64, device=os.environ.get('RICE_SPECTRUM_DEVICE', '@DEFAULT_MONITOR@')).start()
+        self.spec_style = spectrum_style(self.style)
+        self.cols = [mix(self.acc2, self.c['bg'], 0.15), self.acc, mix(self.acc, (1, 1, 1), 0.5)]
+        self.eq = riceeq.load()
+        self.eq_timer = None
+        self.install_extra_css()
+        self.subtitle.set_text(T('Space play · ←→ seek · ↑↓ volume · N/P next/prev · Tab source · 1-7 spectrum · '
+                                 'E equalizer · Esc close'))
+        self.srcbox = Gtk.Box(spacing=8)
+        self.head_right.pack_start(self.srcbox, False, False, 0)
+
+        # ── left: now playing + spectrum
+        left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        now = ra.section(T('Music'), '\U000f0387')
+        self.hero = Hero(self)
+        now.pack_start(self.hero, False, False, 0)
+        self.prog = Progress(self)
+        now.pack_start(self.prog, False, False, 0)
+        ctl = Gtk.Box(spacing=12)
+        ctl.set_halign(Gtk.Align.CENTER)
+        self.b_shuffle = self.ctl('\U000f049d', lambda: self.act('shuffle'))
+        self.b_prev = self.ctl('\U000f04ae', lambda: self.act('prev'))
+        self.b_play = self.ctl('\U000f040a', lambda: self.act('toggle'), 'big')
+        self.b_next = self.ctl('\U000f04ad', lambda: self.act('next'))
+        self.b_loop = self.ctl('\U000f0456', lambda: self.act('loop', (self.st or {}).get('loop')))
+        for b in (self.b_shuffle, self.b_prev, self.b_play, self.b_next, self.b_loop):
+            ctl.pack_start(b, False, False, 0)
+        vol = Gtk.Box(spacing=10)
+        vol.pack_start(ra.label('\U000f057e', 'sglyph'), False, False, 0)
+        self.vol = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
+        self.vol.set_draw_value(False)
+        self.vol.set_size_request(200, -1)
+        self.vol_lock = False
+        self.vol.connect('value-changed', self.on_vol)
+        vol.pack_start(self.vol, True, True, 0)
+        ctl.pack_start(Gtk.Box(), False, False, 12)
+        ctl.pack_start(vol, False, False, 0)
+        now.pack_start(ctl, False, False, 4)
+        left.pack_start(now, False, False, 0)
+
+        spec = ra.section(T('Spectrum'), '\U000f147d')
+        self.style_btns = {}
+        chips = Gtk.Box(spacing=6)
+        chips.set_halign(Gtk.Align.END)
+        for i, s in enumerate(['auto'] + rs.STYLES):
+            name = T('automatic') if s == 'auto' else rs.STYLE_NAMES[s][1 if ES else 0]
+            b = ra.button(name, lambda s=s: self.set_spec(s), 'nbtn chipbtn')
+            b.set_tooltip_text(f'{i}' if i else '')
+            chips.pack_start(b, False, False, 0)
+            self.style_btns[s] = b
+        spec.head.pack_start(Gtk.Box(), True, True, 0)
+        spec.head.pack_start(chips, False, False, 0)
+        self.spec = Spectrum(self)
+        spec.pack_start(self.spec, True, True, 0)
+        left.pack_start(spec, True, True, 0)
+        self.body.pack_start(left, True, True, 0)
+
+        # ── right: equalizer / library
+        right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        right.set_size_request(420, -1)
+        tabs = Gtk.Box(spacing=8)
+        self.stack = Gtk.Stack()
+        self.stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        self.tab_btns = {}
+        for key, glyph, title in (('eq', '\U000f0ea2', T('Equalizer')), ('lib', '\U000f0cb8', T('Library'))):
+            b = ra.button(title, lambda k=key: self.show_tab(k), 'nbtn tab', glyph)
+            tabs.pack_start(b, True, True, 0)
+            self.tab_btns[key] = b
+        right.pack_start(tabs, False, False, 0)
+        self.stack.add_named(self.build_eq(), 'eq')
+        self.stack.add_named(self.build_lib(), 'lib')
+        right.pack_start(self.stack, True, True, 0)
+        self.body.pack_start(right, False, False, 0)
+
+        self.mark_spec()
+        GLib.idle_add(lambda: (self.show_tab(load_conf().get('tab', 'eq')), False)[1])
+        threading.Thread(target=self.poll_loop, daemon=True).start()
+        GLib.timeout_add(1000 // 30, self.animate)
+        self.connect('destroy', lambda *_: self.an.stop())
+
+    # ── look
+    def install_extra_css(self):
+        css = Gtk.CssProvider()
+        css.load_from_data(b'''
+button.ctl { min-width: 44px; min-height: 44px; border-radius: 22px; padding: 0; }
+button.ctl label { font-family: "Material Design Icons Desktop"; font-size: 18pt; }
+button.ctl.big { min-width: 64px; min-height: 64px; border-radius: 32px; background-color: alpha(@acc, 0.3);
+    border-color: @acc; }
+button.ctl.big label { font-size: 26pt; }
+button.ctl.on { border-color: @acc; color: @acc; }
+button.ctl.on label { color: @acc; }
+button.ctl.off { opacity: 0.35; }
+button.chipbtn { padding: 3px 10px; border-radius: 10px; }
+button.chipbtn label { font-size: 8pt; }
+button.chipbtn.sel, button.tab.sel { background-color: alpha(@acc, 0.25); border-color: @acc; }
+button.src { padding: 4px 12px; border-radius: 14px; }
+button.src.sel { background-color: alpha(@acc, 0.25); border-color: @acc; }
+button.src.pin { border-width: 2px; }
+scale.eq trough { min-width: 6px; background-color: alpha(@fg, 0.12); border-radius: 3px; border: none; }
+scale.eq highlight { background-image: none; background-color: @acc; border-radius: 3px; }
+scale.eq slider { min-width: 18px; min-height: 18px; border-radius: 9px; background-image: none;
+    background-color: @fg; border: 2px solid @acc; box-shadow: 0 0 6px alpha(@acc, 0.6); }
+scale trough { background-color: alpha(@fg, 0.12); border: none; border-radius: 3px; min-height: 5px; }
+scale highlight { background-image: none; background-color: @acc; border-radius: 3px; }
+scale slider { background-image: none; background-color: @fg; border: 2px solid @acc; border-radius: 9px;
+    min-width: 14px; min-height: 14px; }
+.eqlabel { font-size: 7pt; color: alpha(@fg, 0.6); }
+.eqval { font-size: 7pt; font-weight: 800; color: @acc; }
+row.song { padding: 6px 8px; border-radius: 10px; }
+row.song:hover, row.song:selected { background-color: alpha(@acc, 0.14); }
+list { background: transparent; }
+.stitle2 { font-size: 9pt; font-weight: 700; }
+''')
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css,
+                                                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1)
+
+    def ctl(self, glyph, cb, extra=''):
+        b = Gtk.Button(label=glyph)
+        for c in ('nbtn', 'ctl', *extra.split()):
+            b.get_style_context().add_class(c)
+        b.connect('clicked', lambda *_: cb())
+        return b
+
+    def t(self):
+        return time.monotonic() - self.t0
+
+    # ── equalizer
+    def build_eq(self):
+        box = ra.section(T('Equalizer'), '\U000f0ea2')
+        self.eq_sw = Gtk.Switch()
+        self.eq_sw.set_active(self.eq['on'])
+        self.eq_sw.set_valign(Gtk.Align.CENTER)
+        self.eq_sw.connect('notify::active', lambda *_: self.eq_toggle(self.eq_sw.get_active()))
+        box.head.pack_start(Gtk.Box(), True, True, 0)
+        box.head.pack_start(self.eq_sw, False, False, 0)
+        box.pack_start(ra.label(T('For all the sound (browser, Spotify, MPD…)'), 'key'), False, False, 0)
+        bands = Gtk.Box(spacing=4, homogeneous=True)
+        self.eq_scales, self.eq_vals = [], []
+        for i, lab in enumerate(riceeq.LABELS):
+            col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            v = ra.label('', 'eqval', xalign=0.5)
+            sc = Gtk.Scale.new_with_range(Gtk.Orientation.VERTICAL, -riceeq.MAX_DB, riceeq.MAX_DB, 0.5)
+            sc.set_inverted(True)
+            sc.set_draw_value(False)
+            sc.set_size_request(-1, 210)
+            sc.add_mark(0, Gtk.PositionType.LEFT, None)
+            sc.get_style_context().add_class('eq')
+            sc.set_value(self.eq['gains'][i])
+            sc.connect('value-changed', lambda s, i=i: self.eq_band(i, s.get_value()))
+            col.pack_start(v, False, False, 0)
+            col.pack_start(sc, True, True, 0)
+            col.pack_start(ra.label(lab, 'eqlabel', xalign=0.5), False, False, 0)
+            bands.pack_start(col, True, True, 0)
+            self.eq_scales.append(sc)
+            self.eq_vals.append(v)
+        box.pack_start(bands, True, True, 6)
+        box.pack_start(ra.label(T('Presets').upper(), 'stitle'), False, False, 0)
+        flow = Gtk.FlowBox()
+        flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        flow.set_max_children_per_line(4)
+        flow.set_min_children_per_line(3)
+        flow.set_column_spacing(6)
+        flow.set_row_spacing(6)
+        self.preset_btns = {}
+        for key in riceeq.ORDER:
+            b = ra.button(riceeq.PRESET_NAMES[key][1 if ES else 0], lambda k=key: self.eq_preset(k), 'nbtn chipbtn')
+            flow.add(b)
+            self.preset_btns[key] = b
+        box.pack_start(flow, False, False, 0)
+        self.eq_marks()
+        return box
+
+    def eq_marks(self):
+        for i, v in enumerate(self.eq_vals):
+            g = self.eq['gains'][i]
+            v.set_text(f'{g:+.1f}' if abs(g) >= 0.05 else '0')
+        for k, b in self.preset_btns.items():
+            (b.get_style_context().add_class if k == self.eq['preset'] else b.get_style_context().remove_class)('sel')
+
+    def eq_band(self, i, val):
+        if getattr(self, '_eq_setting', False):
+            return
+        self.eq['gains'][i] = round(val * 2) / 2
+        self.eq['preset'] = 'custom'
+        self.eq_marks()
+        self.eq_push()
+
+    def eq_preset(self, key):
+        self.eq['gains'] = list(riceeq.PRESETS[key])
+        self.eq['preset'] = key
+        self._eq_setting = True
+        for sc, g in zip(self.eq_scales, self.eq['gains']):
+            sc.set_value(g)
+        self._eq_setting = False
+        if not self.eq['on'] and key != 'flat':
+            self.eq_sw.set_active(True)     # a preset means: hear it
+        self.eq_marks()
+        self.eq_push()
+
+    def eq_toggle(self, on):
+        self.eq['on'] = on
+        self.say(T('Equalizer on') if on else T('Equalizer off'))
+        self.eq_push(0)
+
+    def eq_push(self, delay=140):
+        """Apply after the slider stops for a moment (pw-cli per step is too much)."""
+        if self.eq_timer:
+            GLib.source_remove(self.eq_timer)
+        st = {'on': self.eq['on'], 'preset': self.eq['preset'], 'gains': list(self.eq['gains'])}
+
+        def go():
+            self.eq_timer = None
+            ra.run_bg(lambda: riceeq.apply(st))
+            return False
+        self.eq_timer = GLib.timeout_add(delay, go) if delay else (go(), None)[1]
+
+    # ── library (MPD)
+    def build_lib(self):
+        box = ra.section(T('Library'), '\U000f0cb8')
+        self.search = Gtk.SearchEntry()
+        self.search.set_placeholder_text(T('Search in your music…'))
+        self.search.connect('search-changed', lambda *_: self.lib_search())
+        box.pack_start(self.search, False, False, 0)
+        row = Gtk.Box(spacing=6)
+        row.pack_start(ra.button(T('Queue'), self.lib_queue, 'nbtn chipbtn', '\U000f0cb8'), False, False, 0)
+        row.pack_start(ra.button(T('Update library'), self.lib_update, 'nbtn chipbtn', '\U000f0450'), False, False, 0)
+        row.pack_start(ra.button('ncmpcpp', self.open_ncmpcpp, 'nbtn chipbtn', '\U000f018d'), False, False, 0)
+        box.pack_start(row, False, False, 0)
+        self.lib_info = ra.label('', 'key', wrap=True)
+        box.pack_start(self.lib_info, False, False, 0)
+        self.songs = Gtk.ListBox()
+        self.songs.set_activate_on_single_click(False)
+        self.songs.connect('row-activated', lambda _l, r: self.lib_play(r))
+        box.pack_start(self.scroller(self.songs), True, True, 0)
+        GLib.idle_add(lambda: (self.lib_queue(), False)[1])
+        return box
+
+    def lib_rows(self, items, kind):
+        ra.clear(self.songs)
+        for pos, title, artist, path in items[:400]:
+            r = Gtk.ListBoxRow()
+            r.get_style_context().add_class('song')
+            r.data = (kind, pos, path)
+            b = Gtk.Box(spacing=10)
+            b.pack_start(ra.label('\U000f0387', 'bglyph'), False, False, 0)
+            t = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            t.pack_start(ra.label(title, 'stitle2', ellipsize=True), False, False, 0)
+            if artist:
+                t.pack_start(ra.label(artist, 'key', ellipsize=True), False, False, 0)
+            b.pack_start(t, True, True, 0)
+            r.add(b)
+            self.songs.add(r)
+        self.songs.show_all()
+
+    def lib_queue(self):
+        def work():
+            out = rm.run(['mpc', '-f', rm.SEP.join(['%position%', '%title%', '%artist%', '%file%']), 'playlist'])
+            stats = rm.run(['mpc', 'stats'])
+            items = []
+            for line in out.splitlines():
+                f = (line.split(rm.SEP) + ['', '', '', ''])[:4]
+                items.append((f[0], f[1] or os.path.basename(f[3]), f[2], f[3]))
+            return items, stats
+
+        def done(r):
+            if isinstance(r, Exception):
+                return
+            items, stats = r
+            songs = next((ln.split(':')[1].strip() for ln in stats.splitlines() if ln.startswith('Songs:')), '0')
+            if songs == '0':
+                self.lib_info.set_text(f'{T("Your MPD library is empty: copy music to")} '
+                                       f'{rm.mpd_music_dir().replace(HOME, "~")} {T("and press Update library.")}')
+            else:
+                self.lib_info.set_text(f'{T("Queue")} · {len(items)}  ·  {songs} {T("songs")}' if items else
+                                       T('The queue is empty'))
+            self.lib_rows(items, 'queue')
+        ra.run_bg(work, done)
+
+    def lib_search(self):
+        q = self.search.get_text().strip()
+        if len(q) < 2:
+            return self.lib_queue()
+
+        def work():
+            out = rm.run(['mpc', '-f', rm.SEP.join(['%title%', '%artist%', '%file%']), 'search', 'any', q], timeout=6)
+            return [('', *(ln.split(rm.SEP) + ['', '', ''])[:3]) for ln in out.splitlines() if ln]
+
+        def done(items):
+            if isinstance(items, Exception):
+                return
+            items = [(p, t or os.path.basename(f), a, f) for p, t, a, f in items]
+            self.lib_info.set_text(f'{len(items)} {T("results")}')
+            self.lib_rows(items, 'search')
+        ra.run_bg(work, done)
+
+    def lib_play(self, row):
+        kind, pos, path = row.data
+        if kind == 'queue':
+            subprocess.Popen(['mpc', '-q', 'play', pos])
+        else:
+            subprocess.Popen(['sh', '-c', 'mpc -q add "$1" && mpc -q play "$(mpc playlist | wc -l)"', '_', path])
+        self.pinned, self.player = True, 'mpd'
+
+    def lib_update(self):
+        self.say(T('Updating the library…'))
+        ra.run_bg(lambda: rm.run(['mpc', '--wait', 'update'], timeout=600), lambda _r: self.lib_queue())
+
+    def open_ncmpcpp(self):
+        subprocess.Popen([os.path.join(HOME, '.config/bspwm/bin/OpenApps'), '--ncmpcpp'], start_new_session=True)
+
+    # ── tabs / spectrum style
+    def show_tab(self, key):
+        self.stack.set_visible_child_name(key)
+        for k, b in self.tab_btns.items():
+            (b.get_style_context().add_class if k == key else b.get_style_context().remove_class)('sel')
+        c = load_conf()
+        c['tab'] = key
+        save_conf(c)
+
+    def set_spec(self, s):
+        c = load_conf()
+        c['spectrum'] = s
+        save_conf(c)
+        self.spec_style = spectrum_style(self.style)
+        self.mark_spec()
+
+    def mark_spec(self):
+        cur = load_conf().get('spectrum', 'auto')
+        cur = cur if cur in rs.STYLES else 'auto'
+        for k, b in self.style_btns.items():
+            (b.get_style_context().add_class if k == cur else b.get_style_context().remove_class)('sel')
+
+    # ── players
+    def poll_loop(self):
+        while True:
+            try:
+                players = self.be.players()
+                if not (self.pinned and self.player in players):
+                    self.pinned = False
+                    player = self.be.active(players, self.player)
+                else:
+                    player = self.player
+                st = self.be.state(player) if player else None
+                art = self.be.art_path(st['art']) if st else ''
+                GLib.idle_add(self.update, players, player, st, art)
+            except Exception:   # noqa: BLE001 - the loop never dies
+                import traceback
+                traceback.print_exc()
+            time.sleep(1.0)
+
+    def update(self, players, player, st, art):
+        try:
+            self._update(players, player, st, art)
+        except Exception:   # noqa: BLE001
+            import traceback
+            traceback.print_exc()
+        return False
+
+    def _update(self, players, player, st, art):
+        if players != self.players or player != self.player:
+            self.players, self.player = players, player
+            self.draw_sources()
+        self.st = st
+        if st:
+            self.pos_at = (st.get('position', 0), time.monotonic())
+        if (st or {}).get('art') != self.art_url:
+            self.art_url = (st or {}).get('art')
+            self.hero.set_art(art)
+        playing = bool(st and st['status'] == 'Playing')
+        self.b_play.set_label('\U000f03e4' if playing else '\U000f040a')
+        for b, on, can in ((self.b_shuffle, st and st['shuffle'], st and st['can_shuffle']),
+                           (self.b_loop, st and st['loop'] != 'None', st and st['can_loop'])):
+            ctx = b.get_style_context()
+            (ctx.add_class if on else ctx.remove_class)('on')
+            (ctx.remove_class if can else ctx.add_class)('off')
+        if st and st['loop'] == 'Track':
+            self.b_loop.set_label('\U000f0458')
+        else:
+            self.b_loop.set_label('\U000f0456')
+        if st and not self.vol_lock:
+            self.vol_lock = True
+            self.vol.set_value(st['volume'] * 100)
+            self.vol_lock = False
+        self.hero.queue_draw()
+        return False
+
+    def draw_sources(self):
+        ra.clear(self.srcbox)
+        if not self.players:
+            self.srcbox.pack_start(ra.label(T('no sources: play something (YouTube, Spotify, MPD…)'), 'key'),
+                                   False, False, 0)
+        for p in self.players:
+            glyph, name, _app = rm.source(p)
+            b = ra.button(name, lambda p=p: self.pick(p), 'nbtn src', glyph)
+            ctx = b.get_style_context()
+            if p == self.player:
+                ctx.add_class('sel')
+                if self.pinned:
+                    ctx.add_class('pin')
+                    b.set_tooltip_text(T('Pinned: click again to follow the one playing'))
+            self.srcbox.pack_start(b, False, False, 0)
+        self.srcbox.show_all()
+
+    def pick(self, p):
+        if p == self.player and self.pinned:
+            self.pinned = False       # follow the one playing again
+        else:
+            self.player, self.pinned = p, True
+        self.draw_sources()
+
+    def position(self):
+        st = self.st or {}
+        pos, at = self.pos_at
+        if st.get('status') == 'Playing':
+            pos += time.monotonic() - at
+        return min(pos, st.get('length') or pos)
+
+    def act(self, action, arg=None):
+        if not self.player:
+            return
+        self.be.cmd(self.player, action, arg)
+        GLib.timeout_add(250, lambda: (self.refresh_now(), False)[1])
+
+    def refresh_now(self):
+        p = self.player
+        ra.run_bg(lambda: (self.be.state(p), p), lambda r: None if isinstance(r, Exception) or not r[0]
+                  else self.update(self.players, r[1], r[0], self.be.art_path(r[0]['art'])))
+
+    def seek_to(self, secs):
+        self.act('seek', secs)
+        self.pos_at = (secs, time.monotonic())
+
+    def on_vol(self, s):
+        if self.vol_lock or not self.player:
+            return
+        self.be.cmd(self.player, 'volume', s.get_value() / 100)
+
+    def animate(self):
+        if not self.get_visible():
+            return True
+        self.spec.queue_draw()
+        self.prog.queue_draw()
+        if self.spec_style == 'radial' or (self.st or {}).get('status') == 'Playing':
+            self.hero.queue_draw()
+        return True
+
+    def on_key(self, w, ev):
+        k = Gdk.keyval_name(ev.keyval)
+        if isinstance(self.get_focus(), (Gtk.Entry, Gtk.SearchEntry)) and k not in ('Escape', 'Tab'):
+            return False
+        st = self.st or {}
+        if k == 'space':
+            self.act('toggle')
+        elif k in ('Left', 'Right') and st.get('length'):
+            self.seek_to(max(0, self.position() + (5 if k == 'Right' else -5)))
+        elif k in ('Up', 'Down'):
+            self.vol.set_value(self.vol.get_value() + (5 if k == 'Up' else -5))
+        elif k in ('n', 'N'):
+            self.act('next')
+        elif k in ('p', 'P'):
+            self.act('prev')
+        elif k == 'Tab' and self.players:
+            i = self.players.index(self.player) if self.player in self.players else -1
+            self.pick(self.players[(i + 1) % len(self.players)])
+        elif k in [str(i) for i in range(1, 8)]:
+            self.set_spec(rs.STYLES[int(k) - 1])
+        elif k in ('0',):
+            self.set_spec('auto')
+        elif k in ('e', 'E'):
+            self.eq_sw.set_active(not self.eq_sw.get_active())
+        else:
+            return super().on_key(w, ev)
+        return True
+
+
+def main():
+    _lock = ui.single_instance('ricemusic', toggle=True)  # noqa: F841
+    GLib.set_prgname('RiceMusic')
+    ra.float_rule('RiceMusic')
+    w = RiceMusic()
+    ui.quit_on_sigterm(w.destroy)
+    w.show_all()
+    Gtk.main()
+
+
+if __name__ == '__main__':
+    main()

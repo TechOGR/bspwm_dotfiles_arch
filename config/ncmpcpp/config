@@ -1,35 +1,47 @@
-##############################################################
-## This is an example configuration file. Copy it to        ##
-## $XDG_CONFIG_HOME/ncmpcpp/config or $HOME/.ncmpcpp/config ##
-## and set up your preferences.                             ##
-##############################################################
+#  ┌┐┌┌─┐┌┬┐┌─┐┌─┐┌─┐┌─┐
+#  ││││  │││├─┘│  ├─┘├─┘   TechOGR · the rice's MPD player in the terminal
+#  ┘└┘└─┘┴ ┴┴  └─┘┴  ┴     (the full player with equalizer is RiceMusic: super + m)
+#
+# Colors are the terminal's (they change with the theme); the visualizer
+# and the accent of each theme are written at the end by
+# ~/.config/bspwm/config/modules/08-ncmpcpp.sh
 
+# ── MPD
 mpd_host = "~/.config/mpd/socket"
 mpd_port = 6600
 mpd_connection_timeout = "5"
-mpd_crossfade_time = "5"
-mpd_music_dir = ~/Music
-lyrics_directory  = ~/.config/ncmpcpp/lyrics
-execute_on_song_change  = "MediaControl nccover ; dunstify --replace=27072 -i /tmp/cover.png "Playing..." "$(mpc --format '%title% \n%artist%' current)""
+mpd_crossfade_time = "3"
+mpd_music_dir = "~/Música"
+lyrics_directory = "~/.config/ncmpcpp/lyrics"
+execute_on_song_change = "MediaControl nccover ; dunstify --replace=27072 -i /tmp/cover.png "Playing..." "$(mpc --format '%title% \n%artist%' current)""
 
-visualizer_data_source = /tmp/mpd.fifo
-visualizer_output_name = my_fifo
-
+# ── visualizer (MPD's fifo output)
+visualizer_data_source = "/tmp/mpd.fifo"
+visualizer_output_name = "my_fifo"
 visualizer_in_stereo = "yes"
 visualizer_fps = "60"
-visualizer_type = "ellipse"
-visualizer_look = ●●
-visualizer_color = "magenta,cyan,blue,red,white,green,yellow,black,magenta"
-visualizer_spectrum_smooth_look = "yes"
+visualizer_autoscale = "yes"
 
-# GENERAL
-# ---
-connected_message_on_startup = "yes"
+# ── screens: the queue, and the visualizer beside it
+startup_screen = "playlist"
+startup_slave_screen = "visualizer"
+startup_slave_screen_focus = "no"
+locked_screen_width_part = "52"
+ask_for_locked_screen_width_part = "no"
+user_interface = "alternative"
+header_visibility = "yes"
+statusbar_visibility = "yes"
+titles_visibility = "no"
+enable_window_title = "yes"
+song_window_title_format = "󰎈 {%t}|{%f}"
+
+# ── behaviour
+connected_message_on_startup = "no"
 cyclic_scrolling = "yes"
-mouse_support = "no"
-mouse_list_scroll_whole_page = "yes"
-lines_scrolled = "1"
-message_delay_time = "1"
+mouse_support = "yes"
+mouse_list_scroll_whole_page = "no"
+lines_scrolled = "2"
+message_delay_time = "2"
 playlist_shorten_total_times = "yes"
 playlist_display_mode = "columns"
 browser_display_mode = "columns"
@@ -37,43 +49,48 @@ search_engine_display_mode = "columns"
 playlist_editor_display_mode = "columns"
 autocenter_mode = "yes"
 centered_cursor = "yes"
-user_interface = "classic"
 follow_now_playing_lyrics = "yes"
-locked_screen_width_part = "50"
-ask_for_locked_screen_width_part = "yes"
 display_bitrate = "no"
-external_editor = "nano"
+external_editor = "nvim"
+use_console_editor = "yes"
+ignore_leading_the = "yes"
+
+# ── look
 main_window_color = "default"
-startup_screen = "browser"
+statusbar_color = "default"
+empty_tag_marker = "—"
+current_item_prefix = "$(black_blue)"
+current_item_suffix = "$(end)"
+current_item_inactive_column_prefix = "$(white)"
+current_item_inactive_column_suffix = "$(end)"
+selected_item_prefix = "$6"
+selected_item_suffix = "$9"
+song_library_format = "{%n · }{%t}|{%f}"
+browser_sort_mode = "name"
 
-# PROGRESS BAR
-# ---
-progressbar_look = "▪▪▪"
-#progressbar_look = "▃▃▃"
-progressbar_elapsed_color = "magenta"
-progressbar_color = "black"
-
-# UI VISIBILITY
-# ---
-header_visibility = "no"
-statusbar_visibility = "yes"
-titles_visibility = "yes"
-enable_window_title = "yes"
-
-# COLORS
-# ---
-statusbar_color = "white"
+# ── Theme (08-ncmpcpp.sh writes from here on)
+# (in formats: $2 red $3 green $4 yellow $5 blue $6 magenta $7 cyan $8 white, $9 back)
+now_playing_prefix = "$b$5 󰐊 "
+now_playing_suffix = "$9$/b"
+song_columns_list_format = "(6f)[default]{l} (46)[white]{t|f:Title} (28)[blue]{a} (20)[default]{b}"
+song_list_format = "{$8%t$9}|{$8%f$9}{ $5· %a$9}$R{$5%l$9}"
+song_status_format = "$b{$8%t$9}|{$8%f$9}{ $5· %a$9}$/b"
+alternative_header_first_line_format = "$b$8{%t}|{%f}$9$/b"
+alternative_header_second_line_format = "{$5%a$9}{ · %b}{ · %y}"
+visualizer_type = "spectrum"
+visualizer_look = "▮▮"
+visualizer_spectrum_smooth_look = "yes"
+visualizer_color = "blue,cyan,magenta"
 color1 = "white"
 color2 = "blue"
-
-# UI APPEARANCE
-# ---
-now_playing_prefix = "$b$2$7 "
-now_playing_suffix = "  $/b$8"
-current_item_prefix = "$b$7$/b$3 "
-current_item_suffix = "  $8"
-
-song_columns_list_format = "(50)[]{t|fr:Title} (0)[magenta]{a}"
-song_list_format = " {%t $R   $8%a$8}|{%f $R   $8%l$8} $8"
-song_status_format = "$b$2󰣐 $7 {$b$6$8 %t $6} $7 $8"
-song_window_title_format = "Now Playing .."
+progressbar_look = "━━╸"
+progressbar_color = "black"
+progressbar_elapsed_color = "blue"
+statusbar_time_color = "blue"
+player_state_color = "blue"
+volume_color = "blue"
+state_line_color = "black"
+state_flags_color = "blue"
+alternative_ui_separator_color = "black"
+window_border_color = "blue"
+active_window_border = "blue"

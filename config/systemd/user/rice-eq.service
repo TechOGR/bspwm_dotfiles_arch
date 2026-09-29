@@ -1,0 +1,12 @@
+[Unit]
+Description=Rice equalizer (PipeWire filter-chain, the music player)
+After=pipewire.service wireplumber.service
+BindsTo=pipewire.service
+
+[Service]
+ExecStart=/usr/bin/pipewire -c %h/.config/bspwm/config/rice-eq.conf
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=pipewire.service

@@ -852,7 +852,7 @@ CORE = [
     'feh', 'imagemagick', 'jq', 'xdotool', 'xdo', 'xclip', 'maim', 'ffmpeg', 'mpv', 'clipcat', 'xss-lock',
     'pacman-contrib', 'bc', 'wget', 'curl', 'rsync', 'unzip', 'git', 'xdg-utils', 'xdg-user-dirs',
     # the rice's own windows (GTK3 + cairo in Python)
-    'python', 'python-gobject', 'python-cairo', 'python-pillow', 'gtk3', 'librsvg',
+    'python', 'python-gobject', 'python-cairo', 'python-pillow', 'python-numpy', 'gtk3', 'librsvg',
     # terminals, shell
     'alacritty', 'kitty', 'zsh', 'zsh-autosuggestions', 'zsh-syntax-highlighting',
     'zsh-history-substring-search', 'fzf', 'eza', 'bat',

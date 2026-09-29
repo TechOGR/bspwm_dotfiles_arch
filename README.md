@@ -22,7 +22,7 @@ Configuración personal de escritorio para **BSPWM** sobre **Arch Linux** y deri
 | Notificaciones | `dunst` |
 | Terminales | `alacritty` (por defecto), `kitty`, `st`, `ghostty` — selector con `Super+Alt+T` |
 | Shell | `zsh` + autosugerencias, resaltado de sintaxis, `fzf`/`fzf-tab` |
-| Multimedia | `mpd`, `ncmpcpp`, `mpv`, control de volumen/brillo/reproducción |
+| Música | `RiceMusic` (`Super + M`): controla lo que suene (YouTube, YouTube Music, Spotify, MPD…), espectro real con 7 estilos y ecualizador de 10 bandas para todo el sonido · widget `MusicPlayer` · `ncmpcpp` en el color del tema |
 | Archivos / documentos | `yazi`, `zathura` |
 | Portapapeles | `clipcat` |
 | Bloqueo de pantalla | `ScreenLocker` (rápido) y `betterlockscreen` con tarjeta de login + avatar (`BetterLock`, editable en RiceEditor → Login Lock), auto-bloqueo con `xss-lock` |

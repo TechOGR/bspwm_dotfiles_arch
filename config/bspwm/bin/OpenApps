@@ -54,6 +54,10 @@ case "$1" in
 		Term --nvim
 		;;
 	--music)
+		# the rice's player (any source, spectrum, equalizer, MPD library)
+		RiceMusic || Term --music
+		;;
+	--ncmpcpp)
 		Term --music
 		;;
 	--fetch)

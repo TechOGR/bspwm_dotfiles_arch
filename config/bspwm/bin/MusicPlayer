@@ -3,11 +3,14 @@
 # Author:  TechOGR
 # Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
 #
-# MusicPlayer - HUD music player of the rice (replaces the eww one)
+# MusicPlayer - the music widget: what plays, from where, its spectrum and
+# the controls. The full player (equalizer, spectrum styles, library) is
+# RiceMusic (super + m, or the button / M here).
 #   ✔ Any MPRIS player (browsers, Spotify, mpv, …) through playerctl,
-#     and MPD through mpc · click the source chip to switch player
+#     and MPD through mpc · says where from (YouTube, YouTube Music,
+#     Spotify…) · follows the one playing · click the source to switch
 #   ✔ Album art with a blurred cover backdrop and neon frame
-#   ✔ Title / artist / album, animated equalizer while playing
+#   ✔ Title / artist / album, the REAL spectrum of what sounds (theme style)
 #   ✔ Seekable progress bar (click or drag), elapsed / total time
 #   ✔ Shuffle · previous · play/pause · next · loop · volume
 #   ✔ Keyboard: Space play/pause · ←→ seek 5 s · ↑↓ volume ·
@@ -25,12 +28,8 @@ import os
 import sys
 import math
 import time
-import random
-import hashlib
 import threading
 import subprocess
-import urllib.parse
-import urllib.request
 
 sys.path.insert(0, os.path.expanduser('~/.config/bspwm/lib'))
 import riceui as ui  # noqa: E402
@@ -39,141 +38,13 @@ from riceui import Gtk, Gdk, GLib, GdkPixbuf, cairo  # noqa: E402
 W = 460
 ART = 150
 CACHE = os.path.join(ui.HOME, '.cache', os.environ.get('USER', 'user'), 'musicplayer')
-MUSIC_DIR = os.path.join(ui.HOME, 'Music')
-SEP = '\x1f'
 os.makedirs(CACHE, exist_ok=True)
 
 
-def run(cmd, timeout=3):
-    try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout.strip()
-    except Exception:
-        return ''
+import ricemedia as rm  # noqa: E402  (players, sources, covers: shared with RiceMusic)
+import ricespectrum as rs  # noqa: E402
 
-
-def fmt_time(s):
-    s = max(0, int(s))
-    return f'{s // 3600}:{s % 3600 // 60:02d}:{s % 60:02d}' if s >= 3600 else f'{s // 60}:{s % 60:02d}'
-
-
-# ─────────────────────────────────────────────────────────── backends
-class Backend:
-    """playerctl for MPRIS players, mpc for MPD."""
-
-    def __init__(self):
-        self.caps = {}
-
-    def supports(self, p, prop):
-        """Browsers expose no Shuffle / LoopStatus: ask once per player."""
-        key = (p, prop)
-        if key not in self.caps:
-            try:
-                r = subprocess.run(['playerctl', '-p', p, prop], capture_output=True, text=True, timeout=3)
-                self.caps[key] = r.returncode == 0 and 'could not' not in r.stdout.lower()
-            except Exception:
-                self.caps[key] = False
-        return self.caps[key]
-
-    @staticmethod
-    def players():
-        out = [p for p in run(['playerctl', '-l']).splitlines() if p]
-        if 'mpd' not in ' '.join(out).lower() and run(['mpc', 'current']) != '':
-            out.append('mpd')
-        return out
-
-    @staticmethod
-    def pretty(name):
-        base = name.split('.')[0]
-        return {'mpd': 'MPD', 'brave': 'Brave', 'chromium': 'Chromium', 'firefox': 'Firefox',
-                'spotify': 'Spotify', 'mpv': 'mpv', 'vlc': 'VLC'}.get(base, base.title())
-
-    def state(self, p):
-        if p == 'mpd':
-            return self.mpd_state()
-        fmt = SEP.join(['{{status}}', '{{title}}', '{{artist}}', '{{album}}', '{{mpris:artUrl}}',
-                        '{{position}}', '{{mpris:length}}', '{{volume}}', '{{shuffle}}', '{{loop}}'])
-        out = run(['playerctl', '-p', p, 'metadata', '--format', fmt])
-        f = out.split(SEP)
-        if len(f) < 10:
-            return None
-
-        def num(v, div=1):
-            try:
-                return float(v) / div
-            except ValueError:
-                return 0.0
-        return dict(status=f[0] or 'Stopped', title=f[1] or 'Unknown title', artist=f[2], album=f[3],
-                    art=f[4], position=num(f[5], 1e6), length=num(f[6], 1e6), volume=num(f[7]),
-                    shuffle=f[8] == 'true', loop=f[9] if f[9] in ('Track', 'Playlist') else 'None',
-                    can_shuffle=self.supports(p, 'shuffle'), can_loop=self.supports(p, 'loop'))
-
-    def mpd_state(self):
-        out = run(['mpc', '-f', SEP.join(['%title%', '%artist%', '%album%', '%file%']), 'status'])
-        lines = out.splitlines()
-        if not lines:
-            return None
-        st = dict(status='Stopped', title='Nothing queued', artist='', album='', art='', position=0,
-                  length=0, volume=0.5, shuffle=False, loop='None', can_shuffle=True, can_loop=True)
-        if len(lines) >= 3:
-            f = lines[0].split(SEP) + ['', '', '', '']
-            st.update(title=f[0] or os.path.basename(f[3]), artist=f[1], album=f[2], art=f'mpd:{f[3]}')
-            st['status'] = 'Playing' if '[playing]' in lines[1] else 'Paused'
-            try:
-                cur, tot = lines[1].split()[2].split('/')
-
-                def secs(t):
-                    return sum(int(x) * 60 ** i for i, x in enumerate(reversed(t.split(':'))))
-                st['position'], st['length'] = secs(cur), secs(tot)
-            except (IndexError, ValueError):
-                pass
-        opts = lines[-1]
-        st['shuffle'] = 'random: on' in opts
-        st['loop'] = 'Playlist' if 'repeat: on' in opts else 'None'
-        try:
-            st['volume'] = int(opts.split('volume:')[1].split('%')[0]) / 100
-        except (IndexError, ValueError):
-            pass
-        return st
-
-    @staticmethod
-    def cmd(p, action, arg=None):
-        if p == 'mpd':
-            m = {'toggle': ['toggle'], 'next': ['next'], 'prev': ['prev'], 'shuffle': ['random'],
-                 'loop': ['repeat'], 'seek': ['seek', str(int(arg or 0))],
-                 'volume': ['volume', str(int((arg or 0) * 100))]}[action]
-            subprocess.Popen(['mpc', '-q', *m], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return
-        m = {'toggle': ['play-pause'], 'next': ['next'], 'prev': ['previous'], 'shuffle': ['shuffle', 'Toggle'],
-             'loop': ['loop', {'None': 'Playlist', 'Playlist': 'Track'}.get(arg, 'None')],
-             'seek': ['position', f'{arg or 0:.2f}'], 'volume': ['volume', f'{arg or 0:.2f}']}[action]
-        subprocess.Popen(['playerctl', '-p', p, *m], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    @staticmethod
-    def art_path(url):
-        """Local file for an MPRIS artUrl / an MPD file (cached)."""
-        if not url:
-            return ''
-        if url.startswith('file://'):
-            p = urllib.parse.unquote(url[7:])
-            return p if os.path.isfile(p) else ''
-        key = hashlib.md5(url.encode()).hexdigest()
-        out = os.path.join(CACHE, key + '.png')
-        if os.path.isfile(out):
-            return out
-        if url.startswith('mpd:'):
-            src = os.path.join(MUSIC_DIR, url[4:])
-            subprocess.run(['ffmpeg', '-y', '-loglevel', 'quiet', '-i', src, '-an', '-frames:v', '1', out],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return out if os.path.isfile(out) else ''
-        if url.startswith('http'):
-            try:
-                with urllib.request.urlopen(url.replace('open.spotify.com', 'i.scdn.co'), timeout=6) as r, \
-                        open(out, 'wb') as f:
-                    f.write(r.read())
-                return out
-            except Exception:
-                return ''
-        return ''
+run, fmt_time, Backend = rm.run, rm.fmt_time, rm.Backend
 
 
 # ─────────────────────────────────────────────────────────── widgets
@@ -223,38 +94,36 @@ class Art(Gtk.DrawingArea):
 
 
 class Equalizer(Gtk.DrawingArea):
-    N = 22
+    """The real spectrum of what sounds (lib/ricespectrum.py), in the
+    style chosen in RiceMusic (the theme's own by default)."""
 
     def __init__(self, win):
         super().__init__()
         self.win = win
-        self.set_size_request(-1, 34)
-        self.levels = [0.08] * self.N
-        self.targets = [0.08] * self.N
+        self.set_size_request(-1, 40)
+        self.an = rs.Analyzer(bands=40).start()
+        self.style = self.pick_style()
         self.connect('draw', self.draw)
 
-    def step(self, playing):
-        for i in range(self.N):
-            if playing and random.random() < 0.35:
-                shape = 0.55 + 0.45 * math.sin(i / self.N * math.pi)
-                self.targets[i] = random.uniform(0.15, 1.0) * shape
-            elif not playing:
-                self.targets[i] = 0.06
-            self.levels[i] += (self.targets[i] - self.levels[i]) * 0.35
-        self.queue_draw()
+    @staticmethod
+    def pick_style():
+        try:
+            import json
+            s = json.load(open(os.path.join(ui.HOME, '.config/bspwm/config/music.json'))).get('spectrum', 'auto')
+        except (OSError, ValueError):
+            s = 'auto'
+        s = s if s in rs.STYLES else rs.THEME_STYLE.get(ui.theme_style() or '', 'bars')
+        return 'mirror' if s == 'radial' else s     # the round one needs room: RiceMusic
+
+    def active(self):
+        return self.an.active()
 
     def draw(self, w, cr):
         c = self.win.c
         Wd, H = w.get_allocated_width(), w.get_allocated_height()
-        bw = Wd / self.N
-        g = cairo.LinearGradient(0, H, 0, 0)
-        g.add_color_stop_rgba(0, *c['cyan'], 0.9)
-        g.add_color_stop_rgba(1, *c['magenta'], 0.9)
-        for i, v in enumerate(self.levels):
-            h = max(2, v * H)
-            ui.rounded(cr, i * bw + 1.5, H - h, bw - 3, h, 1.5)
-        cr.set_source(g)
-        cr.fill()
+        rs.draw(cr, self.style, 0, 0, Wd, H, self.an, [c['cyan'], c['blue'], c['magenta']],
+                time.monotonic(), bands=22 if self.style in ('bars', 'mirror', 'dots', 'blocks') else None,
+                glow=False)
         return False
 
 
@@ -329,7 +198,7 @@ class Player(Gtk.Window):
         self.pal = ui.load_palette()
         self.c = ui.rgb_palette(self.pal)
         self.be = Backend()
-        self.players, self.player = [], None
+        self.players, self.player, self.pinned = [], None, False
         self.st, self.st_time = None, time.monotonic()
         self.art_url, self.art_pix, self.backdrop = None, None, None
         self.closing, self.t0 = None, time.monotonic()
@@ -355,6 +224,11 @@ class Player(Gtk.Window):
         self.src.set_tooltip_text('Switch player (Tab)')
         self.src.connect('clicked', lambda *_: self.next_player())
         head.pack_end(self.src, False, False, 0)
+        full = Gtk.Button(label='\U000f03cc')
+        full.get_style_context().add_class('chip')
+        full.set_tooltip_text('Full player: equalizer, spectrum, library (M · super + m)')
+        full.connect('clicked', lambda *_: self.open_full())
+        head.pack_end(full, False, False, 0)
         box.pack_start(head, False, False, 0)
 
         mid = Gtk.Box(spacing=16)
@@ -424,7 +298,7 @@ class Player(Gtk.Window):
         self.empty = Gtk.Label(label='')
         self.empty.get_style_context().add_class('album')
         box.pack_start(self.empty, False, False, 0)
-        foot = Gtk.Label(label='SPACE PLAY   ·   ←→ SEEK   ·   ↑↓ VOLUME   ·   TAB PLAYER   ·   ESC')
+        foot = Gtk.Label(label='SPACE PLAY  ·  ←→ SEEK  ·  ↑↓ VOL  ·  TAB SOURCE  ·  M FULL  ·  ESC')
         foot.get_style_context().add_class('foot')
         box.pack_start(foot, False, False, 0)
 
@@ -504,11 +378,11 @@ scale slider { background-color: @fg; border-radius: 50%; min-width: 12px; min-h
     def poll_loop(self):
         while self.alive:
             players = self.be.players()
-            player = self.player if self.player in players else None
-            if player is None and players:
-                states = {p: self.be.state(p) for p in players}
-                playing = [p for p, s in states.items() if s and s['status'] == 'Playing']
-                player = playing[0] if playing else players[0]
+            if self.pinned and self.player in players:
+                player = self.player
+            else:
+                self.pinned = False
+                player = self.be.active(players, self.player)
             st = self.be.state(player) if player else None
             art = self.be.art_path(st['art']) if st else ''
             GLib.idle_add(self.update, players, player, st, art)
@@ -546,8 +420,9 @@ scale slider { background-color: @fg; border-radius: 50%; min-width: 12px; min-h
     def render(self):
         st = self.st
         n = len(self.players)
-        self.src.set_label(f'󰓃  {self.be.pretty(self.player).upper()}' + (f'  {n}' if n > 1 else '')
-                           if self.player else '󰓄  NO PLAYER')
+        src = (st or {}).get('source') or (rm.source(self.player) if self.player else None)
+        self.src.set_label(f'{src[0]}  {rm.label(src).upper()}' + (f'  {n}' if n > 1 else '')
+                           if src else '󰓄  NO PLAYER')
         if not st:
             self.l_title.set_text('Nothing playing')
             self.l_artist.set_text('open a player or MPD')
@@ -585,8 +460,8 @@ scale slider { background-color: @fg; border-radius: 50%; min-width: 12px; min-h
             return False
         playing = bool(self.st and self.st['status'] == 'Playing')
         # only moves while playing: an idle player costs the compositor nothing
-        if playing or max(self.eq.levels) > 0.07:
-            self.eq.step(playing)
+        if playing or self.eq.active():
+            self.eq.queue_draw()
         if playing:
             self.l_pos.set_text(fmt_time(self.position()))
             self.prog.queue_draw()
@@ -623,6 +498,7 @@ scale slider { background-color: @fg; border-radius: 50%; min-width: 12px; min-h
         if len(self.players) > 1:
             i = self.players.index(self.player) if self.player in self.players else -1
             self.player = self.players[(i + 1) % len(self.players)]
+            self.pinned = True
             self.st = self.be.state(self.player)
             self.st_time = time.monotonic()
             self.art_url = 'switch'
@@ -647,6 +523,8 @@ scale slider { background-color: @fg; border-radius: 50%; min-width: 12px; min-h
             self.vol.set_value(self.vol.get_value() + (5 if k == Gdk.KEY_Up else -5))
         elif k in (Gdk.KEY_Tab, Gdk.KEY_ISO_Left_Tab):
             self.next_player()
+        elif k in (Gdk.KEY_m, Gdk.KEY_M):
+            self.open_full()
         else:
             return False
         return True
@@ -713,8 +591,13 @@ scale slider { background-color: @fg; border-radius: 50%; min-width: 12px; min-h
             self.closing = time.monotonic()
             self.add_tick_callback(self.fade)
 
+    def open_full(self):
+        subprocess.Popen([os.path.join(ui.HOME, '.config/bspwm/bin/RiceMusic')], start_new_session=True)
+        self.close()
+
     def on_destroy(self, *_):
         self.alive = False
+        self.eq.an.stop()
         Gtk.main_quit()
 
 
