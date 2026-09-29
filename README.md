@@ -35,25 +35,33 @@ Todo se despliega desde este repositorio: el instalador **no clona ni copia arch
 
 ## 🚀 Instalación
 
-Requisitos: una distribución basada en Arch Linux (x86_64), conexión a internet y un usuario normal con acceso a `sudo`.
+Requisitos: una distribución basada en Arch Linux (x86_64), conexión a internet y un usuario normal con `sudo`. Sirve igual en un equipo físico que en una máquina virtual (VMware, VirtualBox, QEMU/KVM, Hyper-V), y también desde un Arch mínimo recién instalado, sin escritorio.
 
 ```bash
 git clone https://github.com/TechOGR/bspwm_dotfiles_arch.git
 cd bspwm_dotfiles_arch
-chmod +x install.sh
 ./install.sh
 ```
 
-- Ejecuta el script **sin `sudo`**; te pedirá la contraseña automáticamente cuando la necesite.
-- Antes de tocar nada, sincroniza y actualiza todo el sistema (`pacman -Syu`) para evitar conflictos de archivos entre paquetes (por ejemplo entre librerías compartidas como `ffmpeg`/`vmaf`).
-- Instala `yay` si no tienes ya `yay`/`paru`, prepara Rust estable para compilar Eww si hace falta, y resuelve automáticamente cualquier paquete que quede en conflicto reintentando la instalación.
-- Antes de desplegar nada crea un **backup** completo de tu `~/.config` actual y tu `.zshrc` en `~/.dotfiles_backup/backup_<fecha>/`, con un script `restore.sh` listo para revertir todo.
-- Registra la sesión **BSPWM** en tu Display Manager (instala LightDM si no tienes ninguno activo) y deja tu shell en Zsh.
-- Guarda un log detallado de todo el proceso en `~/.techogr_install.log`, útil para depurar si algo falla.
+- Ejecútalo **sin `sudo`**: pide tu contraseña una sola vez y la mantiene activa hasta el final.
+- Antes de empezar muestra tu equipo (sistema, GPU, VM o físico, batería, wifi, bluetooth) y te deja **elegir qué instalar** (login, música, herramientas, bóveda de contraseñas, Brave...) con las flechas y la barra espaciadora.
+- Actualiza las llaves de firma y todo el sistema antes de instalar nada (evita las actualizaciones parciales y los conflictos de archivos).
+- Decide solo qué paquetes vienen de los repositorios y cuáles de AUR (cambia entre Arch, CachyOS, EndeavourOS...) e instala `yay` si no tienes `yay`/`paru`.
+- Detecta el hardware e instala lo que corresponde: microcódigo, mesa/vulkan, NVIDIA (rama correcta según la tarjeta; `chwd` en CachyOS), PipeWire, herramientas del invitado en máquinas virtuales, touchpad y energía en portátiles.
+- Respalda tu configuración en `~/.dotfiles_backup/backup_<fecha>/` (con `restore.sh`) y, si reinstalas, **conserva tus ajustes del rice** (tema, fondos por tema, avatar, dock, barra).
+- Si algo falla te muestra el error real con una pista de cómo arreglarlo y te deja **reintentar, saltar o parar**.
+- Al final comprueba que todo esté en su sitio y guarda un registro completo en `~/.cache/techogr-install/`.
 
-Al terminar, cierra sesión (o reinicia) y selecciona **BSPWM** en la pantalla de inicio.
+| Opción | Qué hace |
+| :--- | :--- |
+| `./install.sh --yes` | Sin preguntas: las opciones recomendadas |
+| `./install.sh --deploy-only` | Solo copia el rice (sin paquetes ni cambios en el sistema) |
+| `./install.sh --doctor` | Solo comprueba que todo lo que el rice necesita está instalado |
+| `./install.sh --demo` | Una simulación para ver el instalador (no toca nada) |
 
-> Para restaurar tu configuración anterior en cualquier momento: `~/.dotfiles_backup/backup_<fecha>/restore.sh`
+Al terminar, reinicia y entra en la sesión **BSPWM** (o escribe `startx` si no usas pantalla de inicio).
+
+> Para volver a tu configuración anterior: `~/.dotfiles_backup/backup_<fecha>/restore.sh`
 
 ---
 

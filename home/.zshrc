@@ -8,11 +8,14 @@
 #  ┬  ┬┌─┐┬─┐┌─┐
 #  └┐┌┘├─┤├┬┘└─┐
 #   └┘ ┴ ┴┴└─└─┘
-export VISUAL="${EDITOR}"
-export EDITOR='geany'
-export BROWSER='firefox'
+# the first one installed of each
+_first() { local c; for c in "$@"; do (( $+commands[$c] )) && { print -r -- "$c"; return; }; done; print -r -- "$1"; }
+export EDITOR="$(_first geany nvim nano vim)"
+export BROWSER="$(_first brave firefox chromium)"
 export FILEMANAGER='thunar'
-export IMGVIEWER='viewnior'
+export IMGVIEWER="$(_first viewnior feh)"
+unfunction _first
+export VISUAL="${EDITOR}"
 export HISTORY_IGNORE="(ls|cd|pwd|exit|sudo reboot|history|cd -|cd ..)"
 export SUDO_PROMPT="Deploying root access for %u. Password pls: "
 export BAT_THEME="base16"
@@ -116,11 +119,14 @@ PS1='%B%F{blue}%f%b  %B%F{magenta}%n%f%b $(dir_icon)  %B%F{red}%~%f%b${vcs_in
 #  ┌─┐┬  ┬ ┬┌─┐┬┌┐┌┌─┐
 #  ├─┘│  │ ││ ┬││││└─┐
 #  ┴  ┴─┘└─┘└─┘┴┘└┘└─┘
-#source /usr/share/zsh/plugins/fzf-tab-git/fzf-tab.zsh
-source /usr/share/zsh/plugins/fzf-tab/fzf-tab.zsh
-source /usr/share/zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh
-source /usr/share/zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
-source /usr/share/zsh/plugins/zsh-history-substring-search/zsh-history-substring-search.zsh
+# each plugin only when installed (a missing one is not an error at every prompt)
+for _plugin in fzf-tab/fzf-tab.zsh fzf-tab-git/fzf-tab.zsh \
+               zsh-autosuggestions/zsh-autosuggestions.zsh \
+               zsh-syntax-highlighting/zsh-syntax-highlighting.zsh \
+               zsh-history-substring-search/zsh-history-substring-search.zsh; do
+    [[ -r /usr/share/zsh/plugins/$_plugin ]] && source /usr/share/zsh/plugins/$_plugin
+done
+unset _plugin
 
 bindkey '^[[A' history-substring-search-up
 bindkey '^[[B' history-substring-search-down
