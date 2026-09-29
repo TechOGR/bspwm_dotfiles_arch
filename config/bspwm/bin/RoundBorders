@@ -223,8 +223,11 @@ def main():
 
     def is_terminal(cid, cl):
         """A terminal window? By its class, else by the process that owns it
-        (read once per window)."""
-        if cid not in term_cache:
+        (read once per window). Keyed by id AND class: X hands a closed
+        client's ids to the next one, and a cached "not a terminal" of an
+        old GTK window left a new terminal with that id without its scene."""
+        key = (cid, cl.get('className'), cl.get('instanceName'))
+        if key not in term_cache:
             names = {(cl.get('className') or '').lower(), (cl.get('instanceName') or '').lower()}
             ok = bool(names & TERMINALS)
             if not ok:
@@ -236,8 +239,8 @@ def main():
                 except OSError:
                     comm = ''
                 ok = comm in TERM_PROCS
-            term_cache[cid] = ok
-        return term_cache[cid]
+            term_cache[key] = ok
+        return term_cache[key]
 
     def wanted():
         """{client id: (frame x, y, w, h, focused)} for the windows on screen
@@ -245,6 +248,8 @@ def main():
         c = st['conf']
         st['back_want'] = {}
         st['alive'] = {int(i, 16) for i in bspc('query', '-N', '-n', '.window').split()}
+        for k in [k for k in term_cache if k[0] not in st['alive']]:   # closed windows: forget them
+            del term_cache[k]
         if not (c['skin'] or c['xrender'] and c['r'] > 0 and c['bw'] > 0):
             return {}
         out = {}
