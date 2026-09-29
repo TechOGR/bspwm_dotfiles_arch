@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# Lock - locks the screen in the style chosen in RiceEditor
+# (Lockscreen / Login Lock -> "Lock style"): LOCK_STYLE in theme-config.bash
+#   card  BetterLock: the login card with the avatar (default)
+#   hud   ScreenLocker: big clock and ring over the wallpaper
+# Everything that locks goes through here: super + shift + l, the power
+# menu, suspend, the idle auto-lock (xss-lock)...
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+BIN="$HOME/.config/bspwm/bin"
+read -r RICE < "$HOME/.config/bspwm/.rice"
+CFG="$HOME/.config/bspwm/rices/$RICE/theme-config.bash"
+STYLE="$(sed -n 's/^LOCK_STYLE="\{0,1\}\([a-z]*\)"\{0,1\}.*/\1/p' "$CFG" 2>/dev/null | tail -n1)"
+
+case "$STYLE" in
+    hud) exec "$BIN/ScreenLocker" "$@" ;;
+    *)   exec "$BIN/BetterLock" --lock "$@" ;;
+esac

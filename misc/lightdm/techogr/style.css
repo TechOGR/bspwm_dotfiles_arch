@@ -342,3 +342,28 @@ body.verifying #pill { border-color: var(--verify); }
 #power button:hover { color: var(--accent); border-color: var(--accent); background: rgba(var(--accent-rgb), .12); }
 #pw-shutdown:hover { color: var(--wrong) !important; border-color: var(--wrong) !important; }
 #power button[hidden] { display: none; }
+
+/* ── the rice's theme (BetterLock --greeter writes data/theme.png, card-mask.png
+   and fx.webp): the card, field and clock plate drawn by the theme, and its
+   animation around them. Box in 1080p px around the card center (--ax...). */
+.art {
+	position: absolute;
+	display: none;
+	pointer-events: none;
+	left: calc((230 + var(--ax, -350)) * var(--u));
+	top: calc((240 + var(--ay, -546)) * var(--u));
+	width: calc(var(--aw, 700) * var(--u));
+	height: calc(var(--ah, 906) * var(--u));
+}
+body.themed .art { display: block; }
+body.themed.nofx #fx { display: none; }
+body.themed #card {
+	border: 0; border-radius: 0; background: none; box-shadow: none;
+	-webkit-mask-image: var(--mask);
+	-webkit-mask-size: 100% 100%;
+	-webkit-mask-repeat: no-repeat;
+}
+body.themed #card::before, body.themed #card::after { border-radius: 0; }
+body.themed .tab { display: none; }
+body.themed #pill, body.themed #pill:focus-within { background: transparent; border-color: transparent; box-shadow: none; }
+body.themed #clock { z-index: 5; }

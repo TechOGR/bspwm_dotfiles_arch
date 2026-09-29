@@ -24,6 +24,10 @@ super + {_,alt + }Return
 super + @space
     OpenApps --menu
 
+# Change the whole theme (without opening RiceEditor)
+alt + @space
+    ThemeSwitch
+
 # Polybar Modules browser/toggler
 super + alt + m
     ModulesList
@@ -102,7 +106,7 @@ super + alt + o
         JgMenu ;; esac
 
 # Power off, Reboot, Log out, kill an app, soft reload
-# (lock screen is super + shift + s)
+# (lock screen is super + shift + l)
 ctrl + super + alt + {p,r,q,k,s}
     {systemctl poweroff, systemctl reboot,bspc quit,xkill,SoftReload}
 
@@ -273,12 +277,10 @@ super + n ; {1-9}
 #######################
 # Bloqueo de Pantalla #
 #######################
-super + shift + s
-	ScreenLocker
-
-# Login lock: betterlockscreen with the avatar card (BetterLock)
+# Lock the screen, in the style chosen in RiceEditor -> Lockscreen
+# (login card with the avatar, or the HUD clock)
 super + shift + l
-	BetterLock
+	Lock
 
 #####################
 # Tamaño de ventana #

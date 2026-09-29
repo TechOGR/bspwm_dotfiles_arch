@@ -29,8 +29,8 @@ from riceui import Gtk, Gdk, GLib, cairo  # noqa: E402
 
 ACTIONS = [
     # key, glyph, label, hotkey, command, confirm, color
-    ('lock', '󰌾', 'Lock', 'L', ['ScreenLocker'], False, 'cyan'),
-    ('suspend', '󰤄', 'Suspend', 'S', ['sh', '-c', 'ScreenLocker & sleep 1; systemctl suspend'], False, 'blue'),
+    ('lock', '󰌾', 'Lock', 'L', ['Lock'], False, 'cyan'),
+    ('suspend', '󰤄', 'Suspend', 'S', ['sh', '-c', 'Lock & sleep 1; systemctl suspend'], False, 'blue'),
     ('logout', '󰍃', 'Logout', 'E', ['bspc', 'quit'], True, 'magenta'),
     ('reboot', '󰜉', 'Reboot', 'R', ['systemctl', 'reboot'], True, 'yellow'),
     ('poweroff', '󰐥', 'Shutdown', 'P', ['systemctl', 'poweroff'], True, 'red'),

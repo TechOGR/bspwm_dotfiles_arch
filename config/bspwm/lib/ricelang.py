@@ -45,7 +45,7 @@ ES = {
     # ── sections
     'Dashboard': 'Panel', 'Themes': 'Temas', 'Palette': 'Paleta', 'Windows': 'Ventanas', 'Display': 'Pantalla',
     'Compositor': 'Compositor', 'Terminal': 'Terminal', 'Wallpaper': 'Fondo', 'Dock': 'Dock', 'Polybar': 'Polybar',
-    'Notifications': 'Notificaciones', 'Lockscreen': 'Bloqueo rápido', 'Login Lock': 'Bloqueo de inicio',
+    'Notifications': 'Notificaciones', 'Lockscreen': 'Bloqueo · reloj HUD', 'Login Lock': 'Bloqueo · tarjeta',
     'Appearance': 'Apariencia', 'Snapshots': 'Instantáneas', 'Help': 'Ayuda',
     'SYSTEM OVERVIEW': 'RESUMEN DEL SISTEMA', 'QUICK ACTIONS': 'ACCIONES RÁPIDAS',
     'WHOLE-RICE THEMES': 'TEMAS COMPLETOS', 'APPLY EVERYTHING OR BY PARTS': 'APLICA TODO O POR PARTES',
@@ -330,7 +330,17 @@ ES = {
         'Colores de vuelta a la paleta del rice (cambian con ella)', 'Reset colors': 'Restablecer colores',
 
     # ── lockscreen
-    'real render · Super + Shift + L': 'render real · Super + Shift + L', 'Lock now': 'Bloquear ahora',
+    'real render · also the login screen after booting': 'render real · también la pantalla de inicio al encender',
+    'Lock now': 'Bloquear ahora',
+    'Lock style': 'Estilo de bloqueo', 'super + shift + l · power menu · suspend · auto-lock':
+        'super + shift + l · menú de apagado · suspender · bloqueo automático',
+    'Login card': 'Tarjeta de login', 'HUD clock': 'Reloj HUD',
+    "avatar, name and password in the theme's card (Login Lock page)":
+        'avatar, nombre y contraseña en la tarjeta del tema (página Login Lock)',
+    'big clock and ring over the wallpaper (Lockscreen page)': 'reloj grande y anillo sobre el fondo (página Lockscreen)',
+    'LOCK STYLE · HUD CLOCK · SUPER+SHIFT+L': 'ESTILO DE BLOQUEO · RELOJ HUD · SUPER+SHIFT+L',
+    'AVATAR CARD · LOGIN SCREEN · AUTO-LOCK': 'TARJETA CON AVATAR · PANTALLA DE INICIO · BLOQUEO AUTOMÁTICO',
+    'Lock the screen (style: Lockscreen page)': 'Bloquear la pantalla (estilo: página Lockscreen)',
     'Random wall': 'Fondo aleatorio', 'The lockscreen always uses the wallpaper\nthat is on screen.':
         'El bloqueo usa siempre el fondo\nque está en pantalla.', 'Darken the wallpaper for readability':
         'Oscurece el fondo para que se lea mejor', '0 = sharp wallpaper': '0 = fondo nítido', 'Glass panel': 'Panel de vidrio',
@@ -403,6 +413,7 @@ PATTERNS = [
     (r'^(.+) applied \((.+)\)$', '{0} aplicado ({1})'),
     (r'^Snapshot "(.+)" saved$', 'Instantánea "{0}" guardada'),
     (r'^Window style → (.+)$', 'Estilo de ventana → {0}'),
+    (r'^Lock style → (.+)$', 'Estilo de bloqueo → {0}'),
     (r'^Window frames → (.+)$', 'Marcos de ventana → {0}'),
     (r'^Workspaces: (.+)$', 'Workspaces: {0}'),
 ]

@@ -357,7 +357,7 @@ class Launcher(Gtk.Window):
             self.cat_buttons[key] = b
 
         power = Gtk.Box(spacing=6, homogeneous=True)
-        for icon, tip, cmd in (('󰌾', 'Lock', ['ScreenLocker']), ('󰍃', 'Log out', ['bspc', 'quit']),
+        for icon, tip, cmd in (('󰌾', 'Lock', ['Lock']), ('󰍃', 'Log out', ['bspc', 'quit']),
                                ('󰜉', 'Reboot', ['systemctl', 'reboot']),
                                ('󰐥', 'Power off', ['systemctl', 'poweroff'])):
             b = Gtk.Button(label=icon)

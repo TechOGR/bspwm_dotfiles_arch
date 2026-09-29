@@ -75,7 +75,7 @@ La tecla principal (**Mod**) es **Super** (tecla Windows).
 | `Super + Enter` | Abrir terminal |
 | `Super + Alt + Enter` | Abrir terminal flotante |
 | `Super + Space` | Lanzador de aplicaciones (Rofi) |
-| `Alt + Space` | Selector de rice (tema completo bspwm/polybar/eww) |
+| `Alt + Space` | Cambiar de tema al momento, sin abrir RiceEditor |
 | `Super + Alt + M` | Explorador/activador de módulos de la barra |
 | `Super + R` | Editor del rice |
 | `Super + Alt + T` | Selector de terminal |
@@ -93,8 +93,7 @@ La tecla principal (**Mod**) es **Super** (tecla Windows).
 | `Super + Alt + ← ↓ ↑ →` | Mover el foco entre ventanas |
 | `Super + Alt + R` | Recargar BSPWM |
 | `Ctrl + Super + Alt + Q` | Cerrar sesión |
-| `Super + Shift + S` | Bloquear pantalla (ScreenLocker) |
-| `Super + Shift + L` | Pantalla de login (betterlockscreen · BetterLock) |
+| `Super + Shift + L` | Bloquear la pantalla (el estilo se elige en RiceEditor → Lockscreen) |
 | `Click derecho en el escritorio` | Menú de aplicaciones (JGmenu) |
 
 Atajos completos y personalizables en [`config/bspwm/config/sxhkdrc`](config/bspwm/config/sxhkdrc).

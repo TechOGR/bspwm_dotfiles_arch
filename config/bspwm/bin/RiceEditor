@@ -1572,8 +1572,8 @@ class RiceEditor(Gtk.Window):
         ('dock', '󱂬', 'Dock', 'PINNED APPS · SIZE · BEHAVIOUR'),
         ('polybar', '󱔓', 'Polybar', 'THEMES · STYLE · MODULES · AUTO-HIDE'),
         ('notifications', '󰂚', 'Notifications', 'DUNST · PLACEMENT · STYLE · MOTION'),
-        ('lockscreen', '󰌾', 'Lockscreen', 'I3LOCK-COLOR · QUICK LOCK · SUPER+SHIFT+S'),
-        ('loginlock', '󰍁', 'Login Lock', 'BETTERLOCKSCREEN · AVATAR CARD · AUTO-LOCK'),
+        ('lockscreen', '󰌾', 'Lockscreen', 'LOCK STYLE · HUD CLOCK · SUPER+SHIFT+L'),
+        ('loginlock', '󰍁', 'Login Lock', 'AVATAR CARD · LOGIN SCREEN · AUTO-LOCK'),
         ('appearance', '󰉼', 'Appearance', 'GTK · ICONS · CURSOR · ROFI'),
         ('snapshots', '󰁯', 'Snapshots', 'SAVE · RESTORE THE WHOLE RICE STATE'),
         ('help', '󰋗', 'Help', 'SHORTCUTS · HOW IT WORKS'),
@@ -2315,7 +2315,7 @@ class RiceEditor(Gtk.Window):
         actions = [
             ('󰸉', 'Wallpapers', '3D selector', lambda: spawn(['WallSelect'])),
             ('󰀻', 'Apps', 'app launcher', lambda: spawn(['OpenApps', '--menu'])),
-            ('󰌾', 'Lock', 'lock screen now', lambda: spawn(['ScreenLocker'])),
+            ('󰌾', 'Lock', 'lock screen now', lambda: spawn([os.path.join(BIN, 'Lock')])),
             ('󰑓', 'Soft reload', 'bars · picom · dunst', self.soft_reload),
             ('󰄀', 'Screenshot', 'ScreenShoTer', lambda: spawn(['ScreenShoTer'])),
             ('󰁯', 'Snapshot', 'save rice state', lambda: self.snapshot_create('manual')),
@@ -4287,9 +4287,31 @@ class RiceEditor(Gtk.Window):
             self.toast('Test notification sent')
 
     # ────────────────────────────────────────────────────── lockscreen
+    LOCK_STYLES = [('card', '󰍁', 'Login card', 'avatar, name and password in the theme\'s card (Login Lock page)'),
+                   ('hud', '󰌾', 'HUD clock', 'big clock and ring over the wallpaper (Lockscreen page)')]
+
+    def lock_style_card(self, p):
+        """Which lock super + shift + l, the power menu, suspend and the
+        auto-lock use (bin/Lock reads LOCK_STYLE). On both lock pages."""
+        c = self.card('󰌾', 'Lock style', 'super + shift + l · power menu · suspend · auto-lock')
+        cur = self.cfg.raw('LOCK_STYLE', 'card') or 'card'
+        flow, btns = self.tiles(self.LOCK_STYLES, cur, self.set_lock_style, per_line=2)
+        if not hasattr(self, 'lock_style_btns'):
+            self.lock_style_btns = []
+        self.lock_style_btns.append(btns)
+        c.pack_start(flow, False, False, 4)
+        p.pack_start(c, False, False, 0)
+
+    def set_lock_style(self, key):
+        self.cfg.set('LOCK_STYLE', key)
+        for btns in getattr(self, 'lock_style_btns', []):
+            self.mark_tiles(btns, key)
+        self.toast(f'Lock style → {dict((k, t) for k, _i, t, _d in self.LOCK_STYLES)[key]}')
+
     def page_lockscreen(self):
         p = self.page()
         cfg = self.cfg
+        self.lock_style_card(p)
         c = self.card('󰍹', 'Preview', 'real render of your wallpaper')
         self.lock_prev = LockPreview(self)
         self.refresh_lock_opts()
@@ -4373,7 +4395,8 @@ class RiceEditor(Gtk.Window):
     def page_loginlock(self):
         p = self.page()
         cfg = self.cfg
-        c = self.card('󰍹', 'Preview', 'real render · Super + Shift + L')
+        self.lock_style_card(p)
+        c = self.card('󰍹', 'Preview', 'real render · also the login screen after booting')
         self.bl_prev = LoginPreview(self)
         c.pack_start(self.bl_prev, False, False, 4)
         hb = Gtk.Box(spacing=8)
@@ -4779,7 +4802,7 @@ class RiceEditor(Gtk.Window):
         c = self.card('󰌌', 'Shortcuts')
         for keys, what in (('Ctrl + 1 … 0', 'Jump to a section'), ('Ctrl + S', 'Save a snapshot'),
                            ('Ctrl + R', 'Soft reload (bars, picom, dunst, sxhkd)'),
-                           ('Ctrl + L', 'Lock the screen'), ('Super + Shift + L', 'Login lock (betterlockscreen)'),
+                           ('Super + Shift + L', 'Lock the screen (style: Lockscreen page)'),
                            ('Ctrl + Q', 'Close RiceEditor')):
             k = Gtk.Label(label=keys)
             k.get_style_context().add_class('value')

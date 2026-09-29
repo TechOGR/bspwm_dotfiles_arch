@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# ThemeSwitch - change the whole theme without opening RiceEditor.
+# alt + space
+#
+#   ✔ Every theme as a small live preview (its wallpaper, bar, windows)
+#   ✔ Arrows move, Enter / click applies, Esc (or alt + space) closes
+#   ✔ "With its wallpaper" on / off
+#   ✔ A snapshot is saved first (RiceEditor -> Snapshots to go back)
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+import hashlib
+import os
+import shutil
+import subprocess
+import sys
+from datetime import datetime
+
+sys.path.insert(0, os.path.expanduser('~/.config/bspwm/lib'))
+import riceui as ui  # noqa: E402
+import riceapp as ra  # noqa: E402
+import ricekit  # noqa: E402
+from riceui import Gtk, Gdk, GLib, cairo  # noqa: E402
+from gi.repository import GdkPixbuf  # noqa: E402
+
+HOME = os.path.expanduser('~')
+BSPWM = os.path.join(HOME, '.config/bspwm')
+try:
+    RICE = open(os.path.join(BSPWM, '.rice')).read().strip()
+except OSError:
+    RICE = 'crackone'
+# the same thumbnails as RiceEditor / WallSelect (shared cache)
+THUMB_DIR = os.path.join(HOME, '.cache', os.environ.get('USER', 'user'), RICE, 'wallselect3d')
+SNAP_DIR = os.path.join(HOME, '.local/share/rice-editor/snapshots', RICE)
+SNAP_FILES = [('theme-config.bash', os.path.join(BSPWM, 'rices', RICE, 'theme-config.bash')),
+              ('picom.conf', os.path.join(BSPWM, 'config/picom/picom.conf')),
+              ('picom-rules.conf', os.path.join(BSPWM, 'config/picom/picom-rules.conf')),
+              ('bspwmrc', os.path.join(BSPWM, 'bspwmrc')),
+              ('kitty.conf', os.path.join(HOME, '.config/kitty/kitty.conf')),
+              ('dock.json', os.path.join(BSPWM, 'config/dock.json')),
+              ('polybar.json', os.path.join(BSPWM, 'config/polybar.json')),
+              ('avatar.json', os.path.join(BSPWM, 'config/avatar.json')),
+              ('monitors.conf', os.path.join(BSPWM, 'config/monitors.conf'))]
+TW, TH = 248, 140          # a tile's preview (16:9)
+
+T = ra.translator({
+    'Themes': 'Temas', 'With its wallpaper': 'Con su fondo', 'in use': 'en uso',
+    'arrows move · Enter applies · Esc closes': 'flechas para moverte · Enter aplica · Esc cierra',
+    'Applying': 'Aplicando', 'applied': 'aplicado', 'Theme': 'Tema',
+})
+# the taglines in Spanish (ricekit has them in English)
+TAG_ES = {
+    'glass': 'moderno y limpio', 'cyber': 'futurista y llamativo', 'minimal': 'elegante y discreto',
+    'pixel': 'retro y clásico', 'liquid': 'fluido y original', 'hud': 'técnico y profesional',
+    'fire': 'intenso y diferente', 'nature': 'calmo y fresco', 'sketch': 'dibujado a lápiz',
+    'crystal': 'cristal esmerilado y luz', 'lava': 'roca agrietada y fuego', 'neon': 'contorno neón limpio',
+    'holo': 'espacio, órbitas y partículas', 'storm': 'relámpagos, energía pura', 'venom': 'sombras vivas, veneno',
+    'butterfly': 'delicado, libre, mágico', 'snake': 'poder, misterio, escamas',
+}
+
+
+def thumb_of(path):
+    """A 640x360 thumbnail of a wallpaper (made once, shared with RiceEditor)."""
+    thumb = os.path.join(THUMB_DIR, hashlib.md5(path.encode()).hexdigest() + '.jpg')
+    try:
+        if os.path.getmtime(thumb) >= os.path.getmtime(path):
+            return thumb
+    except OSError:
+        pass
+    os.makedirs(THUMB_DIR, exist_ok=True)
+    subprocess.run(['magick', '-define', 'jpeg:size=1280x720', path + '[0]', '-strip', '-thumbnail', '640x360^',
+                    '-gravity', 'center', '-extent', '640x360', '-quality', '88', thumb],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return thumb if os.path.exists(thumb) else None
+
+
+def snapshot(label):
+    dest = os.path.join(SNAP_DIR, f'{datetime.now():%Y%m%d-%H%M%S}__{label}')
+    os.makedirs(dest, exist_ok=True)
+    for name, src in SNAP_FILES:
+        if os.path.exists(src):
+            shutil.copy2(src, os.path.join(dest, name))
+
+
+class ThemeSwitch(ra.CenterWindow):
+    def __init__(self):
+        super().__init__('ThemeSwitch', T('Themes'), '\U000f050e', (1150, 760))
+        self.cur = ricekit.current()
+        name = ricekit.KITS.get(self.cur, {}).get('name', '')
+        self.subtitle.set_text((f'{name} · ' if name else '') + T('arrows move · Enter applies · Esc closes'))
+        self.walls = {}
+        self.arts = {}
+        self.with_wall = Gtk.Switch()
+        self.with_wall.set_active(True)
+        self.with_wall.set_valign(Gtk.Align.CENTER)
+        self.head_right.pack_start(ra.label(T('With its wallpaper'), 'key'), False, False, 0)
+        self.head_right.pack_start(self.with_wall, False, False, 0)
+        css = Gtk.CssProvider()
+        css.load_from_data(b'''
+button.tile { background-image: none; box-shadow: none; text-shadow: none; padding: 8px;
+    background-color: alpha(@black, 0.45); border: 1px solid alpha(@acc, 0.14); border-radius: 16px;
+    transition: all 120ms ease; }
+button.tile:hover, button.tile:focus { border-color: @acc; background-color: alpha(@acc, 0.12); }
+button.tile.cur { border: 2px solid @acc; }
+.tname { font-size: 10pt; font-weight: 800; }
+.ttag { font-size: 8pt; color: alpha(@fg, 0.55); }
+flowboxchild { padding: 0; background: transparent; outline: none; }
+''')
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css,
+                                                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1)
+        flow = Gtk.FlowBox()
+        flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        flow.set_homogeneous(True)
+        flow.set_min_children_per_line(4)
+        flow.set_max_children_per_line(4)
+        flow.set_column_spacing(14)
+        flow.set_row_spacing(14)
+        flow.set_valign(Gtk.Align.START)
+        self.first = None
+        es = ra.lang_es()
+        for key in ricekit.ORDER:
+            kit = ricekit.KITS[key]
+            b = Gtk.Button()
+            b.get_style_context().add_class('tile')
+            if key == self.cur:
+                b.get_style_context().add_class('cur')
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+            art = Gtk.DrawingArea()
+            art.set_size_request(TW, TH)
+            art.connect('draw', self.draw_preview, key)
+            self.arts[key] = art
+            box.pack_start(art, False, False, 0)
+            head = Gtk.Box(spacing=8)
+            head.pack_start(ra.label(kit['name'], 'tname'), False, False, 0)
+            if key == self.cur:
+                chip = ra.label('● ' + T('in use'), 'chip')
+                head.pack_end(chip, False, False, 0)
+            box.pack_start(head, False, False, 0)
+            box.pack_start(ra.label(TAG_ES.get(key, kit['tagline']) if es else kit['tagline'], 'ttag',
+                                    ellipsize=True), False, False, 0)
+            b.add(box)
+            b.connect('clicked', lambda *_, k=key: self.apply(k))
+            flow.add(b)
+            if key == self.cur or self.first is None:
+                self.first = b if key == self.cur or self.first is None else self.first
+            self.load_wall(key)
+        self.flow = flow
+        self.body.pack_start(self.scroller(flow), True, True, 0)
+        GLib.idle_add(lambda: (self.first.grab_focus() if self.first else None, False)[1])
+
+    def draw_preview(self, w, cr, key):
+        W, H = w.get_allocated_width(), w.get_allocated_height()
+        ui.rounded(cr, 0, 0, W, H, 10)
+        cr.clip()
+        try:
+            ricekit.preview(cr, key, W, H, self.walls.get(key))
+        except Exception:
+            cr.set_source_rgb(*self.c['bg'])
+            cr.paint()
+        return True
+
+    def load_wall(self, key):
+        path = ricekit.theme_wall(key)
+        if not path:
+            return
+
+        def work():
+            t = thumb_of(path)
+            if not t:
+                return None
+            try:
+                return GdkPixbuf.Pixbuf.new_from_file_at_scale(t, TW * 2, TH * 2, True)
+            except GLib.Error:
+                return None
+
+        def done(pix):
+            if pix is not None:
+                self.walls[key] = Gdk.cairo_surface_create_from_pixbuf(pix, 1, None)
+                self.arts[key].queue_draw()
+        ra.run_bg(work, done)
+
+    def apply(self, key):
+        name = ricekit.KITS[key]['name']
+        parts = [p for p, *_ in ricekit.PARTS if p != 'wallpaper' or self.with_wall.get_active()]
+        try:
+            snapshot(f'before-{key}')
+        except OSError:
+            pass
+        # applied by RiceKit on its own: this window closes at once
+        done = f'{T("Theme")} {name} {T("applied")}'
+        script = ('"$1" apply "$2" "$3" && dunstify -a ThemeSwitch -i preferences-desktop-theme '
+                  '-h string:x-dunst-stack-tag:themeswitch "$4" >/dev/null 2>&1')
+        subprocess.Popen(['sh', '-c', script, '_', os.path.join(BSPWM, 'bin/RiceKit'), key, ','.join(parts), done],
+                         start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.Popen(['dunstify', '-a', 'ThemeSwitch', '-i', 'preferences-desktop-theme',
+                          '-h', 'string:x-dunst-stack-tag:themeswitch', f'{T("Applying")} {name}…'],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.destroy()
+
+
+def main():
+    _lock = ui.single_instance('themeswitch', toggle=True)  # noqa: F841
+    GLib.set_prgname('ThemeSwitch')
+    ra.float_rule('ThemeSwitch')
+    w = ThemeSwitch()
+    ui.quit_on_sigterm(w.destroy)
+    w.show_all()
+    Gtk.main()
+
+
+if __name__ == '__main__':
+    main()

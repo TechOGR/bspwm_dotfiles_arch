@@ -274,7 +274,7 @@ class Card(Gtk.Window):
         head.pack_start(who, True, True, 0)
         btns = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         btns.set_valign(Gtk.Align.CENTER)
-        for icon, tip, cmd in (('󰌾', 'Lock', ['ScreenLocker']), ('󰐥', 'Session menu', ['PowerMenu'])):
+        for icon, tip, cmd in (('󰌾', 'Lock', ['Lock']), ('󰐥', 'Session menu', ['PowerMenu'])):
             b = self.icon_btn(icon, tip, cmd)
             btns.pack_start(b, False, False, 0)
         head.pack_end(btns, False, False, 0)

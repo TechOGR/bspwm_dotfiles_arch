@@ -66,6 +66,20 @@
 			$('bg').style.backgroundImage = `url("data/background.jpg${q}")`;
 			r.setProperty('--frost', `url("data/frost.jpg${q}")`);
 		}
+		// the rice's theme: its card / field / clock plate and its animation
+		const art = C.art;
+		if (art && art.box && C.stamp) {
+			const [ax, ay, aw, ah] = art.box;
+			r.setProperty('--ax', ax); r.setProperty('--ay', ay);
+			r.setProperty('--aw', aw); r.setProperty('--ah', ah);
+			const v = '?v=' + (art.key || C.stamp);
+			$('art').src = 'data/theme.png' + v;
+			r.setProperty('--mask', `url("data/card-mask.png${v}")`);
+			if (art.fx) $('fx').src = 'data/fx.webp' + v;
+			body.classList.add('themed');
+			body.classList.toggle('nofx', !art.fx);
+			$('art').onerror = () => body.classList.remove('themed');   // files missing: the plain card
+		}
 		body.classList.toggle('nocard', !C.card);
 		body.classList.toggle('noavatar', !C.avatar);
 		body.classList.add('shape-' + (C.shape || 'circle'));

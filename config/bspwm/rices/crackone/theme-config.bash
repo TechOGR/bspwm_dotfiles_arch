@@ -117,6 +117,7 @@ sl_ring="${black}"
 sl_wrong="${red}"
 sl_date="${fg}"
 sl_verify="${green}"
+LOCK_STYLE="card"		# Lock style (super+shift+l, power menu, auto-lock): card (login card) | hud (clock)
 LOCK_ACCENT="${blue}"	# Ring highlight + glass panel border
 LOCK_BLUR="0"			# Wallpaper blur on lockscreen (0-30)
 LOCK_DIM="20"			# Wallpaper darkening in % (0-80)
