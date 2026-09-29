@@ -278,6 +278,28 @@ def ghost(cr, cx, cy, s, c, alpha=1.0):
 # and the time the ghosts float by; None = still
 MOUTH = [None]
 ANIM_T = [None]
+# pac-man on the move (bin/WorkspacePill): 'dir' +1 faces right, -1 left (it
+# keeps facing where it last went); while it travels to another desktop 'x'
+# is where it is and 'under' what the destination showed before it arrived
+PAC = {'dir': 1, 'x': None, 'under': None}
+
+
+class facing:
+    """Mirror what is drawn around (x, y) when pac-man faces left."""
+
+    def __init__(self, cr, x, y, on=True):
+        self.cr, self.x, self.y, self.on = cr, x, y, on and PAC['dir'] < 0
+
+    def __enter__(self):
+        if self.on:
+            self.cr.save()
+            self.cr.translate(self.x, self.y)
+            self.cr.scale(-1, 1)
+            self.cr.translate(-self.x, -self.y)
+
+    def __exit__(self, *_):
+        if self.on:
+            self.cr.restore()
 FRAME_CACHE = None   # {key: surface} when the pill is animated (bin/WorkspacePill)
 
 
@@ -795,14 +817,22 @@ def paint(cr, style, m, states, pal=None):
         rounded(cr, px - 10, py, pw + 20, ph, 8)
         cr.set_source_rgba(*pal.get('bg', rgb('#1a1b26')), 1)
         cr.fill()
+        pac_at = None
         for (x, y), st in zip(centers, states):
             s = m['size']
+            if st == 'focused' and PAC['x'] is not None:   # on its way: the old icon waits to be eaten
+                pac_at = (PAC['x'], y)
+                st = PAC['under'] or 'empty'
             if st == 'focused':
-                pacman(cr, x, y, s * 0.85, pal.get('yellow', rgb('#e0af68')))
+                with facing(cr, x, y):
+                    pacman(cr, x, y, s * 0.85, pal.get('yellow', rgb('#e0af68')))
             elif st in ('occupied', 'urgent'):
                 ghost(cr, x, y, s * 0.8, pal.get('red' if st == 'urgent' else 'blue', rgb('#7aa2f7')))
             else:
                 dot(cr, x, y, s * 0.9, pal.get('magenta', rgb('#bb9af7')))
+        if pac_at:
+            with facing(cr, *pac_at):
+                pacman(cr, *pac_at, m['size'] * 0.85, pal.get('yellow', rgb('#e0af68')))
         return centers
     focus_x = next((x for (x, _y), st in zip(centers, states) if st == 'focused'), None)
     if FRAME_CACHE is not None:   # animated: the static frame painted once
@@ -823,9 +853,13 @@ def paint(cr, style, m, states, pal=None):
         FRAMES[style](cr, m)
     ghost_c, pac_c, dots = COLORS[style]
     n = len(centers)
+    pac_at = None
     for i, ((x, y), st) in enumerate(zip(centers, states)):
         s = m['size']
         t = i / max(1, n - 1)
+        if st == 'focused' and PAC['x'] is not None:   # on its way: the old icon waits to be eaten
+            pac_at = (PAC['x'], y)
+            st = PAC['under'] or 'empty'
         if st == 'focused':
             c = rgb(pac_c)
         elif st == 'urgent':
@@ -842,23 +876,35 @@ def paint(cr, style, m, states, pal=None):
         kind = 'pac' if st == 'focused' else ('dot' if st == 'empty' else 'ghost')
         if kind == 'ghost' and ANIM_T[0] is not None:   # ghosts float
             y += 1.3 * math.sin(ANIM_T[0] * 2.4 + i * 1.1)
-        if style in ICON_PAINTERS:
-            ICON_PAINTERS[style](cr, kind, x, y, s, c)
-        elif style == 'pixel':
-            if st == 'empty':
-                q = max(2, round(s / 8))
-                cr.rectangle(round(x - q), round(y - q), 2 * q, 2 * q)
-                cr.set_source_rgb(*c)
-                cr.fill()
-            else:
-                pixel_icon(cr, 'pac' if st == 'focused' else 'ghost', x, y, s, c)
-        elif st == 'focused':
-            pacman(cr, x, y, s * 1.05, c)
-        elif st in ('occupied', 'urgent'):
-            ghost(cr, x, y, s * 0.95, c)
-        else:
-            dot(cr, x, y, s * (1.1 if style == 'liquid' else 0.95), c)
+        with facing(cr, x, y, kind == 'pac'):
+            _icon(cr, style, kind, st, x, y, s, c)
+    if pac_at:   # pac-man between desktops, over the icons it passes
+        x, y = pac_at
+        c = rgb(pac_c)
+        if GLOW[style]:
+            halo(cr, x, y, m['size'] * 1.0, c, GLOW[style])
+        with facing(cr, x, y):
+            _icon(cr, style, 'pac', 'focused', x, y, m['size'], c)
     return centers
+
+
+def _icon(cr, style, kind, st, x, y, s, c):
+    if style in ICON_PAINTERS:
+        ICON_PAINTERS[style](cr, kind, x, y, s, c)
+    elif style == 'pixel':
+        if st == 'empty':
+            q = max(2, round(s / 8))
+            cr.rectangle(round(x - q), round(y - q), 2 * q, 2 * q)
+            cr.set_source_rgb(*c)
+            cr.fill()
+        else:
+            pixel_icon(cr, 'pac' if st == 'focused' else 'ghost', x, y, s, c)
+    elif st == 'focused':
+        pacman(cr, x, y, s * 1.05, c)
+    elif st in ('occupied', 'urgent'):
+        ghost(cr, x, y, s * 0.95, c)
+    else:
+        dot(cr, x, y, s * (1.1 if style == 'liquid' else 0.95), c)
 
 
 # ═══════════════════════════════════════════════════════════ bar skins

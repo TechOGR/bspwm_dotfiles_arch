@@ -284,6 +284,8 @@ def main():
             m = st['m']
             if anim['on']:   # pac-man chomps, ghosts float
                 wspill.MOUTH[0], wspill.ANIM_T[0] = riceanim.mouth(anim['t']), anim['t']
+            if travel['on']:   # on its way to another desktop: it chomps fast
+                wspill.MOUTH[0] = riceanim.mouth((time.monotonic() - travel['t0']) * 1.6)
             try:
                 with wspill.soft_edges(cr, m['win_h'], top=m['ext'], bottom=m['ext']), \
                         wspill.tinted(style, wspill.tint_target('workspaces')):
@@ -338,6 +340,38 @@ def main():
 
     buf = {'data': b''}
 
+    # ── pac-man goes to the new desktop: it turns to that side and travels
+    travel = {'on': False, 't0': 0.0, 'dur': 0.3, 'x0': 0.0, 'x1': 0.0}
+
+    def focus_of(desks):
+        return next((i for i, (_n, s_) in enumerate(desks) if s_ == 'focused'), None)
+
+    def start_travel(old, new):
+        a, b = focus_of(old), focus_of(new)
+        if a is None or b is None or a == b or len(old) != len(new) or not st['m'] or not has_pill:
+            return
+        centers = wspill.icon_centers(st['m'])
+        # from where it is right now (a switch in the middle of a trip too)
+        x0 = wspill.PAC['x'] if travel['on'] and wspill.PAC['x'] is not None else centers[a][0]
+        x1 = centers[b][0]
+        wspill.PAC['dir'] = 1 if x1 > x0 else -1
+        wspill.PAC['under'] = old[b][1] if old[b][1] != 'focused' else 'empty'
+        wspill.PAC['x'] = x0
+        travel.update(x0=x0, x1=x1, t0=time.monotonic(), dur=min(0.6, 0.16 + 0.07 * abs(b - a)))
+        if not travel['on']:
+            travel['on'] = True
+            GLib.timeout_add(16, travel_tick)
+
+    def travel_tick():
+        u = min(1.0, (time.monotonic() - travel['t0']) / travel['dur'])
+        e = u * u * (3 - 2 * u)                      # eased: starts and lands softly
+        wspill.PAC['x'] = travel['x0'] + (travel['x1'] - travel['x0']) * e
+        if u >= 1.0:
+            wspill.PAC['x'] = None
+            travel['on'] = False
+        win.queue_draw()
+        return travel['on']
+
     def on_event(fd, cond):
         # Read everything bspwm sent: one desktop switch writes several
         # lines at once (desktop_focus + report); a buffered readline()
@@ -361,6 +395,7 @@ def main():
                 other = True
         if report:
             desks = parse_report(report)
+            start_travel(st['desks'], desks)
             if len(desks) != len(st['desks']):
                 first = not st['desks']
                 st['desks'] = desks
