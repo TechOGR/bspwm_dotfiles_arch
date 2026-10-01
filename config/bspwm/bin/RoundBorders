@@ -401,6 +401,8 @@ def main():
 
     def draw(win, cr):
         info = win.info
+        if not info:   # reload() emptied it with a repaint still queued: next sync() fills it
+            return True
         w, h, bw = info['w'], info['h'], info['bw']
         cr.set_operator(cairo.OPERATOR_SOURCE)
         cr.set_source_rgba(0, 0, 0, 0)
@@ -591,6 +593,8 @@ def main():
         (reading the scene from the disk cache took up to 400 ms, the
         terminal showed without its texture meanwhile)."""
         i = win.info
+        if not i:   # emptied by reload(): sync() fills it again
+            return None
         key = (st['conf']['skin'], i['w'], i['h'], st['conf']['r'], i['bw'], st['conf']['tint'])
         cache = getattr(win, 'back_cache', None)
         if not cache or cache[0] != key:

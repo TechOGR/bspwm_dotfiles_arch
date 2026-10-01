@@ -116,7 +116,8 @@ def main():
                 subprocess.run(['bspc', 'query', '-M', '-m', 'focused', '--names'],
                                capture_output=True, text=True).stdout.strip())
     H = int(conf['height'])
-    st = {'desks': [], 'hidden_bar': False, 'fullscreen': False, 'polybar': True, 'm': None}
+    st = {'desks': [], 'hidden_bar': False, 'fullscreen': False, 'polybar': True, 'm': None,
+          'bar_id': None}
 
     def popup():
         w = Gtk.Window(type=Gtk.WindowType.POPUP)
@@ -252,6 +253,7 @@ def main():
         bars = polybar_windows()
         if not bars:
             return
+        st['bar_id'] = bars[0]
         # the pill right above the bar, the skin right under it: both under
         # every client, so a fullscreen window covers them
         for w, where in ((skin_win, 'below'), (win if has_pill else None, 'above')):
@@ -259,6 +261,13 @@ def main():
             if gw:
                 subprocess.run(['xdo', where, '-t', bars[0], hex(gw.get_xid())],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def restack_settled():
+        # polybar (wm-restack = bspwm) puts its window at the bottom of the
+        # stack once it is up: do it again after it has, or the skin stays
+        # over the bar and its dark fill hides every module
+        restack()
+        GLib.timeout_add(1500, lambda: (restack(), False)[1])
 
     def update_visibility():
         want = st['polybar'] and not st['hidden_bar'] and not st['fullscreen']
@@ -412,10 +421,18 @@ def main():
         return True
 
     def watch_polybar():
-        alive = bool(polybar_windows())
+        bars = polybar_windows()
+        alive = bool(bars)
         if alive != st['polybar']:
             st['polybar'] = alive
             update_visibility()
+        # Started together with polybar (Bar.bash) the bar has no window yet
+        # and restack() did nothing; a bar relaunched in under 3 s (BarCtl
+        # apply, ScreenWatch) never looked dead. Either way the skin was left
+        # on top of the bar: follow the bar's window, not just whether it runs.
+        lead = win if has_pill else skin_win
+        if alive and bars[0] != st['bar_id'] and lead.get_visible():
+            restack_settled()
         return True
 
     win.connect('draw', on_draw)
@@ -460,6 +477,7 @@ def main():
     os.set_blocking(fd, False)
     GLib.unix_fd_add_full(GLib.PRIORITY_HIGH, fd, GLib.IO_IN | GLib.IO_HUP, on_event)
     GLib.timeout_add_seconds(3, watch_polybar)   # rice switch / bar killed
+    GLib.timeout_add(700, lambda: (watch_polybar(), False)[1])   # the bar starting with us
 
     def set_bar(hidden):
         st['hidden_bar'] = hidden
