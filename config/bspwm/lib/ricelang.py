@@ -95,6 +95,7 @@ ES = {
         'bordes, esquinas, espacios, brillo, desenfoque, opacidad',
     'Apply whole theme': 'Aplicar el tema completo', 'Apply selected parts': 'Aplicar las partes elegidas',
     "the theme's wallpaper (changeable in Themes)": 'el fondo del tema (se cambia en Temas)',
+    "the theme's animated cursor, in its colors": 'el cursor animado del tema, en sus colores',
     'Theme wallpaper': 'Fondo del tema', 'the picture this theme puts on the desktop':
         'la imagen que este tema pone en el escritorio', 'Change…': 'Cambiar…', 'Reset': 'Restablecer',
     'Set now': 'Poner ahora', 'Wallpaper of': 'Fondo de', 'Other image…': 'Otra imagen…',
@@ -116,6 +117,21 @@ ES = {
     'Storm': 'Tormenta', 'Venom': 'Veneno', 'Butterflies': 'Mariposas', 'Snakes': 'Serpientes',
     'lightning, pure energy': 'rayos, energía pura', 'moving shadows, venom': 'sombras en movimiento, veneno',
     'delicate, free, magic': 'delicado, libre, mágico', 'power, mystery, scales': 'poder, misterio, escamas',
+    'Halloween': 'Halloween', 'Desert': 'Desierto', 'Neo Tokyo': 'Neo Tokio', 'Abyss': 'Abismo',
+    'Enchanted Forest': 'Bosque encantado', 'Cosmos': 'Cosmos', 'Samurai': 'Samurái', 'Steampunk': 'Steampunk',
+    'Glacier': 'Glaciar', 'Witchcraft': 'Brujería', 'Golden Dragon': 'Dragón dorado', 'Graffiti': 'Grafiti',
+    'pumpkins, bats and a full moon': 'calabazas, murciélagos y luna llena',
+    'sunset, cacti and sand': 'atardecer, cactus y arena',
+    'neon city, torii and sakura': 'ciudad de neón, torii y sakura',
+    'jellyfish and deep sea light': 'medusas y la luz del fondo del mar',
+    'mushrooms, fireflies and moss': 'setas, luciérnagas y musgo',
+    'planets, nebulae and stardust': 'planetas, nebulosas y polvo de estrellas',
+    'blood moon, katana and sakura': 'luna de sangre, katana y sakura',
+    'brass gears, steam and airships': 'engranajes de latón, vapor y dirigibles',
+    'ice crystals and a frost wolf': 'cristales de hielo y un lobo de escarcha',
+    'spellbooks, ravens and candles': 'grimorios, cuervos y velas',
+    'imperial gold among the clouds': 'oro imperial entre las nubes',
+    'spray paint and street crowns': 'pintura en aerosol y coronas callejeras',
 
     # ── palette
     'click to apply · the editor re-themes too': 'clic para aplicar · el editor también cambia',
@@ -228,6 +244,10 @@ ES = {
     'Flying butterflies / leaves': 'Mariposas / hojas volando', 'Flowing edge': 'Borde que fluye',
     'Soft shimmer': 'Brillo suave', 'Breathing glow': 'Brillo que respira', 'Running lights': 'Luces que corren',
     'Floating motes': 'Partículas flotando', 'Lightning flashes': 'Relámpagos', 'Light sweep': 'Barrido de luz',
+    'Flying bats': 'Murciélagos volando', 'Falling snow': 'Nieve que cae', 'Sakura petals': 'Pétalos de sakura',
+    'Rising steam': 'Vapor que sube', 'Fireflies': 'Luciérnagas', 'Spirit flames': 'Llamas espectrales',
+    'Dripping paint': 'Pintura que gotea', 'Blowing sand': 'Arena al viento', 'Snowfall': 'Nevada',
+    'Falling petals': 'Pétalos cayendo',
     'suggested for this machine: Lite': 'recomendado para este equipo: Lite',
     'suggested for this machine: Normal': 'recomendado para este equipo: Normal',
     'Backend': 'Motor', 'glx is the fastest; xrender works everywhere': 'glx es el más rápido; xrender funciona en todas partes',
@@ -340,7 +360,7 @@ ES = {
     'big clock and ring over the wallpaper (Lockscreen page)': 'reloj grande y anillo sobre el fondo (página Lockscreen)',
     'LOCK STYLE · HUD CLOCK · SUPER+SHIFT+L': 'ESTILO DE BLOQUEO · RELOJ HUD · SUPER+SHIFT+L',
     'AVATAR CARD · LOGIN SCREEN · AUTO-LOCK': 'TARJETA CON AVATAR · PANTALLA DE INICIO · BLOQUEO AUTOMÁTICO',
-    'Lock the screen (style: Lockscreen page)': 'Bloquear la pantalla (estilo: página Lockscreen)',
+    'Lock the screen (Login Lock page)': 'Bloquear la pantalla (página Login Lock)',
     'Random wall': 'Fondo aleatorio', 'The lockscreen always uses the wallpaper\nthat is on screen.':
         'El bloqueo usa siempre el fondo\nque está en pantalla.', 'Darken the wallpaper for readability':
         'Oscurece el fondo para que se lea mejor', '0 = sharp wallpaper': '0 = fondo nítido', 'Glass panel': 'Panel de vidrio',
@@ -382,6 +402,16 @@ ES = {
 
     # ── appearance
     'GTK theme': 'Tema GTK', 'Icon theme': 'Tema de iconos', 'Cursor theme': 'Tema del cursor',
+    'animated · drawn for each theme · applied live': 'animado · dibujado para cada tema · en vivo',
+    'Cursor size in pixels (24 = normal · 32 / 48 for big screens)':
+        'Tamaño del cursor en píxeles (24 = normal · 32 / 48 para pantallas grandes)',
+    'full · calm (slower, softer) · off (still, only busy spins)':
+        'full · calm (más lenta, suave) · off (quieto, solo gira el de espera)',
+    'Extra styles': 'Estilos extra', 'THEMES': 'TEMAS', 'EXTRA STYLES': 'ESTILOS EXTRA',
+    'Size': 'Tamaño', 'Animation': 'Animación',
+    "The theme's own": 'El del tema',
+    'Rice-Animated = the animated cursors above · or any installed theme':
+        'Rice-Animated = los cursores animados de arriba · o cualquier tema instalado',
     'xsettingsd · applied live': 'xsettingsd · en vivo', 'launcher · menus': 'lanzador · menús',
     'UserCard · RiceEditor · picture or ASCII art': 'UserCard · RiceEditor · imagen o arte ASCII',
     'Open AvatarForge': 'Abrir AvatarForge', 'Profile picture': 'Foto de perfil',

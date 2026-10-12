@@ -18,6 +18,7 @@ import os
 import sys
 import time
 import ctypes
+import subprocess
 
 sys.path.insert(0, os.path.expanduser('~/.config/bspwm/lib'))
 import riceui as ui  # noqa: E402
@@ -202,6 +203,24 @@ def main():
         except Exception:
             pass
 
+    def check_tiles(w, h):
+        """The main menu's scene (bin/ThemeSurfaces tiles) is drawn for the
+        menu's size: when the menu has another one, note it and draw them
+        again (right from the next time the menu opens)."""
+        path = os.path.join(os.path.expanduser('~/.cache/rice-surfaces'), 'jgmenu-size')
+        try:
+            old = open(path).read().split()
+        except OSError:
+            old = []
+        if old != [str(w), str(h)]:
+            try:
+                with open(path, 'w') as f:
+                    f.write(f'{w} {h}\n')
+            except OSError:
+                return
+            subprocess.Popen([os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ThemeSurfaces')],
+                             start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
     def poll():
         Gdk.Display.get_default().sync()   # a round trip: Xlib's 16-bit request counter must not wrap (xcb aborts)
         menus = xw.jgmenus()
@@ -210,6 +229,7 @@ def main():
             st['seen'] = now
             if st['main'] is None:
                 st['main'] = menus[0][0]   # the first one up is the main menu (it has its tiles)
+                check_tiles(*menus[0][3:5])
         live = set()
         for xid, x, y, w, h in menus:
             live.add(xid)

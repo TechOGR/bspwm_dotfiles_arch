@@ -13,8 +13,8 @@
 #   ✔ Every option applies LIVE (bspc / picom reload / theme modules)
 #   ✔ Palettes with instant re-theme (the editor re-themes itself too)
 #   ✔ Windows, display (xrandr), compositor, terminal, wallpaper, notifications,
-#     lockscreen, login lock (betterlockscreen), GTK/rofi appearance
-#   ✔ Live terminal + lockscreen previews, system HUD gauges
+#     login lock (betterlockscreen), GTK/rofi appearance
+#   ✔ Live terminal + login lock previews, system HUD gauges
 #   ✔ Snapshots: save / restore the whole rice state (auto daily backup)
 #
 # Shortcuts: Ctrl+1..9,0 sections · Ctrl+S snapshot · Ctrl+R soft reload
@@ -35,6 +35,8 @@ import random
 import hashlib
 import copy
 import json
+import fcntl
+import signal
 import platform
 import threading
 import subprocess
@@ -1366,80 +1368,55 @@ class TermPreview(Gtk.DrawingArea):
         return True
 
 
-class LockPreview(Animated):
-    """Lockscreen mock: cached render + ring/clock at their real positions."""
+_THEMECURSOR = []
 
-    def __init__(self, app):
-        super().__init__(app, fps=12)
-        self.set_size_request(-1, 300)
-        self.surface = None
-        self.busy = False
-        self.opts = {}
-        self.reload()
 
-    def reload(self):
-        files = sorted(glob.glob(os.path.join(HOME, '.cache/lockscreen/lock-*.png')),
-                       key=os.path.getmtime)
-        if files:
-            run_bg(lambda: files[-1], lambda f: (setattr(self, 'surface', load_surface(f, 960, 540)),
-                                                 self.queue_draw()))
+def theme_cursor():
+    """bin/ThemeCursor as a module (its drawing code makes the previews)."""
+    if not _THEMECURSOR:
+        try:
+            import importlib.util
+            from importlib.machinery import SourceFileLoader
+            loader = SourceFileLoader('themecursor', os.path.join(BIN, 'ThemeCursor'))
+            spec = importlib.util.spec_from_loader('themecursor', loader)
+            mod = importlib.util.module_from_spec(spec)
+            loader.exec_module(mod)
+            _THEMECURSOR.append(mod)
+        except Exception:
+            _THEMECURSOR.append(None)
+    return _THEMECURSOR[0]
 
-    def paint(self, cr, W, H):
-        c = self.app.rgb
-        o = self.opts
-        # keep 16:9 inside the allocation
-        pw = min(W, H * 16 / 9)
-        ph = pw * 9 / 16
-        ox, oy = (W - pw) / 2, (H - ph) / 2
-        cr.save()
-        rounded(cr, ox, oy, pw, ph, 12)
-        cr.clip()
-        if self.surface:
-            sw, sh = self.surface.get_width(), self.surface.get_height()
-            cr.save()
-            cr.translate(ox, oy)
-            cr.scale(pw / sw, ph / sh)
-            cr.set_source_surface(self.surface, 0, 0)
+
+class CursorPreview(Animated):
+    """The animated cursors of a theme, drawn live by bin/ThemeCursor."""
+    SHAPES = ('arrow', 'hand', 'help', 'wait')
+
+    def __init__(self, app, tc, kit, pal, size=38, anim='full'):
+        super().__init__(app, fps=20)
+        self.tc, self.kit, self.pal, self.size, self.anim = tc, kit, pal, size, anim
+        self.set_size_request(len(self.SHAPES) * (size + 8), size + 6)
+        self.t0 = time.monotonic()
+        self.cache = {}
+
+    def set_kit(self, kit, pal):
+        self.kit, self.pal, self.cache = kit, pal, {}
+        self.queue_draw()
+
+    def paint(self, cr, w, h):
+        st = self.tc.STYLES.get(self.kit)
+        if not st:
+            return
+        ms = (time.monotonic() - self.t0) * 1000
+        x = (w - len(self.SHAPES) * (self.size + 8) + 8) / 2
+        for shape in self.SHAPES:
+            n, d = self.tc.timing(st, shape, self.anim)
+            f = int(ms / d) % n
+            img = self.cache.get((shape, f))
+            if img is None:
+                img = self.cache[(shape, f)] = self.tc.render(self.kit, shape, self.size, f / n, self.pal)
+            cr.set_source_surface(img, x, (h - self.size) / 2)
             cr.paint()
-            cr.restore()
-        else:
-            cr.set_source_rgb(*c['black'])
-            cr.paint()
-        pos = {'center': 0.5, 'right': 0.75}.get(o.get('pos'), 0.25)
-        cx = ox + pw * pos
-        s = pw / 1920
-        clock = time.strftime(o.get('clock', '%H:%M')) if o.get('clock') else time.strftime('%H:%M')
-        tcol = hex_rgb(o.get('date'), c['fg'])
-        draw_text(cr, clock, cx, oy + ph * 0.36 - 140 * s * 1.25, 140 * s * 0.75, (*tcol, 1),
-                  bold=True, align='center')
-        draw_text(cr, time.strftime('%a, %d %b'), cx, oy + ph * 0.42 - 45 * s * 1.1, 45 * s * 0.75,
-                  (*tcol, 1), align='center')
-        ry = oy + ph * 0.56
-        rr = 30 * s
-        cr.set_line_width(60 * s * 0.25 + 2)
-        cr.arc(cx, ry, rr + 6 * s, 0, 2 * math.pi)
-        cr.set_source_rgb(*hex_rgb(o.get('ring'), c['black']))
-        cr.stroke()
-        a = time.monotonic() * 2
-        cr.arc(cx, ry, rr + 6 * s, a, a + 0.9)
-        cr.set_source_rgb(*hex_rgb(o.get('accent'), c['blue']))
-        cr.stroke()
-        cr.arc(cx, ry, rr, 0, 2 * math.pi)
-        cr.set_source_rgba(*hex_rgb(o.get('bg'), c['bg']), 0.8)
-        cr.fill()
-        draw_text(cr, o.get('greeter', ''), cx, oy + ph * 0.72 - 10, 23 * s * 0.8,
-                  (*hex_rgb(o.get('fg'), c['fg']), 1), align='center')
-        if self.busy:
-            cr.set_source_rgba(0, 0, 0, 0.55)
-            cr.paint()
-            dots = '.' * (int(time.monotonic() * 3) % 4)
-            draw_text(cr, f'RENDERING{dots}', ox + pw / 2, oy + ph / 2 - 10, 11, (*c['blue'], 1),
-                      bold=True, align='center', spacing=3)
-        cr.restore()
-        rounded(cr, ox + 0.5, oy + 0.5, pw - 1, ph - 1, 12)
-        cr.set_line_width(1)
-        cr.set_source_rgba(*c['blue'], 0.5)
-        cr.stroke()
+            x += self.size + 8
 
 
 class LoginPreview(Animated):
@@ -1572,7 +1549,6 @@ class RiceEditor(Gtk.Window):
         ('dock', '󱂬', 'Dock', 'PINNED APPS · SIZE · BEHAVIOUR'),
         ('polybar', '󱔓', 'Polybar', 'THEMES · STYLE · MODULES · AUTO-HIDE'),
         ('notifications', '󰂚', 'Notifications', 'DUNST · PLACEMENT · STYLE · MOTION'),
-        ('lockscreen', '󰌾', 'Lockscreen', 'LOCK STYLE · HUD CLOCK · SUPER+SHIFT+L'),
         ('loginlock', '󰍁', 'Login Lock', 'AVATAR CARD · LOGIN SCREEN · AUTO-LOCK'),
         ('appearance', '󰉼', 'Appearance', 'GTK · ICONS · CURSOR · ROFI'),
         ('snapshots', '󰁯', 'Snapshots', 'SAVE · RESTORE THE WHOLE RICE STATE'),
@@ -1632,7 +1608,7 @@ class RiceEditor(Gtk.Window):
             'windows': self.page_windows, 'display': self.page_display, 'compositor': self.page_compositor,
             'terminal': self.page_terminal, 'wallpaper': self.page_wallpaper,
             'dock': self.page_dock, 'polybar': self.page_polybar,
-            'notifications': self.page_notifications, 'lockscreen': self.page_lockscreen,
+            'notifications': self.page_notifications,
             'loginlock': self.page_loginlock,
             'appearance': self.page_appearance, 'snapshots': self.page_snapshots,
             'help': self.page_help,
@@ -1745,13 +1721,6 @@ class RiceEditor(Gtk.Window):
         for k, icon, title, sub in self.SECTIONS:
             if k == key:
                 self.header.set_section(icon, tr(title).upper(), tr(sub))
-        if key == 'lockscreen':
-            self.lock_prev.reload()
-            if not self.loading:
-                # re-render when the theme changed (cached: instant otherwise)
-                run_bg(lambda: subprocess.run(['ScreenLocker', '--prepare'], stdout=subprocess.DEVNULL,
-                                              stderr=subprocess.DEVNULL, timeout=120),
-                       lambda _r: self.lock_prev.reload())
         if key == 'loginlock' and not self.loading:
             if self.bl_preview_stale():
                 self.bl_render()
@@ -1782,7 +1751,7 @@ class RiceEditor(Gtk.Window):
             self.soft_reload()
             return True
         if ctrl and k == Gdk.KEY_l:
-            spawn(['ScreenLocker'])
+            spawn([os.path.join(BIN, 'Lock')])
             return True
         return False
 
@@ -1815,7 +1784,9 @@ class RiceEditor(Gtk.Window):
             return
         ricelang.set_lang(lang)
         cur = self.stack.get_visible_child_name() or 'dashboard'
-        # reopen in the new language, on the same section
+        # reopen in the new language, on the same section (the new one
+        # takes over the single instance lock)
+        release_instance()
         spawn([os.path.abspath(sys.argv[0]), '--section', cur])
         GLib.timeout_add(400, lambda: (self.destroy(), False)[1])
 
@@ -2499,7 +2470,7 @@ class RiceEditor(Gtk.Window):
             self.apply_modules('', '01-bspwm.sh', '00-picom.sh', reload_picom=True)
             spawn([os.path.join(BIN, 'RoundBorders'), '--reload'])
         if 'locks' in parts:
-            spawn(f'"{BIN}/ScreenLocker" --prepare; nice -n 19 "{BIN}/BetterLock" --prepare', shell=True)
+            spawn(['nice', '-n', '19', os.path.join(BIN, 'BetterLock'), '--prepare'])
 
     def tint_window_colors(self, target):
         """Window border and glow colors of the theme, in the palette's
@@ -2678,6 +2649,10 @@ class RiceEditor(Gtk.Window):
         self.mark_tiles(self.win_style_btns, 'custom')
         self.cfg.set('BORDER_WIDTH', v)
         bspc('config', 'border_width', v)
+        # the widgets with a frame of their own keep no border (01-bspwm.sh does the same)
+        spawn(['sh', '-c', 'for n in $(bspc query -N -n .window); do case $(xprop -id "$n" WM_CLASS) in '
+               '*\'"UserCard"\'* | *\'"RiceLyrics"\'* | *\'"RiceVisualizer"\'*) '
+               'bspc config -n "$n" border_width 0 ;; esac; done'])
         spawn([os.path.join(BIN, 'RoundBorders'), '--reload'])
         self.toast(f'Border width → {v}px')
 
@@ -4286,116 +4261,10 @@ class RiceEditor(Gtk.Window):
         if not quiet:
             self.toast('Test notification sent')
 
-    # ────────────────────────────────────────────────────── lockscreen
-    LOCK_STYLES = [('card', '󰍁', 'Login card', 'avatar, name and password in the theme\'s card (Login Lock page)'),
-                   ('hud', '󰌾', 'HUD clock', 'big clock and ring over the wallpaper (Lockscreen page)')]
-
-    def lock_style_card(self, p):
-        """Which lock super + shift + l, the power menu, suspend and the
-        auto-lock use (bin/Lock reads LOCK_STYLE). On both lock pages."""
-        c = self.card('󰌾', 'Lock style', 'super + shift + l · power menu · suspend · auto-lock')
-        cur = self.cfg.raw('LOCK_STYLE', 'card') or 'card'
-        flow, btns = self.tiles(self.LOCK_STYLES, cur, self.set_lock_style, per_line=2)
-        if not hasattr(self, 'lock_style_btns'):
-            self.lock_style_btns = []
-        self.lock_style_btns.append(btns)
-        c.pack_start(flow, False, False, 4)
-        p.pack_start(c, False, False, 0)
-
-    def set_lock_style(self, key):
-        self.cfg.set('LOCK_STYLE', key)
-        for btns in getattr(self, 'lock_style_btns', []):
-            self.mark_tiles(btns, key)
-        self.toast(f'Lock style → {dict((k, t) for k, _i, t, _d in self.LOCK_STYLES)[key]}')
-
-    def page_lockscreen(self):
-        p = self.page()
-        cfg = self.cfg
-        self.lock_style_card(p)
-        c = self.card('󰍹', 'Preview', 'real render of your wallpaper')
-        self.lock_prev = LockPreview(self)
-        self.refresh_lock_opts()
-        c.pack_start(self.lock_prev, False, False, 4)
-        hb = Gtk.Box(spacing=8)
-        hb.pack_start(self.button('󰌾  Lock now', 'neon', lambda *_: spawn(['ScreenLocker'])), False, False, 0)
-        hb.pack_start(self.button('󰑓  Re-render', 'ghost', lambda *_: self.rerender_lock()), False, False, 0)
-        hb.pack_start(self.button('󰔎  Random wall', 'ghost', lambda *_: spawn(['ScreenLocker', '--rice'])),
-                      False, False, 0)
-        c.pack_start(hb, False, False, 6)
-        p.pack_start(c, False, False, 0)
-
-        c = self.card('󰋩', 'Background')
-        sc, lab = self.scale(0, 30, 1, cfg.raw('LOCK_BLUR', '0'), 0, lambda v: self.set_lock('LOCK_BLUR', v, True))
-        c.pack_start(self.row('Blur', '0 = sharp wallpaper', sc, lab), False, False, 0)
-        sc, lab = self.scale(0, 80, 5, cfg.raw('LOCK_DIM', '20'), 0, lambda v: self.set_lock('LOCK_DIM', v, True),
-                             fmt=lambda v: f'{int(v)}%')
-        c.pack_start(self.row('Dim', 'Darken the wallpaper for readability', sc, lab), False, False, 0)
-        c.pack_start(self.row('Glass panel', 'Frosted HUD panel behind the clock',
-                              self.switch(cfg.raw('LOCK_GLASS', 'true') == 'true',
-                                          lambda on: self.set_lock('LOCK_GLASS', 'true' if on else 'false', True))),
-                     False, False, 0)
-        p.pack_start(c, False, False, 0)
-
-        c = self.card('󰥔', 'Clock & ring')
-        c.pack_start(self.row('Position', '',
-                              self.combo([('left', 'left'), ('center', 'center'), ('right', 'right')],
-                                         cfg.raw('LOCK_POS', 'left'), lambda v: self.set_lock('LOCK_POS', v, True))),
-                     False, False, 0)
-        c.pack_start(self.row('Clock format', '',
-                              self.combo([('%H:%M', '24h  ·  18:30'), ('%H:%M:%S', '24h  ·  18:30:05'),
-                                          ('%I:%M %p', '12h  ·  06:30 PM')],
-                                         cfg.raw('LOCK_CLOCK', '%H:%M'), lambda v: self.set_lock('LOCK_CLOCK', v))),
-                     False, False, 0)
-        entry = Gtk.Entry()
-        entry.set_width_chars(30)
-        entry.set_text(cfg.raw('LOCK_GREETER', 'Type the password to Unlock'))
-        entry.connect('changed', lambda e: self.debounce('greeter', 500,
-                                                         lambda: self.set_lock('LOCK_GREETER', e.get_text())))
-        c.pack_start(self.row('Greeter text', '', entry), False, False, 0)
-        res = cfg.resolve(['LOCK_ACCENT', 'sl_ring', 'sl_verify', 'sl_wrong', 'sl_date'])
-        for var, title in (('LOCK_ACCENT', 'Accent (keypress & glass border)'), ('sl_ring', 'Ring'),
-                           ('sl_verify', 'Verifying'), ('sl_wrong', 'Wrong password'), ('sl_date', 'Clock & date')):
-            c.pack_start(self.row(title, '', self.color(res.get(var, ''),
-                                                        lambda h, v=var: self.set_lock(v, h, v == 'LOCK_ACCENT'))),
-                         False, False, 0)
-        p.pack_start(c, False, False, 0)
-        return p
-
-    def refresh_lock_opts(self):
-        r = self.cfg.resolve(['LOCK_POS', 'LOCK_CLOCK', 'LOCK_GREETER', 'LOCK_ACCENT', 'sl_ring',
-                              'sl_date', 'sl_bg', 'sl_fg'])
-        self.lock_prev.opts = dict(pos=r.get('LOCK_POS'), clock=r.get('LOCK_CLOCK'),
-                                   greeter=r.get('LOCK_GREETER'), accent=r.get('LOCK_ACCENT'),
-                                   ring=r.get('sl_ring'), date=r.get('sl_date'), bg=r.get('sl_bg'),
-                                   fg=r.get('sl_fg'))
-
-    def set_lock(self, var, value, rerender=False):
-        self.cfg.set(var, value)
-        self.refresh_lock_opts()
-        self.toast(f'Lockscreen · {var} → {value}')
-        if rerender:
-            self.debounce('lock-render', 400, self.rerender_lock)
-        else:
-            run_bg(lambda: run_modules('07-screenlocker.sh'))
-
-    def rerender_lock(self):
-        self.lock_prev.busy = True
-
-        def work():
-            run_modules('07-screenlocker.sh')
-            subprocess.run(['ScreenLocker', '--prepare'], stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, timeout=120)
-
-        def done(_r):
-            self.lock_prev.busy = False
-            self.lock_prev.reload()
-        run_bg(work, done)
-
     # ────────────────────────────────────────────────────── login lock
     def page_loginlock(self):
         p = self.page()
         cfg = self.cfg
-        self.lock_style_card(p)
         c = self.card('󰍹', 'Preview', 'real render · also the login screen after booting')
         self.bl_prev = LoginPreview(self)
         c.pack_start(self.bl_prev, False, False, 4)
@@ -4643,6 +4512,10 @@ class RiceEditor(Gtk.Window):
                 if ok:
                     found.add(n)
         found.discard('default')
+        if kind == 'cursor':
+            # bin/ThemeCursor draws Rice-Cursor-<theme>-*: pick them as Rice-Animated
+            found = {n for n in found if not n.startswith('Rice-Cursor-')}
+            return ['Rice-Animated'] + sorted(found, key=str.lower)
         return sorted(found, key=str.lower)
 
     def page_appearance(self):
@@ -4663,9 +4536,9 @@ class RiceEditor(Gtk.Window):
                      False, False, 0)
         p.pack_start(c, False, False, 0)
         res = self.cfg.resolve(['gtk_theme', 'gtk_icons', 'gtk_cursor', 'rofi_font'])
+        self.cursor_card(p, res.get('gtk_cursor', ''))
         c = self.card('󰉼', 'GTK', 'xsettingsd · applied live')
-        for var, kind, title in (('gtk_theme', 'gtk', 'GTK theme'), ('gtk_icons', 'icons', 'Icon theme'),
-                                 ('gtk_cursor', 'cursor', 'Cursor theme')):
+        for var, kind, title in (('gtk_theme', 'gtk', 'GTK theme'), ('gtk_icons', 'icons', 'Icon theme')):
             items = self.list_themes(kind)
             cur = res.get(var, '')
             if cur and cur not in items:
@@ -4685,6 +4558,101 @@ class RiceEditor(Gtk.Window):
     def set_gtk(self, var, value, title):
         self.cfg.set(var, value)
         self.apply_modules(f'{title} → {value}', '03-gtk.sh')
+
+    def cursor_card(self, p, cur):
+        """Appearance -> Cursor: the animated cursor of every theme
+        (bin/ThemeCursor), live; CURSOR_KIT in theme-config.bash."""
+        tc = theme_cursor()
+        c = self.card('󰇀', 'Cursor', 'animated · drawn for each theme · applied live')
+        if tc is None:
+            c.pack_start(Gtk.Label(label='~/.config/bspwm/bin/ThemeCursor is missing', xalign=0), False, False, 0)
+            p.pack_start(c, False, False, 0)
+            return
+        kit_now = (self.cfg.raw('RICE_KIT', '') or self.cfg.raw('WIN_SKIN', '') or 'minimal')
+        if kit_now not in tc.STYLES:
+            kit_now = 'minimal'
+        sel = (self.cfg.raw('CURSOR_KIT', 'theme') or 'theme') if cur == 'Rice-Animated' else None
+        names = {k: (v['name'], v['tagline']) for k, v in ricekit.KITS.items()} if ricekit else {}
+        palette = {k: hex_rgb(v) for k, v in self.hex.items()}
+        items = [('theme', 'The theme\'s own', f'follows the theme in use · now {kit_now}', kit_now, palette)]
+        for k in (ricekit.ORDER if ricekit else [k for k in tc.STYLES if k not in tc.EXTRA]):
+            if k in tc.STYLES:
+                name, tag = names.get(k, (k.title(), ''))
+                items.append((k, name, tag, k, tc.palette_of(k)))
+        extras = [(k, name, f'✦ {tag}', k, tc.palette_of(k)) for k, (name, tag, _p) in tc.EXTRA.items()]
+        anim = self.cfg.raw('CURSOR_ANIM', 'full') or 'full'
+        size = self.cfg.raw('CURSOR_SIZE', '24') or '24'
+        sc, lab = self.scale(16, 96, 4, size, 0, self.set_cursor_size, fmt=lambda v: f'{int(v)} px', delay=600)
+        c.pack_start(self.row('Size', 'Cursor size in pixels (24 = normal · 32 / 48 for big screens)', sc, lab),
+                     False, False, 0)
+        c.pack_start(self.row('Animation', 'full · calm (slower, softer) · off (still, only busy spins)',
+                              self.combo([('full', 'full'), ('calm', 'calm'), ('off', 'off')], anim,
+                                         self.set_cursor_anim)), False, False, 0)
+        self.cursor_btns = {}
+        self.cursor_prevs = []
+        for title, group in (('Themes', items), ('Extra styles', extras)):
+            hl = Gtk.Label(label=title.upper(), xalign=0)
+            hl.get_style_context().add_class('card-sub')
+            c.pack_start(hl, False, False, 6)
+            c.pack_start(self.cursor_tiles(tc, group, anim), False, False, 4)
+        self.mark_tiles(self.cursor_btns, sel)
+        items = self.list_themes('cursor')
+        if cur and cur not in items:
+            items.insert(0, cur)
+        c.pack_start(self.row('Cursor theme', 'Rice-Animated = the animated cursors above · or any installed theme',
+                              self.combo([(i, i) for i in items], cur, self.set_cursor_theme)), False, False, 0)
+        p.pack_start(c, False, False, 0)
+
+    def cursor_tiles(self, tc, items, anim):
+        flow = Gtk.FlowBox()
+        flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        flow.set_homogeneous(True)
+        flow.set_min_children_per_line(2)
+        flow.set_max_children_per_line(3)
+        flow.set_column_spacing(10)
+        flow.set_row_spacing(10)
+        for key, title, desc, kit, pal in items:
+            b = Gtk.Button()
+            b.get_style_context().add_class('style-tile')
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            prev = CursorPreview(self, tc, kit, pal, anim=anim)
+            self.cursor_prevs.append(prev)
+            box.pack_start(prev, False, False, 2)
+            t = Gtk.Label(label=title, xalign=0)
+            t.get_style_context().add_class('row-title')
+            box.pack_start(t, False, False, 0)
+            d = Gtk.Label(label=desc, xalign=0)
+            d.set_line_wrap(True)
+            d.set_max_width_chars(28)
+            d.get_style_context().add_class('row-desc')
+            box.pack_start(d, False, False, 0)
+            b.add(box)
+            b.connect('clicked', lambda *_, k=key: self.set_cursor_kit(k))
+            flow.add(b)
+            self.cursor_btns[key] = b
+        return flow
+
+    def set_cursor_size(self, v):
+        self.cfg.set('CURSOR_SIZE', int(v))
+        self.apply_modules(f'Cursor size → {int(v)} px', '03-gtk.sh')
+
+    def set_cursor_anim(self, v):
+        self.cfg.set('CURSOR_ANIM', v)
+        for prev in getattr(self, 'cursor_prevs', []):
+            prev.anim = v
+        self.apply_modules(f'Cursor animation → {v}', '03-gtk.sh')
+
+    def set_cursor_kit(self, key):
+        self.cfg.set('CURSOR_KIT', key)
+        self.cfg.set('gtk_cursor', 'Rice-Animated')
+        self.mark_tiles(self.cursor_btns, key)
+        self.apply_modules(f'Cursor → {key}', '03-gtk.sh')
+
+    def set_cursor_theme(self, value):
+        self.cfg.set('gtk_cursor', value)
+        self.mark_tiles(self.cursor_btns,
+                        (self.cfg.raw('CURSOR_KIT', 'theme') or 'theme') if value == 'Rice-Animated' else None)
+        self.apply_modules(f'Cursor theme → {value}', '03-gtk.sh')
 
     def set_rofi_font(self, full):
         self.cfg.set('rofi_font', full)
@@ -4802,7 +4770,7 @@ class RiceEditor(Gtk.Window):
         c = self.card('󰌌', 'Shortcuts')
         for keys, what in (('Ctrl + 1 … 0', 'Jump to a section'), ('Ctrl + S', 'Save a snapshot'),
                            ('Ctrl + R', 'Soft reload (bars, picom, dunst, sxhkd)'),
-                           ('Super + Shift + L', 'Lock the screen (style: Lockscreen page)'),
+                           ('Super + Shift + L', 'Lock the screen (Login Lock page)'),
                            ('Ctrl + Q', 'Close RiceEditor')):
             k = Gtk.Label(label=keys)
             k.get_style_context().add_class('value')
@@ -4840,14 +4808,81 @@ class RiceEditor(Gtk.Window):
         return p
 
 
+# ═══════════════════════════════════════════════════ single instance
+INSTANCE_LOCK = os.path.join(HOME, '.cache', os.environ.get('USER', 'user'), '.riceeditor.lock')
+INSTANCE_REQ = INSTANCE_LOCK + '.section'   # the section a second launch asked for
+_instance = []
+
+
+def claim_instance(section):
+    """Only one RiceEditor: a second launch (keybinding, dock, UserCard...)
+    brings the open one to the front, on the section it asked for, and exits."""
+    os.makedirs(os.path.dirname(INSTANCE_LOCK), exist_ok=True)
+    fd = open(INSTANCE_LOCK, 'a+')
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        for _ in range(20):               # the open one may still be starting
+            fd.seek(0)
+            pid = fd.read().strip()
+            if pid.isdigit() and int(pid) > 0:
+                try:
+                    with open(INSTANCE_REQ, 'w') as f:
+                        f.write(section or '')
+                    os.kill(int(pid), signal.SIGUSR1)
+                except OSError:
+                    pass
+                break
+            time.sleep(0.1)
+        sys.exit(0)
+    fd.seek(0)
+    fd.truncate()
+    fd.write(str(os.getpid()))
+    fd.flush()
+    _instance.append(fd)
+
+
+def release_instance():
+    while _instance:
+        fd = _instance.pop()
+        try:
+            fd.truncate(0)
+            fd.close()
+        except OSError:
+            pass
+
+
+def raise_instance(app):
+    """SIGUSR1 from a second launch: show this window (unhide it, its
+    desktop focused) on the asked section."""
+    try:
+        with open(INSTANCE_REQ) as f:
+            key = f.read().strip()
+        os.remove(INSTANCE_REQ)
+    except OSError:
+        key = ''
+    if key in app.nav:
+        app.go(key)
+    app.deiconify()
+    app.present()
+    win = app.get_window()
+    if win is not None:
+        wid = hex(win.get_xid())
+        subprocess.run(['bspc', 'node', wid, '-g', 'hidden=off'], capture_output=True)
+        subprocess.run(['bspc', 'node', wid, '-f'], capture_output=True)
+    return True
+
+
 def main():
+    args = sys.argv[1:]
+    section = args[args.index('--section') + 1] if '--section' in args[:-1] else ''
+    claim_instance(section)
     GLib.set_prgname('RiceEditor')
     app = RiceEditor()
     app.show_all()
-    if '--section' in sys.argv[1:-1]:
-        key = sys.argv[sys.argv.index('--section') + 1]
-        if key in app.nav:
-            app.go(key)
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR1, raise_instance, app)
+    if section in app.nav:
+        app.go(section)
     Gtk.main()
 
 

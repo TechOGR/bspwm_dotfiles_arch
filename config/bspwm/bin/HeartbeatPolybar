@@ -43,6 +43,18 @@ THEMES = {   # never the theme's own emblem (the launcher shows it next to this)
     'pixel': ((0xf0baf, 0xf02a0), 'frames'),            # pac-man, ghost
     'sketch': ((0xf06d3,), 'breathe'),                  # a feather
     'minimal': ((0xf05f6,), 'beat'),                    # heart pulse
+    'halloween': ((0xf02a0, 0xf165d), 'frames'),        # a ghost fading in and out
+    'desert': ((0xf0599,), 'breathe'),                  # the sun, burning
+    'neotokyo': ((0xf1332,), 'neon'),                   # a neon kanji buzzing
+    'abyss': ((0xf023a,), 'breathe'),                   # a fish in the deep
+    'forest': ((0xf1589, 0xf158a), 'frames'),           # a butterfly flapping
+    'cosmos': ((0xf10c4, 0xf10c5), 'blink'),            # a ufo blinking
+    'samurai': ((0xf0680,), 'breathe'),                 # yin and yang, breathing
+    'steampunk': ((0xf0875, 0xf029a, 0xf0874), 'frames'),  # a gauge, its needle moving
+    'glacier': ((0xf0f2a,), 'neon'),                    # a snowflake glinting
+    'witch': ((0xf0b2f,), 'neon'),                      # the crystal ball glowing
+    'dragon': ((0xf1807,), 'flicker'),                  # dragon fire
+    'graffiti': ((0xf01a5, 0xf11d0), 'frames'),         # a sprayed crown
 }
 
 

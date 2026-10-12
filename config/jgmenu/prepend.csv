@@ -30,8 +30,9 @@
 
 ^tag(wg)
 ^sep(<span foreground="#414868">//</span> WIDGETS)
-<span foreground="#7dcfff">󰀄</span>   User Card,OpenApps --usercard
-<span foreground="#bb9af7">󰎈</span>   Music Player,OpenApps --player
+<span foreground="#7dcfff">󰀄</span>   User Card,UserCard --pin
+<span foreground="#7dcfff">󰎈</span>   Lyrics,RiceLyrics
+<span foreground="#7dcfff">󰺢</span>   Spectrum,RiceVisualizer
 
 ^tag(wm)
 ^sep(<span foreground="#414868">//</span> BSPWM)

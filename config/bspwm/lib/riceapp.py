@@ -125,11 +125,12 @@ class CenterWindow(Gtk.Window):
         head.pack_start(label(glyph, 'hglyph'), False, False, 0)
         tt = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         tt.set_valign(Gtk.Align.CENTER)
-        tt.pack_start(label(title.upper(), 'title'), False, False, 0)
-        self.subtitle = label('', 'sub')
+        tt.pack_start(label(title.upper(), 'title', ellipsize=True), False, False, 0)
+        # the hints line is cut short (…) on a narrow window: it never pushes
+        # the buttons on the right out of sight
+        self.subtitle = label('', 'sub', ellipsize=True)
         tt.pack_start(self.subtitle, False, False, 0)
-        head.pack_start(tt, False, False, 0)
-        head.pack_start(Gtk.Box(), True, True, 0)
+        head.pack_start(tt, True, True, 0)
         self.head_right = Gtk.Box(spacing=10)
         self.head_right.set_valign(Gtk.Align.CENTER)
         head.pack_start(self.head_right, False, False, 0)
@@ -239,7 +240,7 @@ scrolledwindow, viewport {{ background: transparent; border: none; }}
 
 def float_rule(cls):
     """Open floating and centered (the theme frames it like any window)."""
-    subprocess.run(['bspc', 'rule', '-r', cls], capture_output=True)
+    subprocess.run(['bspc', 'rule', '-r', f'{cls}:*:*'], capture_output=True)   # (the bare class removes nothing)
     subprocess.run(['bspc', 'rule', '-a', cls, 'state=floating', 'center=on'], capture_output=True)
 
 

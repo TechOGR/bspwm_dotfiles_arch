@@ -848,7 +848,7 @@ CORE = [
     'xorg-xinput', 'xorg-xauth', 'xorg-xdpyinfo', 'xorg-xwininfo', 'xorg-setxkbmap', 'libxcvt',
     'xf86-input-libinput',
     # the desktop
-    'bspwm', 'sxhkd', 'polybar', 'rofi', 'picom', 'dunst', 'libnotify', 'jgmenu', 'xsettingsd', 'hsetroot',
+    'bspwm', 'sxhkd', 'xcape', 'polybar', 'rofi', 'picom', 'dunst', 'libnotify', 'jgmenu', 'xsettingsd', 'hsetroot',
     'feh', 'imagemagick', 'jq', 'xdotool', 'xdo', 'xclip', 'maim', 'ffmpeg', 'mpv', 'clipcat', 'xss-lock',
     'pacman-contrib', 'bc', 'wget', 'curl', 'rsync', 'unzip', 'git', 'xdg-utils', 'xdg-user-dirs',
     # the rice's own windows (GTK3 + cairo in Python)

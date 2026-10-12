@@ -232,17 +232,49 @@ if [ ! -f "$_bm" ] || grep "^file:///home/" "$_bm" | grep -qv "^file://$HOME/"; 
     done >"$_bm"
 fi
 
+# The animated cursor (bin/ThemeCursor, RiceEditor -> Appearance -> Cursor):
+# CURSOR_KIT="theme" draws the one of the theme in use in the palette colors,
+# a theme name (snake, samurai...) that theme's cursor in its own colors.
+# Any other cursor theme picked in RiceEditor wins. CURSOR_SIZE (24 - 96) and
+# CURSOR_ANIM (full | calm | off) apply to it too.
+case "$CURSOR_SIZE" in '' | *[!0-9]*) CURSOR_SIZE=24 ;; esac
+if [ "$gtk_cursor" = "Rice-Animated" ]; then
+    _tc_opts="--size $CURSOR_SIZE --anim ${CURSOR_ANIM:-full}"
+    case "${CURSOR_KIT:-theme}" in
+        theme)
+            # shellcheck disable=SC2086
+            gtk_cursor=$("$HOME"/.config/bspwm/bin/ThemeCursor "${RICE_KIT:-$WIN_SKIN}" $_tc_opts \
+                bg="$bg" fg="$fg" black="$black" blackb="$blackb" red="$red" green="$green" \
+                yellow="$yellow" blue="$blue" magenta="$magenta" cyan="$cyan" 2>/dev/null) ;;
+        *)
+            # shellcheck disable=SC2086
+            gtk_cursor=$("$HOME"/.config/bspwm/bin/ThemeCursor "$CURSOR_KIT" $_tc_opts 2>/dev/null) ;;
+    esac
+    [ -n "$gtk_cursor" ] || gtk_cursor="Bibata-Modern-Classic"
+fi
+
 # Set the gtk theme corresponding to rice
 sed -i "$HOME"/.config/bspwm/config/xsettingsd \
     -e "s|Net/ThemeName .*|Net/ThemeName \"$gtk_theme\"|" \
     -e "s|Net/IconThemeName .*|Net/IconThemeName \"$gtk_icons\"|" \
     -e "s|Gtk/CursorThemeName .*|Gtk/CursorThemeName \"$gtk_cursor\"|"
+grep -q '^Gtk/CursorThemeSize' "$HOME"/.config/bspwm/config/xsettingsd &&
+    sed -i "s|^Gtk/CursorThemeSize .*|Gtk/CursorThemeSize $CURSOR_SIZE|" "$HOME"/.config/bspwm/config/xsettingsd ||
+    echo "Gtk/CursorThemeSize $CURSOR_SIZE" >>"$HOME"/.config/bspwm/config/xsettingsd
 
-sed -i -e "s/Inherits=.*/Inherits=$gtk_cursor/" "$HOME"/.icons/default/index.theme
+mkdir -p "$HOME/.icons/default"
+printf '[Icon Theme]\nInherits=%s\n' "$gtk_cursor" >"$HOME/.icons/default/index.theme"
+# Apps that read the cursor from Xresources (xsetroot, Qt, terminals)
+printf 'Xcursor.theme: %s\nXcursor.size: %s\n' "$gtk_cursor" "$CURSOR_SIZE" | xrdb -merge 2>/dev/null
 
 # Reload daemon and apply gtk theme
 if pidof -q xsettingsd; then
     pkill -1 xsettingsd
 fi
+# XCURSOR_THEME / XCURSOR_SIZE beat Xresources: "default" follows
+# ~/.icons/default, the size comes from Xcursor.size. So what is launched from
+# here on (bar, dock, daemons) and the desktop follow every later change too
+export XCURSOR_THEME="default"
+unset XCURSOR_SIZE
 xsetroot -cursor_name left_ptr
-unset _gtk_dir _d _bm _k _p
+unset _gtk_dir _d _bm _k _p _tc_opts

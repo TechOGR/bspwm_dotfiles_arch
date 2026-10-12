@@ -46,8 +46,11 @@ EDGE_EFFECTS = [
     ('flow', 'Flowing edge'), ('shimmer', 'Soft shimmer'), ('pulse', 'Breathing glow'),
     ('snakes', 'Slithering snakes'), ('bubbles', 'Rising bubbles'), ('drips', 'Dripping venom'),
     ('sparkles', 'Twinkling glints'), ('comets', 'Running lights'),
+    ('bats', 'Flying bats'), ('snow', 'Falling snow'), ('sakura', 'Sakura petals'), ('steam', 'Rising steam'),
+    ('fireflies', 'Fireflies'), ('wisps', 'Spirit flames'), ('paint', 'Dripping paint'), ('sand', 'Blowing sand'),
 ]
-BACK_EFFECTS = [('drift', 'Floating motes'), ('flash', 'Lightning flashes'), ('sweep', 'Light sweep')]
+BACK_EFFECTS = [('drift', 'Floating motes'), ('flash', 'Lightning flashes'), ('sweep', 'Light sweep'),
+                ('snowfall', 'Snowfall'), ('petalfall', 'Falling petals')]
 FULL = {'pulse', 'flow'}   # redraw the whole outline every frame (drawn at half rate)
 
 WIN_THEME = {
@@ -55,13 +58,19 @@ WIN_THEME = {
     'liquid': 'flow', 'venom': 'flow', 'snake': 'snakes', 'holo': 'sparkles', 'glass': 'sparkles',
     'crystal': 'sparkles', 'neon': 'pulse', 'cyber': 'pulse', 'hud': 'pulse', 'minimal': 'pulse',
     'sketch': 'shimmer', 'pixel': 'sparkles',
+    'halloween': 'bats', 'desert': 'sand', 'neotokyo': 'sakura', 'abyss': 'bubbles', 'forest': 'fireflies',
+    'cosmos': 'sparkles', 'samurai': 'sakura', 'steampunk': 'steam', 'glacier': 'snow', 'witch': 'wisps',
+    'dragon': 'embers', 'graffiti': 'paint',
 }
 # on the bar only effects that don't redraw its outline: the skin's own
 # shape (waves, tentacles...) is not the plain capsule the effect runs on
 BAR_THEME = dict(WIN_THEME, butterfly='comets', liquid='bubbles', venom='drips', sketch='sparkles',
-                 minimal='sparkles')
+                 minimal='sparkles', neotokyo='comets')
 BACK_THEME = {'storm': 'flash', 'fire': 'drift', 'lava': 'drift', 'butterfly': 'drift', 'nature': 'drift',
-              'venom': 'drift', 'holo': 'drift', 'liquid': 'drift', 'snake': 'drift'}
+              'venom': 'drift', 'holo': 'drift', 'liquid': 'drift', 'snake': 'drift',
+              'halloween': 'drift', 'neotokyo': 'petalfall', 'abyss': 'drift', 'forest': 'drift', 'cosmos': 'drift',
+              'samurai': 'petalfall', 'steampunk': 'drift', 'glacier': 'snowfall', 'witch': 'drift',
+              'dragon': 'drift'}
 
 # style: (items, seconds per lap, length (fraction of the outline), flicker, color)
 STYLE = {
@@ -74,6 +83,12 @@ STYLE = {
     'holo': (2, 6.5, 0.10, 0.1, '#ff8ae0'), 'storm': (3, 2.2, 0.09, 0.6, '#dff0ff'),
     'venom': (2, 5.5, 0.12, 0.2, '#ff3a3a'), 'butterfly': (2, 7.5, 0.11, 0.05, '#ffb8f0'),
     'snake': (1, 5.0, 0.18, 0.0, '#e8ff5a'),
+    'halloween': (2, 6.0, 0.10, 0.3, '#ff8a2a'), 'desert': (1, 8.0, 0.10, 0.0, '#ffd25a'),
+    'neotokyo': (2, 3.8, 0.10, 0.1, '#ff3ab4'), 'abyss': (2, 6.5, 0.12, 0.0, '#5af0ff'),
+    'forest': (1, 9.0, 0.12, 0.0, '#e8ff6a'), 'cosmos': (2, 7.0, 0.08, 0.05, '#b8c0ff'),
+    'samurai': (2, 5.0, 0.10, 0.1, '#ff8ab8'), 'steampunk': (1, 7.0, 0.10, 0.0, '#ffd27a'),
+    'glacier': (2, 7.5, 0.08, 0.05, '#cdf6ff'), 'witch': (2, 6.0, 0.10, 0.2, '#c84cff'),
+    'dragon': (2, 6.0, 0.12, 0.25, '#ffc42e'), 'graffiti': (3, 4.5, 0.10, 0.0, '#25ebf5'),
 }
 DEFAULT = (1, 8.0, 0.08, 0.0, None)
 
@@ -530,9 +545,216 @@ def fx_sparkles(cr, style, outline, t, seed, scale):
     return box
 
 
+# ─────────────────────────── the scenes of lib/wsfour.py
+def _from_edge(outline, rnd, sgn, total, top_only=False, bottom=False, falling=False):
+    """A point of the edge (x, y, outward nx, ny): from the top and the
+    sides (things rising or floating away), from the bottom (drips), or
+    from the sides and the bottom (things falling: they stay outside the
+    shape, never over what is in it)."""
+    for _try in range(14):
+        x, y, nx, ny = point_at(outline, rnd.uniform(0, total))
+        nx, ny = nx * sgn, ny * sgn
+        if falling and ny > -0.3:
+            break
+        if bottom and ny > 0.6:
+            break
+        if not (bottom or falling) and ny < (-0.6 if top_only else 0.3):
+            break
+    return x, y, nx, ny
+
+
+def fx_bats(cr, style, outline, t, seed, scale):
+    """Little bats flutter along the edge, in and out of it."""
+    import wsfour
+    total = outline[2]
+    col = color(style)
+    sgn = _outward(outline)
+    box = None
+    for k in range(max(2, min(6, int(total / 500)))):
+        rnd = random.Random(k * 61 + seed)
+        speed = rnd.uniform(26, 42) * scale * (1 if k % 2 else -1)
+        x, y, nx, ny = point_at(outline, rnd.uniform(0, total) + t * speed)
+        off = (9 + 8 * math.sin(t * rnd.uniform(1.0, 1.8) + k)) * scale * sgn
+        x, y = x + nx * off, y + ny * off
+        s = rnd.uniform(7, 10) * scale
+        wsfour.bat(cr, x, y, s, math.sin(t * 2 + k) * 0.3, abs(math.sin(t * 10 + k)), rim=col)
+        box = _union(box, (x - s * 1.3, y - s * 1.0, x + s * 1.3, y + s * 1.0))
+    return box
+
+
+def fx_snow(cr, style, outline, t, seed, scale):
+    """Snowflakes leave the edge and drift down, turning slowly."""
+    import wsfour
+    total = outline[2]
+    col = tuple(v + (1 - v) * 0.5 for v in color(style))
+    sgn = _outward(outline)
+    box = None
+    for k in range(max(8, min(24, int(total / 110)))):
+        rnd = random.Random(k * 89 + seed)
+        life = rnd.uniform(3.2, 5.2)
+        age = (t + rnd.uniform(0, life)) % life
+        f = age / life
+        x, y, nx, ny = _from_edge(outline, rnd, sgn, total, falling=True)
+        out = (rnd.uniform(7, 13) if abs(nx) > 0.6 else 4) * scale
+        fx = x + nx * out + math.sin(age * 1.6 + k) * 3 * scale
+        fy = y + ny * out + f * rnd.uniform(18, 34) * scale
+        a = math.sin(f * math.pi) * rnd.uniform(0.6, 1.0)
+        r = rnd.uniform(2.4, 4.2) * scale
+        wsfour.snowflake(cr, fx, fy, r, col, a, max(0.6, 0.7 * scale), glow=False, rot=age * 0.8)
+        box = _union(box, (fx - r - 2, fy - r - 2, fx + r + 2, fy + r + 2))
+    return box
+
+
+def fx_sakura(cr, style, outline, t, seed, scale):
+    """Cherry petals let go of the edge and fall, swaying and spinning."""
+    import wsfour
+    total = outline[2]
+    col = tuple(v + (1 - v) * 0.3 for v in color(style))
+    sgn = _outward(outline)
+    box = None
+    for k in range(max(6, min(18, int(total / 140)))):
+        rnd = random.Random(k * 73 + seed)
+        life = rnd.uniform(2.6, 4.4)
+        age = (t + rnd.uniform(0, life)) % life
+        f = age / life
+        x, y, nx, ny = _from_edge(outline, rnd, sgn, total, falling=True)
+        out = (rnd.uniform(7, 13) if abs(nx) > 0.6 else 3) * scale
+        drift = (f * rnd.uniform(6, 18) + math.sin(age * 2.2 + k) * 3) * scale
+        px = x + nx * out + (drift * (1 if nx >= 0 else -1) if abs(nx) > 0.6 else drift)
+        py = y + ny * out + f * rnd.uniform(16, 32) * scale
+        a = min(1.0, (1 - f) * 2.5) * min(1.0, f * 6)
+        s = rnd.uniform(4.5, 6.5) * scale
+        wsfour.petal(cr, px, py, s, age * 2.4 + k, col, a)
+        box = _union(box, (px - s, py - s, px + s, py + s))
+    return box
+
+
+def fx_steam(cr, style, outline, t, seed, scale):
+    """Puffs of steam leave the top edge, swell and fade."""
+    import wsfour
+    total = outline[2]
+    sgn = _outward(outline)
+    box = None
+    for k in range(max(3, min(9, int(total / 260)))):
+        rnd = random.Random(k * 47 + seed)
+        life = rnd.uniform(2.4, 3.8)
+        age = (t + rnd.uniform(0, life)) % life
+        f = age / life
+        x, y, nx, ny = _from_edge(outline, rnd, sgn, total, top_only=True)
+        px = x + math.sin(age * 1.5 + k) * 4 * scale
+        py = y - f * rnd.uniform(16, 28) * scale
+        r = (3 + f * 7) * scale
+        wsfour.steam(cr, px, py, r, math.sin(f * math.pi) * 0.9, k, (0.96, 0.92, 0.86))
+        box = _union(box, (px - r * 1.8, py - r * 1.6, px + r * 1.8, py + r * 1.6))
+    return box
+
+
+def fx_fireflies(cr, style, outline, t, seed, scale):
+    """Fireflies hover near the edge, wandering and blinking."""
+    total = outline[2]
+    col = color(style)
+    sgn = _outward(outline)
+    box = None
+    for k in range(max(5, min(16, int(total / 150)))):
+        rnd = random.Random(k * 31 + seed)
+        x, y, nx, ny = point_at(outline, rnd.uniform(0, total) + t * rnd.uniform(-6, 6) * scale)
+        d = rnd.uniform(6, 16) * scale * sgn
+        w1, w2 = rnd.uniform(0.6, 1.4), rnd.uniform(0.6, 1.4)
+        fx = x + nx * d + math.sin(t * w1 + k) * 6 * scale
+        fy = y + ny * d + math.cos(t * w2 + k * 2) * 4 * scale
+        b = max(0.0, math.sin(t * rnd.uniform(1.5, 3.0) + k * 1.7)) ** 2
+        if b < 0.04:
+            continue
+        _glow_dot(cr, fx, fy, 6 * scale, col, b)
+        box = _union(box, (fx - 7 * scale, fy - 7 * scale, fx + 7 * scale, fy + 7 * scale))
+    return box
+
+
+def fx_wisps(cr, style, outline, t, seed, scale):
+    """Spirit flames rise off the edge, flickering, and vanish."""
+    import wsfour
+    total = outline[2]
+    col = color(style)
+    sgn = _outward(outline)
+    box = None
+    for k in range(max(5, min(14, int(total / 170)))):
+        rnd = random.Random(k * 83 + seed)
+        life = rnd.uniform(1.8, 3.0)
+        age = (t + rnd.uniform(0, life)) % life
+        f = age / life
+        x, y, nx, ny = _from_edge(outline, rnd, sgn, total)
+        px = x + nx * 4 + math.sin(age * 3 + k) * 3 * scale
+        py = y + ny * 4 - f * rnd.uniform(18, 34) * scale
+        s = rnd.uniform(6, 9) * scale * (1 - 0.5 * f)
+        wsfour.wisp(cr, px, py, s, col, math.sin(f * math.pi) * 0.9, 0.08 * math.sin(age * 5 + k))
+        box = _union(box, (px - s * 1.5, py - s * 1.6, px + s * 1.5, py + s * 1.4))
+    return box
+
+
+def fx_paint(cr, style, outline, t, seed, scale):
+    """Paint of every color runs off the bottom edge and drips."""
+    import wsthree
+    import wspill as ws
+    import wsfour
+    total = outline[2]
+    sgn = _outward(outline)
+    box = None
+    for k in range(max(5, min(14, int(total / 150)))):
+        rnd = random.Random(k * 41 + seed)
+        col = ws.rgb(rnd.choice(wsfour.SPRAY))
+        life = rnd.uniform(2.0, 3.4)
+        age = (t + rnd.uniform(0, life)) % life
+        f = age / life
+        x, y, _nx, _ny = _from_edge(outline, rnd, sgn, total, bottom=True)
+        w = rnd.uniform(1.3, 2.2) * scale
+        if f < 0.65:
+            L = (3 + f / 0.65 * rnd.uniform(6, 14)) * scale
+            wsthree.drip(cr, x, y, L, w, col, 0.95)
+            box = _union(box, (x - w * 2, y - 1, x + w * 2, y + L + 2))
+        else:
+            g = (f - 0.65) / 0.35
+            dy = y + (14 + g * g * 40) * scale
+            cr.arc(x, dy, w * 1.1, 0, 2 * math.pi)
+            cr.set_source_rgba(*col, 1 - g)
+            cr.fill()
+            box = _union(box, (x - w * 2, dy - w * 2, x + w * 2, dy + w * 2))
+    return box
+
+
+def fx_sand(cr, style, outline, t, seed, scale):
+    """Grains of sand blown along the edge by the wind."""
+    total = outline[2]
+    col = color(style)
+    sgn = _outward(outline)
+    box = None
+    for k in range(max(10, min(30, int(total / 70)))):
+        rnd = random.Random(k * 23 + seed)
+        life = rnd.uniform(1.2, 2.2)
+        age = (t + rnd.uniform(0, life)) % life
+        f = age / life
+        x, y, nx, ny = point_at(outline, rnd.uniform(0, total))
+        off = rnd.uniform(2, 9) * scale * sgn
+        gx = x + nx * off + (f - 0.5) * rnd.uniform(26, 50) * scale
+        gy = y + ny * off + math.sin(age * 4 + k) * 1.5 * scale
+        a = math.sin(f * math.pi) * rnd.uniform(0.4, 0.9)
+        r = rnd.uniform(0.7, 1.4) * scale
+        cr.move_to(gx - r * 4, gy)
+        cr.line_to(gx, gy)
+        cr.set_line_width(r)
+        cr.set_source_rgba(*col, a * 0.35)
+        cr.stroke()
+        cr.arc(gx, gy, r, 0, 2 * math.pi)
+        cr.set_source_rgba(*col, a)
+        cr.fill()
+        box = _union(box, (gx - r * 5, gy - r * 2, gx + r * 2, gy + r * 2))
+    return box
+
+
 EDGE_FNS = {'bubbles': fx_bubbles, 'drips': fx_drips, 'snakes': fx_snakes, 'sparkles': fx_sparkles,
             'comets': fx_comets, 'shimmer': fx_shimmer, 'pulse': fx_pulse, 'flow': fx_flow,
-            'spark': fx_spark, 'embers': fx_embers, 'petals': fx_petals}
+            'spark': fx_spark, 'embers': fx_embers, 'petals': fx_petals,
+            'bats': fx_bats, 'snow': fx_snow, 'sakura': fx_sakura, 'steam': fx_steam, 'fireflies': fx_fireflies,
+            'wisps': fx_wisps, 'paint': fx_paint, 'sand': fx_sand}
 
 
 def draw_edge(cr, name, style, outline, t, seed=0, scale=1.0):
@@ -575,6 +797,24 @@ def draw_back(cr, name, style, w, h, t):
             cr.set_source(g)
             cr.arc(x, y, r * 3, 0, 2 * math.pi)
             cr.fill()
+    elif name in ('snowfall', 'petalfall'):   # snow / sakura petals falling through the texture
+        import wsfour
+        snow = name == 'snowfall'
+        for k in range(max(16, int(w * h / 30000))):
+            rnd = random.Random(k * 17 + 3)
+            life = rnd.uniform(8, 14)
+            age = (t + rnd.uniform(0, life)) % life
+            f = age / life
+            x = rnd.uniform(0, w) + math.sin(age * 0.7 + k) * 22 + (0 if snow else f * 60)
+            y = -10 + f * (h + 20)
+            a = min(1.0, (1 - f) * 4) * min(1.0, f * 8) * rnd.uniform(0.25, 0.55)
+            r = rnd.uniform(2, 5)
+            if snow:
+                cr.arc(x, y, r * 0.6, 0, 2 * math.pi)
+                cr.set_source_rgba(1, 1, 1, a)
+                cr.fill()
+            else:
+                wsfour.petal(cr, x, y, r * 1.6, age * 1.8 + k, tuple(v + (1 - v) * 0.3 for v in col), a)
     elif name == 'flash':   # now and then the storm lights the texture up
         beat = t % 5.5
         a = 0.0

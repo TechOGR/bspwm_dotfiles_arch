@@ -174,6 +174,7 @@ def zigzag(x, y, w, h, r, amp, seed):
 WAVES = {'liquid': (3, 7, 170, 'mix'), 'venom': (3.2, 3, 170, 'mix'), 'butterfly': (2.6, 4, 170, 'mix'),
          'fire': (2.6, 11, 60, 'tongue'), 'nature': (1.6, 13, 170, 'mix'), 'snake': (3.6, 17, 115, 'sine')}
 SHAPED = {'cyber', 'hud', 'crystal', 'pixel', 'lava', 'storm', 'sketch'} | set(WAVES)
+CUSTOM = {}   # style: fn(cr, x, y, w, h, s) drawing its own outline (lib/wsfour.py styles)
 
 
 def snake_ring(x, y, w, h, s):
@@ -204,6 +205,8 @@ def shape(cr, style, x, y, w, h, s):
         poly(cr, zigzag(x, y, w, h, max(_r(style, s), 4), 3.2 * s * (1.3 if _FRAME[0] else 1), 5))
     elif style == 'sketch':
         ws.jagged(cr, rrect_points(x, y, w, h, max(_r(style, s), 4), 4), random.Random(8), 1.6 * s, smooth=4)
+    elif style in CUSTOM:
+        CUSTOM[style](cr, x, y, w, h, s)
     else:
         rounded(cr, x, y, w, h, _r(style, s))
 
@@ -931,6 +934,426 @@ FIELD.update({'storm': ('#4f9dff', '#dff0ff'), 'venom': ('#ff1a2e', '#ff6a3a'),
               'butterfly': ('#ff7ae0', '#b07cff'), 'snake': ('#7dff2e', '#e8ff5a')})
 
 
+# ──────────────────── the fourth set: Halloween, Desert, Neo Tokyo, Abyss,
+# Enchanted Forest, Cosmos, Samurai, Steampunk, Glacier, Witchcraft,
+# Golden Dragon, Graffiti (their objects live in lib/wsfour.py)
+import wsfour as w4  # noqa: E402
+
+RADIUS.update({'halloween': 22, 'desert': 14, 'abyss': 26, 'forest': 24, 'cosmos': 22, 'samurai': 14,
+               'steampunk': 16, 'glacier': 18, 'witch': 22, 'dragon': 18, 'graffiti': 20})
+CHAMFER['neotokyo'] = 18
+WAVES.update({'halloween': (2.4, 21, 140, 'mix'), 'abyss': (2.6, 23, 170, 'mix'), 'forest': (2.0, 29, 150, 'mix'),
+              'witch': (2.2, 31, 130, 'mix')})
+
+
+def _glacier_shape(cr, x, y, w, h, s):
+    """Ice: an edge broken into small sharp facets."""
+    ws.jagged(cr, rrect_points(x, y, w, h, max(_r('glacier', s), 4), 4), random.Random(19),
+              1.7 * s * (1.3 if _FRAME[0] else 1), smooth=0)
+
+
+CUSTOM['glacier'] = _glacier_shape
+SHAPED.update({'neotokyo', 'glacier'} | set(WAVES))
+
+
+def _pts(style, x, y, w, h, s, step=3.0):
+    """The outline of a style as points (with outward normals)."""
+    r = max(_r(style, s), 4)
+    if style in WAVES:
+        amp, seed, wl, kind = WAVES[style]
+        return wavy(x, y, w, h, r, amp * s, seed, wl, kind)
+    return rrect_points(x, y, w, h, r, step)
+
+
+def _rim(cr, p, col, width, layers=((10, 0.07), (5, 0.16), (2.4, 0.4)), core=None, s=1.0):
+    for extra, a in layers:
+        p()
+        cr.set_line_width(width + extra * s)
+        cr.set_source_rgba(*col, a)
+        cr.stroke()
+    p()
+    cr.set_line_width(width)
+    cr.set_source_rgba(*(core or col), 1)
+    cr.stroke()
+
+
+def card_halloween(cr, p, x, y, w, h, cx, cy, s):
+    rnd = random.Random(201)
+    orange, purple = rgb('#ff7a1a'), rgb('#9a3cff')
+    halo(cr, cx, cy, w * 0.8, rgb('#5a1a6a'), 0.25)
+    _tint(cr, p, '#0c0610', 0.55)
+    ring = [(px, py) for px, py, _nx, _ny in _pts('halloween', x, y, w, h, s)]
+    for k, (wd, sh) in enumerate(((5.8, 0), (4.0, 7))):   # gnarled roots round the frame
+        pts = ring[sh:] + ring[:sh] + ring[sh:sh + 1]
+        w3.tube(cr, pts, [wd * s * (0.8 + 0.3 * math.sin(i / 7 + k)) for i in range(len(pts))], rgb('#1a0c08'),
+                rgb('#ff8a2a'), rgb('#ff6a10'), 0.2)
+    _rim(cr, p, orange, 1.0 * s, layers=((6, 0.1), (2.5, 0.3)), core=rgb('#ffb45a'), s=s)
+    w4.cobweb(cr, x - 2 * s, y - 2 * s, (52 if _far() else 30) * s, 0.12, 1.45, (0.85, 0.82, 0.95), 0.9)
+    k = 1.0 if _far() else 0.8
+    w4.candle(cr, x + w - 26 * s * k, y + h + 2 * s, 20 * s * k, 7 * s * k)
+    w4.candle(cr, x + w - 12 * s * k, y + h + 2 * s, 13 * s * k, 6 * s * k, lean=0.08)
+    w4.pumpkin(cr, x + 12 * s * k, y + h - 6 * s * k, 17 * s * k)
+    for bx, by, bs, fl in ((x + w - 34 * s, y - 10 * s, 11, 0.9), (x + w - 4 * s, y + 18 * s, 8, 0.3)):
+        w4.bat(cr, bx, by, bs * s * k, rnd.uniform(-0.3, 0.3), fl)
+    if _far():
+        w4.moon(cr, x + w + 40 * s, y - 34 * s, 26 * s, rgb('#ff6ad5'), glow=0.35)
+        for _ in range(5):
+            w4.bat(cr, x + w + rnd.uniform(-20, 110) * s, y + rnd.uniform(-70, 40) * s, rnd.uniform(6, 12) * s,
+                   rnd.uniform(-0.4, 0.4), rnd.random())
+        w4.pumpkin(cr, x + 44 * s, y + h + 10 * s, 11 * s, lit=0.8)
+        w4.skull(cr, x + w - 48 * s, y + h + 6 * s, 16 * s, eyes=orange)
+        w4.tombstone(cr, x - 30 * s, y + h + 8 * s, 18 * s, 30 * s, rgb('#1c1024'), purple)
+        w4.tombstone(cr, x - 56 * s, y + h + 10 * s, 18 * s, 34 * s, rgb('#1c1024'), purple, cross=True)
+        for _ in range(26):
+            cr.arc(x + rnd.uniform(-60, w + 60) * 1, y + rnd.uniform(-60, h + 40), rnd.uniform(0.6, 1.6) * s, 0, 2 * PI)
+            cr.set_source_rgba(*rgb(rnd.choice(('#ff8a2a', '#ffc43d'))), rnd.uniform(0.3, 0.8))
+            cr.fill()
+
+
+def card_desert(cr, p, x, y, w, h, cx, cy, s):
+    gold = rgb('#ffb52e')
+    halo(cr, cx, y + h, w * 0.8, rgb('#a85a10'), 0.25)
+    _tint(cr, p, '#180a04', 0.55)
+    if _far():
+        w4.sun_disc(cr, x - 12 * s, y + 48 * s, 30 * s)
+    w4._wood(cr, p, 6.5 * s)
+    for px_, py_, _nx, _ny in rrect_points(x, y, w, h, max(_r('desert', s), 4), 40 * s):   # nails
+        cr.arc(px_, py_, 1.3 * s, 0, 2 * PI)
+        cr.set_source_rgba(0.78, 0.72, 0.62, 0.95)
+        cr.fill()
+    _rim(cr, lambda: rounded(cr, x + 5 * s, y + 5 * s, w - 10 * s, h - 10 * s, max(_r('desert', s) - 5 * s, 2)),
+         gold, 0.9 * s, layers=((5, 0.1), (2, 0.3)), s=s)
+    k = 1.0 if _far() else 0.8
+    w4.cactus(cr, x + 6 * s, y + h + 4 * s, 54 * s * k)
+    w4.bull_skull(cr, x + w - 2 * s, y + 2 * s, 34 * s * k, glow=gold)
+    if _far():
+        w4.cactus(cr, x - 26 * s, y + h + 6 * s, 34 * s, arms=((1, 0.5, 0.3),))
+        w4.cactus(cr, x + w + 30 * s, y + h + 6 * s, 44 * s, arms=((-1, 0.4, 0.3), (1, 0.6, 0.2)))
+        w4.tumbleweed(cr, x + w * 0.7, y + h + 10 * s, 9 * s, rgb('#b8844a'), seed=4)
+        w4.sheriff_star(cr, x + w + 26 * s, y + 30 * s, 9 * s, gold)
+
+
+def card_neotokyo(cr, p, x, y, w, h, cx, cy, s):
+    rnd = random.Random(207)
+    pink, cyan, magenta = rgb('#ff3ab4'), rgb('#3ad8ff'), rgb('#e03cff')
+    halo(cr, x, cy, w * 0.6, magenta, 0.22)
+    halo(cr, x + w, cy, w * 0.6, rgb('#3a6bff'), 0.22)
+    _tint(cr, p, '#0a0620', 0.55)
+    w4._neon_split(cr, p, x, y, w, h, pink, cyan, 1.6 * s, dash=[40 * s, 7 * s, 12 * s, 7 * s])
+    shape(cr, 'neotokyo', x + 4 * s, y + 4 * s, w - 8 * s, h - 8 * s, s)
+    cr.set_line_width(0.8 * s)
+    cr.set_source_rgba(*magenta, 0.45)
+    cr.stroke()
+    k = 1.0 if _far() else 0.8
+    w4.blossom_branch(cr, x + CHAMFER['neotokyo'] * s * 0.6, y + 2 * s, 70 * s * k, -2.4, random.Random(3), n=10)
+    w4.torii(cr, x + w - 36 * s * k, y + h + 3 * s, 54 * s * k, 46 * s * k, rgb('#140620'), pink)
+    if _far():
+        bx, by = x - 34 * s, y + h * 0.18   # a vertical sign: 未来
+        rounded(cr, bx, by, 26 * s, 56 * s, 3 * s)
+        cr.set_source_rgba(*rgb('#12062a'), 0.95)
+        cr.fill()
+        w4.neon(cr, lambda: rounded(cr, bx, by, 26 * s, 56 * s, 3 * s), pink, 1.2 * s)
+        w4.kanji(cr, 'mi', bx + 4 * s, by + 5 * s, 18 * s, pink, 1.6 * s)
+        w4.kanji(cr, 'rai', bx + 4 * s, by + 31 * s, 18 * s, pink, 1.6 * s)
+        w4.kitsune(cr, x + w + 30 * s, y + 26 * s, 40 * s, magenta, 1.4 * s)
+        for _ in range(14):
+            w4.petal(cr, x + rnd.uniform(-80, w + 80) * 1, y + rnd.uniform(-60, h + 50), rnd.uniform(4, 7) * s,
+                     rnd.uniform(0, 3))
+
+
+def card_abyss(cr, p, x, y, w, h, cx, cy, s):
+    rnd = random.Random(209)
+    cyan = rgb('#2ccfff')
+    halo(cr, cx, cy, w * 0.8, rgb('#0a3a8a'), 0.3)
+    _tint(cr, p, '#020c1e', 0.55)
+    pts = _pts('abyss', x, y, w, h, s)
+    for lw, col, a in ((7 * s, (0, 0, 0), 0.5), (4.8 * s, rgb('#0a2440'), 1.0), (1.6 * s, rgb('#1a5a8a'), 0.7)):
+        poly(cr, pts)
+        cr.set_line_width(lw)
+        cr.set_source_rgba(*col, a)
+        cr.stroke()
+    for px_, py_, nx, ny in pts[::6]:   # barnacles and glowing polyps
+        if rnd.random() < 0.4:
+            r = rnd.uniform(1.0, 2.4) * s
+            cr.arc(px_ + nx * rnd.uniform(-1, 2) * s, py_ + ny * rnd.uniform(-1, 2) * s, r, 0, 2 * PI)
+            cr.set_source_rgba(*rgb(rnd.choice(('#5af0ff', '#7ab8ff', '#ff7ab8'))), rnd.uniform(0.4, 0.9))
+            cr.fill()
+    _rim(cr, p, cyan, 0.9 * s, layers=((6, 0.1), (2.5, 0.3)), core=rgb('#bff6ff'), s=s)
+    k = 1.0 if _far() else 0.8
+    w4.jellyfish(cr, x + 14 * s * k, y - 4 * s * k, 34 * s * k, rgb('#5ab8ff'), 0.3)
+    base, rim = rgb('#06142a'), rgb('#3ad8ff')
+    for i in range(3):   # an octopus arm curling out of the lower right corner
+        ang = 0.35 + i * 0.35 + rnd.uniform(-0.15, 0.15)
+        L = rnd.uniform(0.6, 1.0) * 70 * s * k
+        tp = [(x + w - 6 * s + math.cos(ang) * L * t / 23 + math.sin(t / 3 + i) * 6 * s * k * t / 23,
+               y + h - 6 * s + math.sin(ang) * L * t / 23 + math.cos(t / 3.5 + i) * 5 * s * k * t / 23)
+              for t in range(24)]
+        w4.tentacle(cr, tp, 7 * s * k, base, rim, cyan)
+    w4.seaweed(cr, x + 8 * s, y + h + 4 * s, 40 * s * k, rgb('#2affc8'), 0.3)
+    w4.coral(cr, x + 22 * s * k, y + h + 4 * s, 34 * s * k, rgb('#ff5a9a'), random.Random(5), depth=2)
+    for _ in range(10 if _far() else 4):
+        w4.bubble(cr, x + w + rnd.uniform(-10, 40) * s * k, y + rnd.uniform(0, h * 0.6), rnd.uniform(1.4, 3.6) * s,
+                  cyan, 0.8)
+    if _far():
+        w4.jellyfish(cr, x + w + 50 * s, y + 30 * s, 22 * s, rgb('#b07cff'), 1.7, 0.85)
+        w4.jellyfish(cr, x - 46 * s, y + h * 0.55, 18 * s, rgb('#2affc8'), 2.9, 0.75)
+
+
+def card_forest(cr, p, x, y, w, h, cx, cy, s):
+    rnd = random.Random(211)
+    lime, yellow = rgb('#b8f02e'), rgb('#ffe066')
+    halo(cr, cx, cy, w * 0.8, rgb('#2a5a08'), 0.28)
+    _tint(cr, p, '#050d04', 0.55)
+    ring = [(px, py) for px, py, _nx, _ny in _pts('forest', x, y, w, h, s)]
+    w4.vine(cr, ring + ring[:1], 4.6 * s, rnd)
+    sh = len(ring) // 3
+    w4.vine(cr, ring[sh:] + ring[:sh + 1], 3.0 * s, rnd, leaves=False)
+    _rim(cr, lambda: shape(cr, 'forest', x + 5 * s, y + 5 * s, w - 10 * s, h - 10 * s, s), lime, 0.8 * s,
+         layers=((5, 0.1), (2, 0.25)), s=s)
+    k = 1.0 if _far() else 0.8
+    w4.mushroom(cr, x + 6 * s, y + h + 3 * s, 34 * s * k, tilt=0.1)
+    w4.mushroom(cr, x + 30 * s * k, y + h + 3 * s, 22 * s * k, tilt=-0.15)
+    w4.mushroom(cr, x + w - 10 * s, y + h + 3 * s, 26 * s * k, tilt=-0.1)
+    w3.butterfly(cr, x + w - 8 * s, y + 6 * s, 14 * s * k, 0.35, yellow, rgb('#ffb000'))
+    for _ in range(14 if _far() else 6):
+        w4.firefly(cr, x + rnd.uniform(-30, w + 30) * 1, y + rnd.uniform(-30, h + 20), rnd.uniform(0.9, 1.8) * s,
+                   yellow, rnd.uniform(0.5, 1))
+    if _far():
+        w3.butterfly(cr, x - 30 * s, y + 30 * s, 12 * s, -0.3, yellow, rgb('#ffb000'))
+        w4.mushroom(cr, x + w + 30 * s, y + h + 8 * s, 30 * s, tilt=-0.2)
+        for _ in range(8):   # leaves drifting
+            ws.leaf(cr, x + rnd.uniform(-60, w + 60), y + rnd.uniform(-50, h + 40), rnd.uniform(8, 16) * s,
+                    rnd.uniform(0, 2 * PI), rgb(rnd.choice(('#9ce02e', '#6fc42a', '#c8f04a'))))
+
+
+def card_cosmos(cr, p, x, y, w, h, cx, cy, s):
+    rnd = random.Random(213)
+    violet, magenta = rgb('#6a6cff'), rgb('#c04dff')
+    if _far():
+        ws.stars(cr, (x - 160 * s, y - 120 * s, w + 320 * s, h + 240 * s), 110, 73,
+                 colors=('#ffffff', '#b8c0ff', '#ffb8f0'))
+    else:
+        ws.stars(cr, (x - 6, y - 6, w + 12, 12), int(w / 40), 73)
+    halo(cr, x, y, w * 0.6, magenta, 0.2)
+    halo(cr, x + w, y + h, w * 0.6, rgb('#3a5aff'), 0.22)
+    _tint(cr, p, '#05061a', 0.55)
+    for lw, col, a in ((8 * s, (0, 0, 0), 0.5), (5.4 * s, rgb('#1a1c44'), 1.0), (2 * s, rgb('#3a3c7a'), 0.8)):
+        p()
+        cr.set_line_width(lw)
+        cr.set_source_rgba(*col, a)
+        cr.stroke()
+    for px_, py_, nx, ny in rrect_points(x, y, w, h, max(_r('cosmos', s), 4), 26 * s):   # hull lights
+        col = rgb(rnd.choice(('#ff3a6a', '#c04dff', '#3ad8ff', '#8a8cff')))
+        if rnd.random() < 0.6:
+            halo(cr, px_, py_, 4 * s, col, 0.6)
+            cr.arc(px_, py_, 1.1 * s, 0, 2 * PI)
+            cr.set_source_rgba(*col, 1)
+            cr.fill()
+    _rim(cr, lambda: shape(cr, 'cosmos', x + 4 * s, y + 4 * s, w - 8 * s, h - 8 * s, s), violet, 1.1 * s,
+         layers=((7, 0.1), (3, 0.3)), core=rgb('#c8ccff'), s=s)
+    k = 1.0 if _far() else 0.8
+    w4.planet(cr, x + w - 4 * s, y + 4 * s, 22 * s * k, rgb('#9a8cff'), rgb('#3a2a9a'), ring_c=rgb('#d8b8ff'))
+    if _far():
+        w4.helmet(cr, x - 14 * s, y + h - 16 * s, 56 * s)
+        for _ in range(5):
+            w4.asteroid(cr, x + rnd.uniform(-90, w + 90), y + h + rnd.uniform(10, 50) * s, rnd.uniform(4, 10) * s, rnd)
+        w4.planet(cr, x + w + 60 * s, y + h - 10 * s, 9 * s, rgb('#ff8ab8'), rgb('#6a2a6a'), ring=False)
+        cr.move_to(x - 120 * s, y - 60 * s)   # a shooting star
+        cr.line_to(x - 40 * s, y - 20 * s)
+        cr.set_line_width(1.4 * s)
+        cr.set_source(neon_grad(x - 120 * s, x - 40 * s, ['#8a8cff', '#ffffff'], 0.8))
+        cr.stroke()
+    else:
+        w4.asteroid(cr, x + 10 * s, y + h + 2 * s, 5 * s, rnd)
+
+
+def card_samurai(cr, p, x, y, w, h, cx, cy, s):
+    rnd = random.Random(215)
+    red = rgb('#ff2a2a')
+    halo(cr, cx, cy, w * 0.8, rgb('#6a0010'), 0.3)
+    _tint(cr, p, '#0c0306', 0.55)
+    if _far():
+        w4.moon(cr, x - 10 * s, y + 52 * s, 34 * s, rgb('#ff3a2a'), glow=0.45, craters=False)
+        w4.pagoda(cr, x - 10 * s, y + h * 0.75, 96 * s, rgb('#12040a'), rgb('#ff6a3a'))
+    for lw, col, a in ((8 * s, (0, 0, 0), 0.55), (5 * s, rgb('#1e0a0e'), 1.0), (1.2 * s, rgb('#5a2028'), 0.9)):
+        p()
+        cr.set_line_width(lw)
+        cr.set_source_rgba(*col, a)
+        cr.stroke()
+    for px_, py_, nx, ny in rrect_points(x, y, w, h, max(_r('samurai', s), 4), 3)[::34]:   # red-hot seams
+        if rnd.random() < 0.6:
+            tx, ty = -ny, nx
+            pts = [(px_ + tx * i * 2.6 * s, py_ + ty * i * 2.6 * s + math.sin(i * 1.7) * 0.6 * s) for i in range(9)]
+            w4.neon(cr, lambda: w4._poly(cr, pts), red, 1.0 * s, 0.9, layers=((4, 0.15), (1.8, 0.4)))
+    _rim(cr, lambda: shape(cr, 'samurai', x + 5 * s, y + 5 * s, w - 10 * s, h - 10 * s, s), red, 0.9 * s,
+         layers=((6, 0.1), (2.4, 0.3)), s=s)
+    k = 1.0 if _far() else 0.8
+    w4.blossom_branch(cr, x + w - 6 * s, y + 4 * s, 90 * s * k, -0.55, random.Random(17), n=12)
+    L = min(w * 0.75, 320 * s) if _far() else min(w * 0.4, 150 * s)
+    w4.katana(cr, x + w - L * 0.62, y + h + 12 * s * k, -0.18, L)
+    for _ in range(18 if _far() else 6):
+        w4.petal(cr, x + rnd.uniform(-60, w + 60) * 1, y + rnd.uniform(-50, h + 30), rnd.uniform(4, 7) * s * k,
+                 rnd.uniform(0, 3), rgb(rnd.choice(('#ff8ab8', '#ffb0cc', '#ff6a9a'))), 0.9)
+    if _far():
+        w4.kanji(cr, 'samurai', x + w + 20 * s, y + h * 0.3, 44 * s, red, 2.0 * s)
+
+
+def card_steampunk(cr, p, x, y, w, h, cx, cy, s):
+    amber = rgb('#f0a13a')
+    halo(cr, cx, cy, w * 0.8, rgb('#8a4a0a'), 0.25)
+    _tint(cr, p, '#0e0703', 0.55)
+    w4.brass_path(cr, p, 5.5 * s)
+    for px_, py_, _nx, _ny in rrect_points(x, y, w, h, max(_r('steampunk', s), 4), 18 * s):
+        w4.rivet(cr, px_, py_, 1.5 * s)
+    for sx, sy in ((x, y), (x + w, y), (x, y + h), (x + w, y + h)):   # joints at the corners
+        cr.arc(sx + (6 if sx == x else -6) * s, sy + (6 if sy == y else -6) * s, 5.5 * s, 0, 2 * PI)
+        cr.set_source(w4._radial(sx, sy, 7 * s, rgb('#ffe2a0'), rgb('#6a3a12'), 1, 1, -0.3, -0.3))
+        cr.fill()
+    _rim(cr, lambda: shape(cr, 'steampunk', x + 6 * s, y + 6 * s, w - 12 * s, h - 12 * s, s), amber, 0.8 * s,
+         layers=((5, 0.08), (2, 0.25)), s=s)
+    k = 1.0 if _far() else 0.8
+    w4.gear(cr, x + 6 * s, y + h - 6 * s, 30 * s * k, 14, 0.1, glow=amber)
+    w4.gear(cr, x + 40 * s * k, y + h + 10 * s * k, 17 * s * k, 10, 0.32)
+    w4.gauge(cr, x + w - 8 * s, y + 8 * s, 17 * s * k, 0.5)
+    if _far():
+        w4.airship(cr, x - 60 * s, y - 30 * s, 110 * s)
+        w4.steam(cr, x + w + 20 * s, y + 4 * s, 18 * s, 0.9, 7)
+        w4.steam(cr, x + 60 * s, y + h + 22 * s, 14 * s, 0.8, 8)
+        w4.gear(cr, x + w + 22 * s, y + h - 20 * s, 22 * s, 12, 0.2)
+
+
+def card_glacier(cr, p, x, y, w, h, cx, cy, s):
+    rnd = random.Random(219)
+    ice = rgb('#4fc8ff')
+    halo(cr, cx, cy, w * 0.8, rgb('#0a3a8a'), 0.3)
+    _tint(cr, p, '#03101f', 0.55)
+    for lw, col, a in ((12 * s, ice, 0.07), (6 * s, ice, 0.18), (3 * s, w4._mix(ice, (1, 1, 1), 0.4), 0.85),
+                       (1.1 * s, (0.92, 0.98, 1), 0.95)):
+        p()
+        cr.set_line_width(lw)
+        cr.set_source_rgba(*col, a)
+        cr.stroke()
+    r = max(_r('glacier', s), 4)
+    k = 1.0 if _far() else 0.8
+    for px_, py_, nx, ny in rrect_points(x, y, w, h, r, 3)[::4]:
+        if ny < -0.9 and rnd.random() < 0.45:   # crystals growing on the top edge
+            hh = rnd.uniform(5, 12) * s * k
+            w4.ice_shard(cr, px_, py_ + 1, hh * 0.5, hh, rnd.uniform(-0.25, 0.25), ice, 0.9)
+        elif ny > 0.9 and rnd.random() < 0.5:   # icicles under the bottom one
+            w4.icicle(cr, px_, py_ - 1, rnd.uniform(4, 13) * s * k, rnd.uniform(2.4, 4) * s * k, ice, 0.9)
+    w4.crystal_cluster(cr, x + 12 * s, y + h + 2 * s, 60 * s * k, ice, random.Random(4), n=6)
+    w4.snowflake(cr, x + w - 4 * s, y + 4 * s, 14 * s * k, rgb('#cdf6ff'), 0.95)
+    for _ in range(16 if _far() else 6):
+        w4.snowflake(cr, x + rnd.uniform(-40, w + 40), y + rnd.uniform(-40, h + 30), rnd.uniform(2, 4.5) * s,
+                     rgb('#cdf6ff'), rnd.uniform(0.5, 0.9), 0.7 * s, rot=rnd.uniform(0, 1))
+    if _far():
+        w4.wolf(cr, x + w + 34 * s, y + h - 30 * s, 84 * s, rgb('#1c3a66'), rgb('#9ae8ff'), rgb('#4fe0ff'))
+        w4.crystal_cluster(cr, x + w - 30 * s, y + h + 4 * s, 34 * s, ice, random.Random(6), n=4)
+
+
+def card_witch(cr, p, x, y, w, h, cx, cy, s):
+    rnd = random.Random(221)
+    violet = rgb('#b43cff')
+    halo(cr, cx, cy, w * 0.8, rgb('#4a0a8a'), 0.3)
+    _tint(cr, p, '#0a0418', 0.55)
+    if _far():
+        w4.pentagram(cr, cx, cy, min(w, h) * 0.42, violet, 1.0 * s, 0.12)
+        w4.crescent(cr, x - 20 * s, y - 20 * s, 18 * s, rgb('#e8d8ff'))
+    ring = [(px, py) for px, py, _nx, _ny in _pts('witch', x, y, w, h, s)]
+    for k, (wd, sh) in enumerate(((3.6, 0), (2.6, 11))):
+        pts = ring[sh:] + ring[:sh] + ring[sh:sh + 1]
+        w3.tube(cr, pts, [wd * s] * len(pts), rgb('#120820'), rgb('#c060ff'), rgb('#9a2cff'), 0.2)
+        w4.thorns(cr, pts, rnd, rgb('#3a1a5a'), every=9, size=4 * s)
+    _rim(cr, p, violet, 0.8 * s, layers=((6, 0.1), (2.4, 0.3)), core=rgb('#e8c8ff'), s=s)
+    k = 1.0 if _far() else 0.8
+    w4.raven(cr, x + w - 22 * s * k, y + 3 * s, 46 * s * k)
+    for i, (dx, hh) in enumerate(((4, 22), (16, 15), (-8, 12))):
+        w4.candle(cr, x + dx * s * k + 6 * s, y + h + 3 * s, hh * s * k, 6.5 * s * k, lean=0.06 * (i - 1))
+    for _ in range(14 if _far() else 5):
+        ws.sparkle(cr, x + rnd.uniform(-40, w + 40), y + rnd.uniform(-40, h + 30), rnd.uniform(1.5, 3.2) * s,
+                   rgb(rnd.choice(('#e8b8ff', '#b43cff', '#ffffff'))), 0.85)
+    if _far():
+        w4.spellbook(cr, x + w + 10 * s, y + h + 6 * s, 70 * s)
+        for _ in range(4):
+            w4.wisp(cr, x + rnd.uniform(-50, w + 50), y + rnd.uniform(-40, h), rnd.uniform(8, 13) * s,
+                    rgb(rnd.choice(('#c84cff', '#7aff9a'))), 0.8)
+
+
+def card_dragon(cr, p, x, y, w, h, cx, cy, s):
+    rnd = random.Random(223)
+    gold = rgb(w4.GOLD)
+    halo(cr, cx, cy, w * 0.8, rgb('#8a1a04'), 0.3)
+    _tint(cr, p, '#140604', 0.55)
+    r = max(_r('dragon', s), 4)
+    w4._gold_rim(cr, p, lambda: rounded(cr, x + 5 * s, y + 5 * s, w - 10 * s, h - 10 * s, max(r - 5 * s, 2)))
+    if _far():
+        w4.meander(cr, x + 30 * s, x + w - 30 * s, y + 10 * s, 6 * s, gold, 1.0 * s, 0.4)
+        w4.meander(cr, x + 30 * s, x + w - 30 * s, y + h - 10 * s, 6 * s, gold, 1.0 * s, 0.4)
+    k = 1.0 if _far() else 0.8
+    w4.cloud_scroll(cr, x + 4 * s, y + h - 2 * s, 40 * s * k, rgb('#ffc42e'), 0.9)
+    w4.cloud_scroll(cr, x + w - 10 * s, y + 4 * s, 34 * s * k, rgb('#ffc42e'), 0.85, flip=-1)
+    # the dragon: its head at the top left, the body along the top and down
+    # the right side, the tail at the bottom right
+    ring = rrect_points(x - 3 * s, y - 3 * s, w + 6 * s, h + 6 * s, r + 3 * s, 4)
+    n = len(ring)
+    if _far():   # round the top and down the right side, to the bottom right corner
+        end = next(i for i, q in enumerate(ring) if q[3] > 0.9 and q[0] < x + w - r)
+    else:        # along the top edge only (a window has neighbours)
+        end = n // 3
+    span = ring[n // 40:end]
+    pts = [(px + math.sin(i / 6) * 2.2 * s * nx, py + math.sin(i / 6) * 2.2 * s * ny)
+           for i, (px, py, nx, ny) in enumerate(span)][::-1]   # tail first, the head at the top left
+    w4.dragon_body(cr, pts, (11 if _far() else 7) * s, head_k=3.0)
+    if _far():
+        for lx in (x - 30 * s, x + w + 30 * s):
+            w4.lantern_cn(cr, lx, y + 10 * s, 34 * s)
+        for _ in range(12):
+            w4.sakura(cr, x + rnd.uniform(-60, w + 60), y + rnd.uniform(-50, h + 40), rnd.uniform(3, 5) * s,
+                      rgb('#ff6a8a'), rnd.uniform(0, 1))
+        w4.coin(cr, x + w + 40 * s, y + h - 20 * s, 10 * s, gold)
+
+
+def card_graffiti(cr, p, x, y, w, h, cx, cy, s):
+    rnd = random.Random(227)
+    halo(cr, x, y, w * 0.6, rgb('#eb1fed'), 0.18)
+    halo(cr, x + w, y + h, w * 0.6, rgb('#25ebf5'), 0.18)
+    _tint(cr, p, '#0a0614', 0.55)
+    cr.save()
+    cr.translate(1.8 * s, 1.6 * s)
+    w4.spray(cr, p, rgb('#eb1fed'), 1.5 * s, rnd, 0.75, speckle=False)
+    cr.restore()
+    w4.spray(cr, p, rgb('#25ebf5'), 2.0 * s, rnd)
+    r = max(_r('graffiti', s), 4)
+    k = 1.0 if _far() else 0.8
+    for px_, py_, nx, ny in rrect_points(x, y, w, h, r, 30 * s):   # splats and drips on the edge
+        if rnd.random() < 0.45:
+            col = rgb(rnd.choice(w4.SPRAY))
+            w4.splat(cr, px_, py_, rnd.uniform(3, 6) * s * k, col, rnd, 0.9, spikes=10)
+            if ny > 0.5:
+                w3.drip(cr, px_, py_ + 2 * s, rnd.uniform(6, 18) * s * k, 1.4 * s * k, col, 0.9)
+    w4.splat(cr, x + 4 * s, y + 4 * s, 16 * s * k, rgb('#ff2a5a'), random.Random(3), 0.85, drips=2)
+    w4.crown(cr, x + 6 * s, y + 4 * s, 34 * s * k, rgb('#eb1fed'), 1.4 * s)
+    w4.splat(cr, x + w - 6 * s, y + h - 6 * s, 14 * s * k, rgb('#ffe014'), random.Random(4), 0.85, drips=3)
+    if _far():
+        w4.skull(cr, x + w + 34 * s, y + 30 * s, 30 * s, eyes=rgb('#25ebf5'))
+        w4.crown(cr, x + w + 34 * s, y + 12 * s, 28 * s, rgb('#25ebf5'), 1.3 * s)
+        w4.spray_can(cr, x + w + 30 * s, y + h + 10 * s, 56 * s, rgb('#eb1fed'))
+        w4.spray_can(cr, x - 30 * s, y + h + 10 * s, 48 * s, rgb('#25ebf5'))
+        for _ in range(6):
+            w4.splat(cr, x + rnd.uniform(-80, w + 80), y + rnd.uniform(-60, h + 50), rnd.uniform(3, 7) * s,
+                     rgb(rnd.choice(w4.SPRAY)), rnd, 0.8)
+
+
+CARDS.update({'halloween': card_halloween, 'desert': card_desert, 'neotokyo': card_neotokyo, 'abyss': card_abyss,
+              'forest': card_forest, 'cosmos': card_cosmos, 'samurai': card_samurai, 'steampunk': card_steampunk,
+              'glacier': card_glacier, 'witch': card_witch, 'dragon': card_dragon, 'graffiti': card_graffiti})
+FIELD.update({'halloween': ('#ff7a1a', '#c04dff'), 'desert': ('#ffb52e', '#ff6a2a'),
+              'neotokyo': ('#ff3ab4', '#3ad8ff'), 'abyss': ('#2ccfff', '#7a9aff'), 'forest': ('#b8f02e', '#ffe066'),
+              'cosmos': ('#8a8cff', '#c04dff'), 'samurai': ('#ff3a3a', '#ff8ab8'),
+              'steampunk': ('#f0a13a', '#ffd27a'), 'glacier': ('#4fc8ff', '#e8f8ff'),
+              'witch': ('#b43cff', '#ffb347'), 'dragon': ('#ffb22e', '#ff3a2a'), 'graffiti': ('#25ebf5', '#eb1fed')})
+
+
 # ─────────────────────────────────────────────────────── lock clock
 def clock_colors(style):
     """(time, date) colors of the lock clock in the style (hex)."""
@@ -972,7 +1395,15 @@ def paint_clock(cr, style, cx, cy, w, h, s, bg=(0.05, 0.06, 0.1)):
     cr.set_source(g)
     cr.paint()
     cr.restore()
+    # what hangs off the plate's bottom (cacti, gears, candles...) melts away
+    # before it reaches the login card right under the clock
+    cr.push_group()
     paint_window(cr, style, x, y, w, h, radius, True)
+    cr.pop_group_to_source()
+    g = cairo.LinearGradient(0, y + h + 2 * s, 0, y + h + 10 * s)
+    g.add_color_stop_rgba(0, 0, 0, 0, 1)
+    g.add_color_stop_rgba(1, 0, 0, 0, 0)
+    cr.mask(g)
 
 
 # ═══════════════════════════════════════════ command line (ScreenLocker)

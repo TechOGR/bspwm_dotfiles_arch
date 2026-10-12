@@ -51,7 +51,7 @@ LOCK_NAME = 'roundborders-back' if ROLE == 'backs' else 'roundborders'
 LOCK = os.path.join(HOME, '.cache', os.environ.get('USER', 'user'), f'.{LOCK_NAME}.lock')
 BACK_LOCK = os.path.join(HOME, '.cache', os.environ.get('USER', 'user'), '.roundborders-back.lock')
 # picom-rules.conf gives these square corners: no ring for them
-SQUARE = {'mpv', 'Viewnior', 'retroarch'}
+SQUARE = {'mpv', 'Viewnior', 'retroarch', 'UserCard', 'RiceLyrics', 'RiceVisualizer'}   # no theme frame: they draw their own
 # translucent terminals get the theme's background drawn under them; they
 # are found by the program behind the window (Term opens them as FloaTerm...)
 TERM_PROCS = {'alacritty', 'kitty', 'ghostty', 'st', 'xterm', 'uxterm', 'urxvt', 'foot', 'wezterm-gui',

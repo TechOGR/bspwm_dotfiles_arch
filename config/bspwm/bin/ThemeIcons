@@ -31,7 +31,10 @@ EMBLEM = {'storm': '\U000f0593', 'venom': '\U000f068c', 'butterfly': '\U000f1589
           'fire': '\U000f0238', 'lava': '\U000f1a83', 'nature': '\U000f032a', 'liquid': '\U000f058c',
           'glass': '\U000f0674', 'crystal': '\U000f01c8', 'neon': '\U000f06e8', 'cyber': '\U000f06a9',
           'hud': '\U000f01a4', 'holo': '\U000f0018', 'pixel': '\U000f0bc9', 'sketch': '\U000f03eb',
-          'minimal': '\U000f08c7'}
+          'minimal': '\U000f08c7',
+          'halloween': '\U000f0ba3', 'desert': '\U000f0db5', 'neotokyo': '\U000f1334', 'abyss': '\U000f0f01',
+          'forest': '\U000f07df', 'cosmos': '\U000f14de', 'samurai': '\U000f0787', 'steampunk': '\U000f0493',
+          'glacier': '\U000f0717', 'witch': '\U000f1667', 'dragon': '\U000f1331', 'graffiti': '\U000f0665'}
 
 
 def find_theme(name):

@@ -29,15 +29,31 @@ from riceui import Gdk, cairo  # noqa: E402
 HOME = os.path.expanduser('~')
 OUT = os.path.join(HOME, '.cache', 'rice-surfaces')
 ROFI = os.path.join(HOME, '.config/bspwm/config/rofi-themes')
-JG_W, JG_H = 288, 576        # jgmenu's main menu window (menu_width 273 + icon room, its items)
+JG_W, JG_H = 288, 576        # the canvas cut in tiles for jgmenu's main menu
+JG_SIZE = os.path.join(OUT, 'jgmenu-size')   # the menu's real size (bin/JgMenuSkin writes it)
+
+
+def jg_size():
+    """The main menu's window size: the scene must have exactly its outline,
+    or its waves / chamfer / corners don't meet the frame drawn over it and
+    the scene shows past the frame."""
+    try:
+        w, h = (int(v) for v in open(JG_SIZE).read().split())
+        if 100 < w <= JG_W and 100 < h <= JG_H:
+            return w, h
+    except (OSError, ValueError):
+        pass
+    return 285, 576
 M = 3     # the frame right at the window's edge: picom's shadow and rounded corners (14 px, as
           # the menus' own) then hug the theme's frame instead of drawing a second border around it
 
 
-def render(path, W, H, pal, style, radius=14, frame=True):
+def render(path, W, H, pal, style, radius=14, frame=True, size=None):
+    """The panel on a W x H picture (size: the panel's own, when smaller)."""
     surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, W, H)
     cr = cairo.Context(surf)
-    ui.themed_panel(cr, W, H, M, pal, radius=radius, veil=0.66, style=style, frame=frame)
+    pw, ph = size or (W, H)
+    ui.themed_panel(cr, pw, ph, M, pal, radius=radius, veil=0.66, style=style, frame=frame)
     surf.write_to_png(path + '.tmp')
     os.replace(path + '.tmp', path)
 
@@ -77,7 +93,7 @@ def main():
     full = os.path.join(OUT, 'jgmenu.png')
     # the scene only: bin/JgMenuSkin draws the frame above the menu, with room
     # for its ornaments (inside the menu they were cut at its edges)
-    render(full, JG_W, JG_H, pal, style, radius=14, frame=False)
+    render(full, JG_W, JG_H, pal, style, radius=14, frame=False, size=jg_size())
     img = cairo.ImageSurface.create_from_png(full)
     T = 144
     for r in range(JG_H // T):

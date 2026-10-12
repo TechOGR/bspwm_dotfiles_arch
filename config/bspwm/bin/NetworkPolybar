@@ -59,14 +59,26 @@ case ${RICE_KIT:-$WIN_SKIN} in
     cyber) AD=󰄼 AU=󰄿 ;;
     hud) AD=󰶡 AU=󰶣 ;;
     pixel) AD=󰜯 AU=󰜸 ;;
+    halloween) AD=󰁋 AU=󰁣 ;;
+    desert) AD=󰁆 AU=󰁞 ;;
+    neotokyo) AD=󰶹 AU=󰶼 ;;
+    abyss) AD=󰳛 AU=󰳡 ;;
+    forest) AD=󰦿 AU=󰧇 ;;
+    cosmos) AD=󰶡 AU=󰶣 ;;
+    samurai) AD=󰍝 AU=󰍠 ;;
+    steampunk) AD=󰛀 AU=󰛃 ;;
+    glacier) AD=󱖙 AU=󱖗 ;;
+    witch) AD=󰁊 AU=󰁢 ;;
+    dragon) AD=󰬦 AU=󰬬 ;;
+    graffiti) AD=󰁉 AU=󰁡 ;;
     *) AD=󰜮 AU=󰜷 ;;
 esac
 L='' M='  ' R=''
 case ${RICE_KIT:-$WIN_SKIN} in
     hud)   L="%{F$C_DIM}[%{F-}" M="%{F$C_DIM}] [%{F-}" R="%{F$C_DIM}]%{F-}" ;;
-    cyber) M=" %{F$C_DIM}//%{F-} " ;;
+    cyber|neotokyo) M=" %{F$C_DIM}//%{F-} " ;;
     pixel) M=" %{F$C_DIM}▪%{F-} " ;;
-    sketch|nature|butterfly|minimal) M="  %{F$C_DIM}·%{F-}  " ;;
+    sketch|nature|butterfly|minimal|forest|samurai|witch|desert) M="  %{F$C_DIM}·%{F-}  " ;;
 esac
 
 prev_iface='' prev_rx=0 prev_tx=0 prev_t=0

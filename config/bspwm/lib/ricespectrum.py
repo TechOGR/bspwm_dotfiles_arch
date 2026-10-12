@@ -41,7 +41,10 @@ STYLE_NAMES = {'bars': ('Bars', 'Barras'), 'mirror': ('Mirror', 'Espejo'), 'wave
 THEME_STYLE = {'pixel': 'blocks', 'cyber': 'dots', 'hud': 'dots', 'neon': 'bars', 'glass': 'mirror',
                'crystal': 'mirror', 'liquid': 'terrain', 'nature': 'terrain', 'holo': 'radial',
                'storm': 'wave', 'venom': 'mirror', 'lava': 'terrain', 'fire': 'bars', 'sketch': 'wave',
-               'butterfly': 'radial', 'snake': 'wave', 'minimal': 'bars'}
+               'butterfly': 'radial', 'snake': 'wave', 'minimal': 'bars',
+               'halloween': 'mirror', 'desert': 'terrain', 'neotokyo': 'dots', 'abyss': 'wave', 'forest': 'terrain',
+               'cosmos': 'radial', 'samurai': 'bars', 'steampunk': 'blocks', 'glacier': 'mirror', 'witch': 'radial',
+               'dragon': 'bars', 'graffiti': 'dots'}
 
 
 class Analyzer:
@@ -194,7 +197,7 @@ def resample(vals, n):
     return out
 
 
-def draw(cr, style, x, y, w, h, an, cols, t=0.0, bands=None, glow=True, center=None, radius=None):
+def draw(cr, style, x, y, w, h, an, cols, t=0.0, bands=None, glow=True, center=None, radius=None, reach=None):
     """cols: 2-4 rgb tuples (low -> high). center/radius for 'radial'."""
     levels, peaks, wave = an.frame() if an else ([0.0] * 48, [0.0] * 48, [0.0] * 128)
     if bands:
@@ -203,7 +206,7 @@ def draw(cr, style, x, y, w, h, an, cols, t=0.0, bands=None, glow=True, center=N
           'blocks': _blocks, 'terrain': _terrain}.get(style, _bars)
     cr.save()
     if style == 'radial':
-        fn(cr, x, y, w, h, levels, peaks, wave, cols, t, glow, center, radius)
+        fn(cr, x, y, w, h, levels, peaks, wave, cols, t, glow, center, radius, reach)
     else:
         fn(cr, x, y, w, h, levels, peaks, wave, cols, t, glow)
     cr.restore()
@@ -269,10 +272,10 @@ def _wave(cr, x, y, w, h, lv, _pk, wv, cols, t, glow):
         cr.stroke()
 
 
-def _radial(cr, x, y, w, h, lv, pk, _wv, cols, t, glow, center=None, radius=None):
+def _radial(cr, x, y, w, h, lv, pk, _wv, cols, t, glow, center=None, radius=None, reach=None):
     cx, cy = center or (x + w / 2, y + h / 2)
     r0 = radius or min(w, h) * 0.28
-    reach = min(w, h) / 2 - r0 - 2
+    reach = reach if reach is not None else min(w, h) / 2 - r0 - 2
     n = len(lv)
     rot = t * 0.15
     for i in range(n * 2):       # both halves: symmetric
@@ -349,11 +352,20 @@ def _blocks(cr, x, y, w, h, lv, pk, _wv, cols, _t, _glow):
 
 
 def _terrain(cr, x, y, w, h, lv, _pk, _wv, cols, t, glow):
+    """A filled landscape. Its ends slope down to the ground and fade out,
+    so it never ends on a cut (a straight wall) wherever the window is."""
     n = len(lv)
-    pts = [(x + i * w / (n - 1), y + h - max(0.02, v) * h * 0.95) for i, v in enumerate(lv)]
+    edge = max(2, int(n * 0.12))   # the bands that slope down at each end
+
+    def taper(i):
+        f = min(i, n - 1 - i) / edge
+        return 1.0 if f >= 1 else f * f * (3 - 2 * f)   # smoothstep
+    base = y + h
+    pts = [(x, base)]
+    pts += [(x + (i + 1) * w / (n + 1), base - max(0.02, v) * taper(i) * h * 0.95) for i, v in enumerate(lv)]
+    pts.append((x + w, base))
+    cr.push_group()
     _smooth(cr, pts)
-    cr.line_to(x + w, y + h)
-    cr.line_to(x, y + h)
     cr.close_path()
     g = cairo.LinearGradient(0, y, 0, y + h)
     g.add_color_stop_rgba(0, *cols[-1], 0.75)
@@ -366,3 +378,11 @@ def _terrain(cr, x, y, w, h, lv, _pk, _wv, cols, t, glow):
         cr.set_source(_grad(cr, x, 0, x + w, 0, cols, a))
         cr.set_line_width(lw)
         cr.stroke()
+    cr.pop_group_to_source()
+    m = cairo.LinearGradient(x, 0, x + w, 0)   # and both sides melt away
+    k = min(0.18, 60 / max(1.0, w))
+    m.add_color_stop_rgba(0, 0, 0, 0, 0)
+    m.add_color_stop_rgba(k, 0, 0, 0, 1)
+    m.add_color_stop_rgba(1 - k, 0, 0, 0, 1)
+    m.add_color_stop_rgba(1, 0, 0, 0, 0)
+    cr.mask(m)

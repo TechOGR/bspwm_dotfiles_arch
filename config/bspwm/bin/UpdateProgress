@@ -84,6 +84,7 @@ class Run:
         self.hooks_n = 0
         self.phase = 'sync'
         self.cancelled = False
+        self.rx0 = None           # bytes received when the download started
 
     def emit(self, *a):
         GLib.idle_add(lambda: (self.win.event(*a), False)[1])
@@ -129,7 +130,10 @@ class Run:
             for line in chunk.splitlines():
                 self.log_line(line)
             if self.phase == 'download' and self.total_dl:
-                self.emit('download', max(0, cache_size() - self.cache0) / self.total_dl)
+                if self.rx0 is None:
+                    self.rx0 = net_rx()
+                got = max(cache_size() - self.cache0, net_rx() - self.rx0, 0)
+                self.emit('download', min(0.99, got / self.total_dl))
             time.sleep(0.4)
 
     def log_line(self, line):
@@ -240,6 +244,21 @@ def to_bytes(s):
                                 'TiB': 1024 ** 4}.get(m.group(2), 1)
 
 
+def net_rx():
+    """Bytes received so far by every interface but the loopback: pacman
+    downloads into a directory of root's (download-XXXX) the cache can't
+    see, the network counter grows all along."""
+    total = 0
+    try:
+        for line in open('/proc/net/dev').read().splitlines()[2:]:
+            name, data = line.split(':', 1)
+            if name.strip() != 'lo':
+                total += int(data.split()[0])
+    except (OSError, ValueError, IndexError):
+        pass
+    return total
+
+
 def cache_size():
     total = 0
     for root, _d, files in os.walk(CACHE_DIR):
@@ -259,16 +278,27 @@ class Bar(Gtk.DrawingArea):
     def __init__(self, win):
         super().__init__()
         self.win = win
-        self.frac = 0.0
-        self.shown = 0.0
+        self.frac = 0.0           # the real progress
+        self.creep_to = 0.0       # where it may creep to while a phase gives no numbers
+        self.shown = 0.0          # what is drawn: follows frac smoothly
         self.indeterminate = False
+        self.on_shown = None      # called with the shown fraction (the % label)
         self.set_size_request(-1, 44)
         self.connect('draw', self.on_draw)
-        self.t0 = time.monotonic()
+        self.t0 = self.last = time.monotonic()
         GLib.timeout_add(33, self.tick)
 
     def tick(self):
-        self.shown += (self.frac - self.shown) * 0.18   # eased
+        now = time.monotonic()
+        dt = min(0.2, now - self.last)
+        self.last = now
+        if self.creep_to > self.frac:   # no numbers: keep moving, slower and slower, never past the phase
+            self.frac += (self.creep_to - self.frac) * min(1.0, 0.35 * dt)
+        gap = self.frac - self.shown
+        if gap > 0:   # a steady glide: a big jump takes a second or two, never a leap
+            self.shown += min(gap, max(0.0015, gap * 3.0 * dt, 0.12 * dt))
+        if self.on_shown:
+            self.on_shown(self.shown)
         self.queue_draw()
         return True
 
@@ -278,7 +308,7 @@ class Bar(Gtk.DrawingArea):
         t = time.monotonic() - self.t0
         x, y, w, h = 14, H / 2 - 6, W - 28, 12
         style = self.win.style
-        ui.level_bar(cr, style, x, y, w, h, 0 if self.indeterminate else self.shown, self.win.pal)
+        ui.level_bar(cr, style, x, y, w, h, self.shown, self.win.pal)
         acc = self.win.acc
         cr.save()
         ui.rounded(cr, x, y, w, h, h / 2)
@@ -378,6 +408,7 @@ class UpdateProgress(ra.CenterWindow):
         row = Gtk.Box(spacing=10)
         self.pct = ra.label('0%', 'big')
         row.pack_start(self.pct, False, False, 0)
+        self.bar.on_shown = lambda f: self.pct.set_text(f'{min(100, round(f * 100))}%')
         self.count = ra.label('', 'val')
         self.count.set_valign(Gtk.Align.CENTER)
         row.pack_start(self.count, True, True, 0)
@@ -417,7 +448,10 @@ class UpdateProgress(ra.CenterWindow):
         f = a + (b - a) * max(0.0, min(1.0, inner))
         if f >= self.bar.frac:
             self.bar.frac = f
-        self.pct.set_text(f'{round(self.bar.frac * 100)}%')
+        # until the next number it may creep on inside the phase (the
+        # phases without numbers move the whole way, slowly)
+        nxt = a + (b - a) * (0.92 if self.bar.indeterminate else min(1.0, inner + 0.12))
+        self.bar.creep_to = max(self.bar.frac, min(b - 0.005, nxt))
 
     def event(self, kind, *a):
         if kind == 'line':
@@ -463,8 +497,7 @@ class UpdateProgress(ra.CenterWindow):
         self.warn.hide()
         n = len(self.run.done_pkgs)
         if rc == 0:
-            self.bar.frac = 1.0
-            self.pct.set_text('100%')
+            self.bar.frac = self.bar.creep_to = 1.0
             self.phase_l.set_text(T('System up to date'))
             self.what.set_text(f'{n} {T("packages updated")}' if n else T('Nothing to do'))
         elif self.run.cancelled:

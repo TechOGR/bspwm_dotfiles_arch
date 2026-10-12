@@ -14,8 +14,8 @@
 # Set environment variables
 export PATH="$HOME/.config/bspwm/bin:$PATH"
 export XDG_CURRENT_DESKTOP='bspwm'
-export XCURSOR_THEME="Bibata-Modern-Classic"
-export XCURSOR_SIZE="24"
+export XCURSOR_THEME="default"	# ~/.icons/default follows the theme (03-gtk.sh)
+unset XCURSOR_SIZE	# Xcursor.size (03-gtk.sh, RiceEditor -> Appearance -> Cursor) sets it
 
 ## Fix java applications
 export _JAVA_AWT_WM_NONREPARENTING=1
@@ -68,6 +68,9 @@ run() {
 
 # Launch sxhkd daemon
 run sxhkd -c "${HOME}"/.config/bspwm/config/sxhkdrc
+
+# Super tapped alone = super + space (the app launcher)
+command -v xcape >/dev/null && { pkill -x xcape; xcape -e 'Super_L=Super_L|space'; }
 
 # Load current theme
 "${HOME}"/.config/bspwm/bin/Theme.sh

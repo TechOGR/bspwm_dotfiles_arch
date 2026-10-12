@@ -804,6 +804,553 @@ def bg_snake(cr, w, h, rnd):
 SCENES.update({'storm': bg_storm, 'venom': bg_venom, 'butterfly': bg_butterfly, 'snake': bg_snake})
 
 
+# ─────────────────── the fourth set: Halloween, Desert, Neo Tokyo, Abyss,
+# Enchanted Forest, Cosmos, Samurai, Steampunk, Glacier, Witchcraft,
+# Golden Dragon, Graffiti (their objects live in lib/wsfour.py)
+def _area(w, h, per):
+    return max(1, int(w * h / per))
+
+
+def _fog(cr, w, y0, h0, c, a=0.18, rnd=None):
+    """A bank of fog lying over a band of the picture."""
+    rnd = rnd or random.Random(5)
+    for _ in range(int(w / 70) + 3):
+        x = rnd.uniform(-0.1, 1.1) * w
+        cr.save()
+        cr.translate(x, y0 + rnd.uniform(0, h0))
+        cr.scale(rnd.uniform(90, 200), rnd.uniform(14, 30))
+        g = cairo.RadialGradient(0, 0, 0, 0, 0, 1)
+        g.add_color_stop_rgba(0, *c, a)
+        g.add_color_stop_rgba(1, *c, 0)
+        cr.set_source(g)
+        cr.arc(0, 0, 1, 0, 2 * PI)
+        cr.fill()
+        cr.restore()
+
+
+def bg_halloween(cr, w, h, rnd):
+    import wsfour as w4
+    base(cr, w, h, ['#1e0b2a', '#110618', '#060208'])
+    mr = min(w, h) * 0.13
+    w4.moon(cr, w * 0.82, h * 0.2, mr, rgb('#ff6ad5'), glow=0.5)
+    for _ in range(4):   # clouds drifting over the moon
+        cx, cy = w * 0.82 + rnd.uniform(-mr * 2, mr * 2), h * 0.2 + rnd.uniform(-mr * 0.6, mr * 0.9)
+        cr.save()
+        cr.translate(cx, cy)
+        cr.scale(mr * rnd.uniform(1.2, 2.2), mr * rnd.uniform(0.18, 0.3))
+        cr.arc(0, 0, 1, 0, 2 * PI)
+        cr.restore()
+        cr.set_source_rgba(*rgb('#1a0a24'), 0.75)
+        cr.fill()
+    for _ in range(_area(w, h, 90000) + 4):
+        w4.bat(cr, w * 0.82 + rnd.uniform(-mr * 4, mr * 3), h * 0.2 + rnd.uniform(-mr * 1.5, mr * 2.5),
+               rnd.uniform(6, 16), rnd.uniform(-0.4, 0.4), rnd.random(), a=0.9)
+    sil = rgb('#08030c')
+    w4.dead_tree(cr, -10, h + 10, h * 0.55, -1.25, 22, rnd, sil, 5)
+    w4.dead_tree(cr, w + 10, h + 10, h * 0.5, -1.9, 20, rnd, sil, 5)
+    for k in range(int(w / 90) + 2):   # the graveyard
+        gx = rnd.uniform(0.08, 0.92) * w
+        gh = rnd.uniform(26, 54)
+        w4.tombstone(cr, gx, h + 4, gh * 0.6, gh, rgb('#120818'), rgb('#7a3aaa'), cross=rnd.random() < 0.3, a=0.9)
+    _fog(cr, w, h * 0.82, h * 0.2, rgb('#8a5aaa'), 0.16, rnd)
+    for k in range(int(w / 260) + 2):
+        w4.pumpkin(cr, rnd.uniform(0.05, 0.95) * w, h - rnd.uniform(8, 20), rnd.uniform(12, 22), lit=1.0)
+    for _ in range(_area(w, h, 6000)):   # embers
+        cr.arc(rnd.uniform(0, w), rnd.uniform(0, h), rnd.uniform(0.6, 1.8), 0, 2 * PI)
+        cr.set_source_rgba(*rgb(rnd.choice(('#ff8a2a', '#ffc43d', '#c04dff'))), rnd.uniform(0.15, 0.6))
+        cr.fill()
+    grain(cr, w, h, 0.08, seed=61)
+    reading_shade(cr, w, h, 0.5)
+    vignette(cr, w, h, 0.55)
+
+
+def bg_desert(cr, w, h, rnd):
+    import wsfour as w4
+    base(cr, w, h, ['#3a1608', '#24100a', '#0c0503'], angle=0.0)
+    ws.stars(cr, (0, 0, w, h * 0.3), _area(w, h, 9000), 63, colors=('#ffe8c8', '#ffffff'))
+    hz = h * 0.62
+    halo(cr, w * 0.24, hz, max(w, h) * 0.45, rgb('#ff6a1a'), 0.32)
+    w4.sun_disc(cr, w * 0.24, hz - h * 0.04, min(w, h) * 0.11)
+    for layer, (col, amp, yk) in enumerate((('#4a1a14', 0.16, 0.0), ('#2a0e08', 0.1, 0.05))):   # mesas
+        cr.move_to(0, h)
+        x = 0
+        while x <= w + 40:
+            top = hz + yk * h - rnd.uniform(0, amp * h) * (1 if rnd.random() < 0.35 else 0.2)
+            cr.line_to(x, top)
+            x += rnd.uniform(40, 120)
+            cr.line_to(x, top)
+            x += rnd.uniform(10, 30)
+        cr.line_to(w, h)
+        cr.close_path()
+        cr.set_source_rgba(*rgb(col), 0.95)
+        cr.fill()
+    for k in range(3):   # dunes
+        cr.move_to(0, h)
+        y0 = h * (0.78 + k * 0.07)
+        cr.line_to(0, y0)
+        for i in range(1, 21):
+            cr.line_to(w * i / 20, y0 - math.sin(i / 20 * PI * (1.5 + k) + k) * h * 0.04)
+        cr.line_to(w, h)
+        cr.close_path()
+        cr.set_source(_vg(h * 0.7, h, ('#8a4a1a', '#5a2a0e', '#3a1a08')[k], '#120804'))
+        cr.fill()
+    for k in range(int(w / 300) + 2):
+        cx = rnd.choice((rnd.uniform(0.02, 0.2), rnd.uniform(0.8, 0.98))) * w
+        w4.cactus(cr, cx, h * rnd.uniform(0.86, 0.98), h * rnd.uniform(0.18, 0.3), a=0.95)
+    w4.bull_skull(cr, w * 0.62, h * 0.93, min(w, h) * 0.08, a=0.85)
+    cr.set_line_width(1)   # heat haze
+    for k in range(6):
+        yy = hz - h * 0.05 + k * 6
+        cr.move_to(0, yy)
+        for i in range(1, 41):
+            cr.line_to(w * i / 40, yy + math.sin(i * 1.3 + k) * 1.5)
+        cr.set_source_rgba(1, 0.8, 0.5, 0.04)
+        cr.stroke()
+    for _ in range(_area(w, h, 5000)):   # dust
+        cr.arc(rnd.uniform(0, w), rnd.uniform(h * 0.4, h), rnd.uniform(0.5, 1.4), 0, 2 * PI)
+        cr.set_source_rgba(1, 0.75, 0.4, rnd.uniform(0.08, 0.3))
+        cr.fill()
+    grain(cr, w, h, 0.07, seed=63)
+    reading_shade(cr, w, h, 0.5)
+    vignette(cr, w, h, 0.5)
+
+
+def _vg(y0, y1, top, bottom, a=1.0):
+    g = cairo.LinearGradient(0, y0, 0, y1)
+    g.add_color_stop_rgba(0, *rgb(top), a)
+    g.add_color_stop_rgba(1, *rgb(bottom), a)
+    return g
+
+
+def bg_neotokyo(cr, w, h, rnd):
+    import wsfour as w4
+    base(cr, w, h, ['#160a3a', '#0c0626', '#04020e'])
+    for fx, fy, col in ((0.15, 0.25, '#e03cff'), (0.85, 0.3, '#3a6bff'), (0.5, 0.95, '#ff3ab4')):
+        halo(cr, w * fx, h * fy, max(w, h) * 0.4, rgb(col), 0.14)
+    ws.stars(cr, (0, 0, w, h * 0.35), _area(w, h, 12000), 65)
+    lights = [rgb('#ff3ab4'), rgb('#3ad8ff'), rgb('#ffd23a'), rgb('#b44dff')]
+    w4.skyline(cr, -10, w + 10, h * 0.8, h * 0.18, h * 0.6, rnd, rgb('#100a2e'), lights, 0.95, (24, 60), 3)
+    w4.torii(cr, w * 0.72, h * 0.86, min(w, h) * 0.22, min(w, h) * 0.2, rgb('#08041a'), rgb('#ff3ab4'))
+    w4.skyline(cr, -10, w + 10, h * 0.92, h * 0.06, h * 0.32, rnd, rgb('#07041a'), lights, 1.0, (30, 80), 3.4)
+    for k in range(int(w / 220) + 2):   # neon signs on the fronts
+        sx, sy = rnd.uniform(0.04, 0.96) * w, rnd.uniform(0.45, 0.8) * h
+        col = rnd.choice(lights)
+        sh = rnd.uniform(40, 90)
+        w4.neon(cr, lambda: ws.rounded(cr, sx, sy, 10, sh, 2), col, 1.4, 0.75)
+    bx, by = w * 0.08, h * 0.42   # the big sign: 未来
+    ws.rounded(cr, bx, by, 40, 86, 4)
+    cr.set_source_rgba(*rgb('#12062a'), 0.95)
+    cr.fill()
+    w4.neon(cr, lambda: ws.rounded(cr, bx, by, 40, 86, 4), rgb('#ff3ab4'), 1.8)
+    w4.kanji(cr, 'mi', bx + 7, by + 8, 26, rgb('#ff3ab4'), 2.2)
+    w4.kanji(cr, 'rai', bx + 7, by + 46, 26, rgb('#ff3ab4'), 2.2)
+    for k in range(int(w / 30)):   # the wet street mirrors the lights
+        x = rnd.uniform(0, w)
+        g = cairo.LinearGradient(0, h * 0.92, 0, h)
+        col = rnd.choice(lights)
+        g.add_color_stop_rgba(0, *col, 0.3)
+        g.add_color_stop_rgba(1, *col, 0)
+        cr.rectangle(x, h * 0.92, rnd.uniform(2, 8), h * 0.08)
+        cr.set_source(g)
+        cr.fill()
+    cr.set_line_width(0.8)   # rain
+    for _ in range(_area(w, h, 1800)):
+        x, y, L = rnd.uniform(0, w), rnd.uniform(0, h), rnd.uniform(8, 20)
+        cr.move_to(x, y)
+        cr.line_to(x - L * 0.2, y + L)
+    cr.set_source_rgba(*rgb('#b8a8ff'), 0.07)
+    cr.stroke()
+    w4.blossom_branch(cr, w + 6, -6, min(w, h) * 0.45, 2.4, rnd, n=22)
+    for _ in range(_area(w, h, 20000)):
+        w4.petal(cr, rnd.uniform(0, w), rnd.uniform(0, h), rnd.uniform(4, 8), rnd.uniform(0, 3), a=0.7)
+    grain(cr, w, h, 0.07, seed=65)
+    reading_shade(cr, w, h, 0.5)
+    vignette(cr, w, h, 0.5)
+
+
+def bg_abyss(cr, w, h, rnd):
+    import wsfour as w4
+    base(cr, w, h, ['#04284a', '#021630', '#010814'], angle=0.1)
+    rays(cr, w * 0.3, -h * 0.1, w, h, rgb('#5ad8ff'), 7, 0.07, 0.8, rnd)
+    rays(cr, w * 0.75, -h * 0.1, w, h, rgb('#5ad8ff'), 5, 0.05, 0.7, rnd)
+    cr.set_line_width(1.2)   # caustics near the surface
+    for k in range(9):
+        yy = h * 0.03 + k * h * 0.025
+        cr.move_to(0, yy)
+        for i in range(1, 61):
+            cr.line_to(w * i / 60, yy + math.sin(i * 0.9 + k * 1.7) * 5 + math.sin(i * 0.37 + k) * 3)
+        cr.set_source_rgba(*rgb('#8ae8ff'), 0.06)
+        cr.stroke()
+    for _ in range(_area(w, h, 2500)):   # marine snow
+        cr.arc(rnd.uniform(0, w), rnd.uniform(0, h), rnd.uniform(0.4, 1.3), 0, 2 * PI)
+        cr.set_source_rgba(0.8, 0.95, 1, rnd.uniform(0.08, 0.35))
+        cr.fill()
+    for k in range(_area(w, h, 90000) + 3):   # jellyfish drifting along the edges
+        jx = rnd.choice((rnd.uniform(0.03, 0.2), rnd.uniform(0.78, 0.97))) * w
+        w4.jellyfish(cr, jx, rnd.uniform(0.1, 0.6) * h, rnd.uniform(26, 60),
+                     rgb(rnd.choice(('#5ab8ff', '#b07cff', '#2affc8', '#ff7ab8'))), rnd.uniform(0, 6), 0.75)
+    cr.move_to(0, h)   # the sea floor
+    for i in range(0, 41):
+        cr.line_to(w * i / 40, h * 0.9 - math.sin(i * 0.5) * h * 0.03 - rnd.uniform(0, h * 0.02))
+    cr.line_to(w, h)
+    cr.close_path()
+    cr.set_source_rgba(*rgb('#020a16'), 0.95)
+    cr.fill()
+    for k in range(int(w / 70) + 2):
+        x = rnd.uniform(0, w)
+        if rnd.random() < 0.5:
+            w4.coral(cr, x, h * 0.95, rnd.uniform(30, 70), rgb(rnd.choice(('#ff5a9a', '#2affc8', '#ffb84a'))), rnd,
+                     0.85, depth=3)
+        else:
+            w4.seaweed(cr, x, h, rnd.uniform(40, 110), rgb(rnd.choice(('#1ab890', '#2affc8'))), rnd.uniform(0, 6), 0.8)
+    base_c, rim = rgb('#030c1c'), rgb('#3ad8ff')
+    for i in range(3):   # a giant arm reaching up from the lower right
+        pts = [(w + 20 - t * w * 0.012 * (1 + i * 0.3), h + 20 - t * h * 0.016 + math.sin(t / 4 + i) * 16)
+               for t in range(36)]
+        w4.tentacle(cr, pts, rnd.uniform(18, 30), base_c, rim, rgb('#2ccfff'), a=0.9)
+    for _ in range(_area(w, h, 15000)):
+        w4.bubble(cr, rnd.uniform(0, w), rnd.uniform(0, h), rnd.uniform(1.5, 5), rgb('#5af0ff'), 0.5)
+    grain(cr, w, h, 0.07, seed=67)
+    reading_shade(cr, w, h, 0.5)
+    vignette(cr, w, h, 0.55)
+
+
+def bg_forest(cr, w, h, rnd):
+    import wsfour as w4
+    base(cr, w, h, ['#10260a', '#081406', '#020602'])
+    rays(cr, w * 0.4, -h * 0.15, w, h, rgb('#e8ff8a'), 8, 0.06, 0.9, rnd)
+    for k in range(int(w / 140) + 3):   # trunks, far and near
+        tx = rnd.uniform(-0.05, 1.05) * w
+        tw = rnd.uniform(14, 46)
+        near = rnd.random() < 0.4
+        col = rgb('#060e04' if near else '#0c1c08')
+        cr.rectangle(tx - tw / 2, 0, tw, h)
+        cr.set_source_rgba(*col, 0.95 if near else 0.75)
+        cr.fill()
+        cr.set_line_width(1)
+        for i in range(int(h / 40)):   # bark
+            cr.move_to(tx - tw * 0.3 + rnd.uniform(-3, 3), i * 40 + rnd.uniform(0, 20))
+            cr.line_to(tx - tw * 0.3 + rnd.uniform(-3, 3), i * 40 + rnd.uniform(25, 40))
+        cr.set_source_rgba(*rgb('#3a5a1a'), 0.25)
+        cr.stroke()
+    _fog(cr, w, h * 0.55, h * 0.3, rgb('#8ac85a'), 0.08, rnd)
+    for k in range(int(w / 50)):   # ferns and grass at the feet
+        gx = rnd.uniform(0, w)
+        for i in range(5):
+            ang = -PI / 2 + rnd.uniform(-0.8, 0.8)
+            L = rnd.uniform(20, 60)
+            cr.move_to(gx, h)
+            cr.curve_to(gx + math.cos(ang) * L * 0.3, h + math.sin(ang) * L * 0.6, gx + math.cos(ang) * L * 0.8,
+                        h + math.sin(ang) * L * 0.8, gx + math.cos(ang) * L, h + math.sin(ang) * L * 0.7)
+        cr.set_line_width(2)
+        cr.set_source_rgba(*rgb('#1e4a10'), 0.9)
+        cr.stroke()
+    for k in range(int(w / 160) + 2):
+        w4.mushroom(cr, rnd.uniform(0.03, 0.97) * w, h - rnd.uniform(2, 10), rnd.uniform(18, 40),
+                    tilt=rnd.uniform(-0.2, 0.2))
+    vine_pts = [(w * 0.02 + math.sin(i / 5) * 12, i * h / 30) for i in range(18)]
+    w4.vine(cr, vine_pts, 6, rnd)
+    for _ in range(_area(w, h, 4000)):   # fireflies
+        w4.firefly(cr, rnd.uniform(0, w), rnd.uniform(h * 0.15, h), rnd.uniform(0.8, 2.0), rgb('#e8ff6a'),
+                   rnd.uniform(0.25, 0.9))
+    for _ in range(_area(w, h, 120000) + 2):
+        w3_butterfly(cr, rnd.uniform(0.05, 0.95) * w, rnd.uniform(0.1, 0.6) * h, rnd.uniform(7, 12))
+    grain(cr, w, h, 0.07, seed=69)
+    reading_shade(cr, w, h, 0.5)
+    vignette(cr, w, h, 0.55)
+
+
+def w3_butterfly(cr, x, y, s):
+    import wsthree as w3
+    w3.butterfly(cr, x, y, s, random.Random(int(x)).uniform(-0.5, 0.5), rgb('#ffe066'), rgb('#ffb000'), 0.8)
+
+
+def bg_cosmos(cr, w, h, rnd):
+    import wsfour as w4
+    base(cr, w, h, ['#0c0e34', '#06071e', '#02020a'])
+    for _ in range(9):   # nebula
+        halo(cr, rnd.uniform(0, w), rnd.uniform(0, h), rnd.uniform(0.2, 0.45) * max(w, h),
+             rgb(rnd.choice(('#c04dff', '#3a5aff', '#ff4fa8', '#6a6cff'))), rnd.uniform(0.06, 0.14))
+    grain(cr, w, h, 0.12, seed=71, soft=True, op=cairo.OPERATOR_SOFT_LIGHT)
+    ws.stars(cr, (0, 0, w, h), _area(w, h, 1800), 71, colors=('#ffffff', '#b8c0ff', '#ffd8f0'))
+    for _ in range(_area(w, h, 60000) + 3):
+        ws.sparkle(cr, rnd.uniform(0, w), rnd.uniform(0, h), rnd.uniform(3, 7), (1, 1, 1), 0.7)
+    pr = min(w, h) * 0.22
+    w4.planet(cr, w * 0.92, h * 0.3, pr, rgb('#8a7cff'), rgb('#2a1a7a'), tilt=-0.25, ring_c=rgb('#d8b8ff'), a=0.9)
+    w4.planet(cr, w * 0.68, h * 0.12, pr * 0.18, rgb('#ff8ab8'), rgb('#6a2a6a'), ring=False, a=0.9)
+    for _ in range(int(w / 50) + 4):   # an asteroid belt low across the picture
+        f = rnd.random()
+        w4.asteroid(cr, f * w, h * (0.86 + math.sin(f * 3) * 0.06) + rnd.uniform(-20, 20), rnd.uniform(4, 16), rnd,
+                    a=0.9)
+    sx, sy = w * 0.2, h * 0.15   # a shooting star
+    g = cairo.LinearGradient(sx, sy, sx + 160, sy + 60)
+    g.add_color_stop_rgba(0, 1, 1, 1, 0)
+    g.add_color_stop_rgba(1, 1, 1, 1, 0.8)
+    cr.move_to(sx, sy)
+    cr.line_to(sx + 160, sy + 60)
+    cr.set_source(g)
+    cr.set_line_width(1.6)
+    cr.stroke()
+    w4.helmet(cr, w * 0.08, h * 0.82, min(w, h) * 0.14, a=0.85)
+    reading_shade(cr, w, h, 0.45)
+    vignette(cr, w, h, 0.5)
+
+
+def bg_samurai(cr, w, h, rnd):
+    import wsfour as w4
+    base(cr, w, h, ['#2e0612', '#16040a', '#060103'])
+    mr = min(w, h) * 0.16
+    w4.moon(cr, w * 0.18, h * 0.24, mr, rgb('#ff2a1a'), glow=0.55, craters=False)
+    for _ in range(5):   # streaks of cloud across the moon
+        cy = h * 0.24 + rnd.uniform(-mr, mr)
+        cr.save()
+        cr.translate(w * 0.18 + rnd.uniform(-mr, mr), cy)
+        cr.scale(mr * rnd.uniform(1.5, 3), mr * rnd.uniform(0.05, 0.12))
+        cr.arc(0, 0, 1, 0, 2 * PI)
+        cr.restore()
+        cr.set_source_rgba(*rgb('#1a0408'), 0.85)
+        cr.fill()
+    for k, (col, yk) in enumerate((('#2a0810', 0.62), ('#16040a', 0.74), ('#0a0205', 0.86))):   # mountains
+        cr.move_to(0, h)
+        x = 0
+        while x <= w:
+            cr.line_to(x, h * yk - rnd.uniform(0, h * 0.12))
+            x += rnd.uniform(40, 110)
+        cr.line_to(w, h)
+        cr.close_path()
+        cr.set_source_rgba(*rgb(col), 0.97)
+        cr.fill()
+        if k == 1:
+            w4.pagoda(cr, w * 0.2, h * 0.76, min(w, h) * 0.32, rgb('#0e0306'), rgb('#ff6a3a'))
+    _fog(cr, w, h * 0.7, h * 0.2, rgb('#aa3a4a'), 0.12, rnd)
+    for k in range(4):   # a sakura tree reaching in from the upper right
+        w4.blossom_branch(cr, w + 10, h * (0.02 + k * 0.1), min(w, h) * rnd.uniform(0.3, 0.5),
+                          PI + rnd.uniform(-0.4, 0.3), rnd, n=20)
+    for _ in range(_area(w, h, 9000)):
+        w4.petal(cr, rnd.uniform(0, w), rnd.uniform(0, h), rnd.uniform(4, 9), rnd.uniform(0, 3),
+                 rgb(rnd.choice(('#ff8ab8', '#ffb0cc', '#ff6a9a'))), rnd.uniform(0.4, 0.85))
+    L = min(w * 0.5, 420)
+    w4.katana(cr, w * 0.5, h * 0.95, -0.12, L, 0.85)
+    grain(cr, w, h, 0.08, seed=73)
+    reading_shade(cr, w, h, 0.5)
+    vignette(cr, w, h, 0.55)
+
+
+def bg_steampunk(cr, w, h, rnd):
+    import wsfour as w4
+    base(cr, w, h, ['#2e1608', '#180b04', '#080402'])
+    halo(cr, w * 0.7, h * 0.35, max(w, h) * 0.45, rgb('#ff8a1a'), 0.18)
+    for _ in range(5):   # big gears turning in the dark
+        w4.gear(cr, rnd.choice((rnd.uniform(-0.05, 0.2), rnd.uniform(0.8, 1.05))) * w, rnd.uniform(0, 1) * h,
+                rnd.uniform(60, 140), rnd.randint(14, 24), rnd.uniform(0, 1), a=0.18)
+    sil = rgb('#0c0603')
+    for k in range(int(w / 120) + 2):   # factory and smokestacks
+        fx = rnd.uniform(0, w)
+        fw, fh = rnd.uniform(30, 80), rnd.uniform(h * 0.1, h * 0.3)
+        cr.rectangle(fx, h - fh, fw, fh)
+        if rnd.random() < 0.6:
+            sx = fx + fw * rnd.uniform(0.2, 0.8)
+            sh = fh + rnd.uniform(40, 120)
+            cr.rectangle(sx - 5, h - sh, 10, sh)
+            for i in range(5):
+                w4.steam(cr, sx + i * 14 + rnd.uniform(-4, 4), h - sh - i * 26, 14 + i * 6, 0.35, int(sx) + i,
+                         (0.55, 0.45, 0.38))
+        cr.set_source_rgba(*sil, 0.95)
+        cr.fill()
+    w4.airship(cr, w * 0.75, h * 0.18, min(w, h) * 0.4, 0.85)
+    py_ = h * 0.92   # pipes along the bottom
+    for k in range(2):
+        yy = py_ + k * 16
+        w4.brass_path(cr, lambda: (cr.new_path(), cr.move_to(-10, yy), cr.line_to(w + 10, yy)), 9 - k * 2, 0.9)
+        for i in range(int(w / 120) + 1):
+            fx = i * 120 + rnd.uniform(0, 40)
+            ws.rounded(cr, fx - 4, yy - 7, 8, 14, 2)
+            cr.set_source(w4._vgrad(yy - 7, yy + 7, rgb('#ffd27a'), rgb('#6a3a12')))
+            cr.fill()
+    w4.gauge(cr, w * 0.9, h * 0.8, min(w, h) * 0.06, 0.4, 0.9)
+    for _ in range(_area(w, h, 7000)):   # sparks
+        cr.arc(rnd.uniform(0, w), rnd.uniform(0, h), rnd.uniform(0.5, 1.5), 0, 2 * PI)
+        cr.set_source_rgba(*rgb(rnd.choice(('#ffb84a', '#ff8a1a'))), rnd.uniform(0.15, 0.6))
+        cr.fill()
+    grain(cr, w, h, 0.1, seed=75)
+    reading_shade(cr, w, h, 0.5)
+    vignette(cr, w, h, 0.55)
+
+
+def bg_glacier(cr, w, h, rnd):
+    import wsfour as w4
+    base(cr, w, h, ['#0c1e40', '#06112c', '#020610'])
+    ws.stars(cr, (0, 0, w, h * 0.5), _area(w, h, 5000), 77, colors=('#ffffff', '#cdf6ff'))
+    for k, col in enumerate(('#2affc8', '#4fc8ff', '#8a7cff')):   # an aurora
+        cr.move_to(-10, h * 0.1)
+        for i in range(1, 31):
+            cr.line_to(w * i / 30, h * (0.12 + 0.06 * k) + math.sin(i * 0.5 + k * 1.3) * h * 0.04)
+        g = cairo.LinearGradient(0, h * 0.05, 0, h * 0.35)
+        g.add_color_stop_rgba(0, *rgb(col), 0)
+        g.add_color_stop_rgba(0.5, *rgb(col), 0.16)
+        g.add_color_stop_rgba(1, *rgb(col), 0)
+        cr.set_line_width(h * 0.08)
+        cr.set_source(g)
+        cr.stroke()
+    for k, (col, yk) in enumerate((('#1a3a66', 0.55), ('#0e2448', 0.68))):   # snowy peaks
+        cr.move_to(0, h)
+        x = 0
+        tops = []
+        while x <= w + 60:
+            ty = h * yk - rnd.uniform(0, h * 0.18)
+            tops.append((x, ty))
+            x += rnd.uniform(60, 160)
+        for i, (tx, ty) in enumerate(tops):
+            cr.line_to(tx, ty)
+        cr.line_to(w, h)
+        cr.close_path()
+        cr.set_source_rgba(*rgb(col), 0.95)
+        cr.fill()
+        for i in range(1, len(tops) - 1):   # snow caps down the slopes of each peak
+            (lx, ly), (tx, ty), (rx, ry) = tops[i - 1], tops[i], tops[i + 1]
+            if ty > ly or ty > ry:
+                continue
+            f = 0.3
+            ax, ay = tx + (lx - tx) * f, ty + (ly - ty) * f
+            bx, by = tx + (rx - tx) * f, ty + (ry - ty) * f
+            _poly(cr, [(tx, ty), (bx, by), (tx + (bx - tx) * 0.55, by - (by - ty) * 0.15),
+                       (tx + (bx - tx) * 0.2, ty + (by - ty) * 0.75), (tx + (ax - tx) * 0.35, ay - (ay - ty) * 0.1),
+                       (ax, ay)], True)
+            cr.set_source_rgba(0.85, 0.95, 1, 0.32 - k * 0.1)
+            cr.fill()
+    w4.crystal_cluster(cr, w * 0.04, h * 1.0, h * 0.45, rgb('#4fc8ff'), rnd, 0.8, n=7)
+    w4.crystal_cluster(cr, w * 0.96, h * 1.0, h * 0.36, rgb('#4fc8ff'), rnd, 0.75, n=6)
+    for i in range(int(w / 12)):   # the frozen lake
+        y = h * 0.86 + rnd.uniform(0, h * 0.14)
+        x = rnd.uniform(0, w)
+        cr.move_to(x, y)
+        cr.line_to(x + rnd.uniform(20, 80), y)
+    cr.set_line_width(1)
+    cr.set_source_rgba(0.7, 0.9, 1, 0.06)
+    cr.stroke()
+    w4.wolf(cr, w * 0.8, h * 0.8, min(w, h) * 0.22, rgb('#16305a'), rgb('#9ae8ff'), rgb('#4fe0ff'), 0.85)
+    for _ in range(_area(w, h, 3000)):   # snowfall
+        r = rnd.uniform(0.6, 2.2)
+        cr.arc(rnd.uniform(0, w), rnd.uniform(0, h), r, 0, 2 * PI)
+        cr.set_source_rgba(1, 1, 1, rnd.uniform(0.15, 0.6) * (r / 2.2))
+        cr.fill()
+    for _ in range(_area(w, h, 60000) + 2):
+        w4.snowflake(cr, rnd.uniform(0, w), rnd.uniform(0, h), rnd.uniform(6, 12), rgb('#cdf6ff'), 0.45, 1.0)
+    grain(cr, w, h, 0.06, seed=77)
+    reading_shade(cr, w, h, 0.45)
+    vignette(cr, w, h, 0.5)
+
+
+def bg_witch(cr, w, h, rnd):
+    import wsfour as w4
+    base(cr, w, h, ['#1e0a36', '#100422', '#05020c'])
+    violet = rgb('#b43cff')
+    w4.crescent(cr, w * 0.12, h * 0.16, min(w, h) * 0.07, rgb('#e8d8ff'), glow=0.4)
+    sil = rgb('#07020e')
+    w4.dead_tree(cr, w + 10, h + 10, h * 0.6, -1.85, 24, rnd, sil, 5)
+    w4.raven(cr, w * 0.82, h * 0.42, min(w, h) * 0.12, a=0.95)
+    R = min(w, h) * 0.3   # the magic circle
+    cx, cy = w * 0.68, h * 0.62
+    halo(cr, cx, cy, R * 1.6, violet, 0.12)
+    w4.pentagram(cr, cx, cy, R, violet, 1.6, 0.35)
+    cr.arc(cx, cy, R * 1.12, 0, 2 * PI)
+    cr.set_line_width(1)
+    cr.set_source_rgba(*violet, 0.25)
+    cr.stroke()
+    for k in range(12):   # runes round the circle
+        ang = k * PI / 6
+        rx, ry = cx + math.cos(ang) * R * 1.06, cy + math.sin(ang) * R * 1.06
+        cr.move_to(rx - 3, ry - 4)
+        cr.line_to(rx + 2, ry)
+        cr.line_to(rx - 2, ry + 4)
+    cr.set_source_rgba(*rgb('#e8b8ff'), 0.4)
+    cr.stroke()
+    for k in range(int(w / 110) + 3):   # candles on the floor
+        x = rnd.uniform(0.03, 0.97) * w
+        w4.candle(cr, x, h - rnd.uniform(4, 20), rnd.uniform(18, 40), rnd.uniform(6, 10), a=0.95,
+                  lean=rnd.uniform(-0.08, 0.08))
+    w4.spellbook(cr, w * 0.16, h * 0.93, min(w, h) * 0.22, 0.95)
+    _fog(cr, w, h * 0.8, h * 0.2, rgb('#6a3aaa'), 0.12, rnd)
+    for _ in range(_area(w, h, 30000) + 4):
+        w4.wisp(cr, rnd.uniform(0, w), rnd.uniform(0.15, 0.8) * h, rnd.uniform(10, 20),
+                rgb(rnd.choice(('#c84cff', '#7aff9a', '#ff6ad5'))), 0.55)
+    for _ in range(_area(w, h, 4500)):
+        ws.sparkle(cr, rnd.uniform(0, w), rnd.uniform(0, h), rnd.uniform(1.2, 3),
+                   rgb(rnd.choice(('#e8b8ff', '#ffffff'))), rnd.uniform(0.2, 0.6))
+    grain(cr, w, h, 0.08, seed=79)
+    reading_shade(cr, w, h, 0.5)
+    vignette(cr, w, h, 0.55)
+
+
+def bg_dragon(cr, w, h, rnd):
+    import wsfour as w4
+    base(cr, w, h, ['#300a06', '#180403', '#080101'])
+    halo(cr, w * 0.6, h * 0.5, max(w, h) * 0.5, rgb('#ff5a1a'), 0.12)
+    gold = rgb(w4.GOLD)
+    for _ in range(_area(w, h, 40000) + 5):   # clouds
+        w4.cloud_scroll(cr, rnd.uniform(0, w), rnd.uniform(0, h), rnd.uniform(40, 90), rgb('#c88a2a'),
+                        rnd.uniform(0.25, 0.45), rnd.choice((-1, 1)))
+    w4.pagoda(cr, w * 0.9, h, min(w, h) * 0.5, rgb('#120302'), rgb('#ff6a3a'))
+    pts = []   # the dragon winding across the lower half
+    for t in range(140):
+        f = t / 139
+        pts.append((w * (-0.05 + 1.0 * f), h * (0.85 - 0.25 * f) + math.sin(f * 9) * h * 0.08))
+    w4.dragon_body(cr, pts, min(w, h) * 0.06, a=0.8, head_k=2.6)
+    for k in range(int(w / 300) + 2):   # lanterns hanging from the top
+        w4.lantern_cn(cr, rnd.uniform(0.05, 0.95) * w, rnd.uniform(0, 30), rnd.uniform(30, 52), 0.95)
+    w4.meander(cr, 0, w, 10, 8, gold, 1.0, 0.25)
+    w4.meander(cr, 0, w, h - 10, 8, gold, 1.0, 0.25)
+    for _ in range(_area(w, h, 14000)):
+        w4.sakura(cr, rnd.uniform(0, w), rnd.uniform(0, h), rnd.uniform(3, 6), rgb('#ff6a8a'), rnd.uniform(0, 1),
+                  rnd.uniform(0.4, 0.8))
+    for _ in range(_area(w, h, 5000)):   # embers
+        cr.arc(rnd.uniform(0, w), rnd.uniform(0, h), rnd.uniform(0.5, 1.6), 0, 2 * PI)
+        cr.set_source_rgba(*rgb(rnd.choice(('#ffc42e', '#ff6a1a'))), rnd.uniform(0.15, 0.6))
+        cr.fill()
+    grain(cr, w, h, 0.08, seed=81)
+    reading_shade(cr, w, h, 0.5)
+    vignette(cr, w, h, 0.55)
+
+
+def bg_graffiti(cr, w, h, rnd):
+    import wsfour as w4
+    base(cr, w, h, ['#1a1024', '#0e0818', '#05030a'])
+    w4.bricks(cr, 0, 0, w, h, rgb('#241a30'), rnd, 46, 20, 0.85)
+    cols = [rgb(c) for c in w4.SPRAY]
+    for _ in range(_area(w, h, 26000) + 4):   # splats and drips all over the wall
+        x, y = rnd.uniform(0, w), rnd.uniform(0, h * 0.8)
+        if 0.25 * w < x < 0.6 * w and 0.2 * h < y < 0.7 * h and rnd.random() < 0.7:
+            continue   # keep the middle calmer for the text
+        w4.splat(cr, x, y, rnd.uniform(8, 26), rnd.choice(cols), rnd, rnd.uniform(0.35, 0.7),
+                 drips=rnd.randint(1, 4))
+    for k in range(3):   # big sprayed strokes
+        x0, y0 = rnd.uniform(0, w), rnd.uniform(0, h)
+        pts = [(x0 + i * 30, y0 + math.sin(i * 0.8 + k) * 40) for i in range(int(rnd.uniform(5, 10)))]
+        w4.spray(cr, lambda: w4._curve(cr, pts), rnd.choice(cols), 4, rnd, 0.45)
+    w4.crown(cr, w * 0.85, h * 0.25, min(w, h) * 0.16, rgb('#eb1fed'), 2.6)
+    w4.skull(cr, w * 0.12, h * 0.3, min(w, h) * 0.12, eyes=rgb('#25ebf5'), a=0.85)
+    w4.crown(cr, w * 0.12, h * 0.3 - min(w, h) * 0.08, min(w, h) * 0.1, rgb('#25ebf5'), 2.0)
+    for k, col in enumerate(cols[:3]):
+        w4.spray_can(cr, w * (0.04 + k * 0.05), h - 4, min(w, h) * 0.12, col, 0.9)
+    for k in range(int(w / 40)):   # the wet ground mirrors the colors
+        x = rnd.uniform(0, w)
+        g = cairo.LinearGradient(0, h * 0.93, 0, h)
+        col = rnd.choice(cols)
+        g.add_color_stop_rgba(0, *col, 0.25)
+        g.add_color_stop_rgba(1, *col, 0)
+        cr.rectangle(x, h * 0.93, rnd.uniform(3, 12), h * 0.07)
+        cr.set_source(g)
+        cr.fill()
+    grain(cr, w, h, 0.1, seed=83)
+    reading_shade(cr, w, h, 0.55)
+    vignette(cr, w, h, 0.55)
+
+
+SCENES.update({'halloween': bg_halloween, 'desert': bg_desert, 'neotokyo': bg_neotokyo, 'abyss': bg_abyss,
+               'forest': bg_forest, 'cosmos': bg_cosmos, 'samurai': bg_samurai, 'steampunk': bg_steampunk,
+               'glacier': bg_glacier, 'witch': bg_witch, 'dragon': bg_dragon, 'graffiti': bg_graffiti})
+
+
 def render(style, w, h, tint=None):
     """The scene as a surface, from the cache when it was drawn before."""
     w, h = max(1, int(w)), max(1, int(h))

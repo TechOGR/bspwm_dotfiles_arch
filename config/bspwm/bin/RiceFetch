@@ -195,6 +195,129 @@ ART = {
      ███▀   ▀███
     ▀▀▀       ▀▀▀
 ''',
+    'halloween': r'''
+         ▄▄█▄
+     ▄▄█████████▄▄
+   ▄███▀▀█████▀▀███▄
+  ▐██▌ ◢◣ ███ ◢◣ ▐██▌
+  ███▌    ▀█▀    ▐███
+  ▐██▌ ▀▄▀▄▀▄▀▄▀ ▐██▌
+   ▀███▄▄▄▄▄▄▄▄▄███▀
+     ▀▀▀▀▀▀▀▀▀▀▀▀▀
+''',
+    'desert': r'''
+        ▄▄
+       ████      ▄▄▄▄
+   ▄▄  ████     ▐████▌
+  ████ ████  ▄▄  ▀▀▀▀
+  ████▄████ ████
+   ▀▀██████▄███▀
+       ████▀▀
+       ████
+  ░░▒▒▓████▓▒▒░░░░
+''',
+    'neotokyo': r'''
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ ▀████████████████████▀
+     ██    ██    ██
+  ▀▀████▀▀▀▀▀▀▀▀████▀▀
+     ██          ██
+     ██          ██
+     ██          ██
+    ▀▀▀▀        ▀▀▀▀
+''',
+    'abyss': r'''
+      ▄▄██████▄▄
+    ▄██▀▀▀▀▀▀▀▀██▄
+   ███  ◉    ◉  ███
+   ▀██▄▄▄▄▄▄▄▄▄▄██▀
+    ▐▌ ▐▌ ▐▌ ▐▌ ▐▌
+     ▌  ▐  ▌  ▐  ▐
+    ▐  ▌  ▐  ▌   ▌
+     ▘  ▝  ▘  ▝
+''',
+    'forest': r'''
+      ▄▄▄██████▄▄▄
+    ▄██▀◉▀█████▀◉██▄
+   ███◉██████████◉███
+   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+         ▐████▌
+        ▄██████▄
+         ▐████▌
+       ▄▄▐████▌▄▄
+''',
+    'cosmos': r'''
+          ▄▄▄▄▄
+       ▄█████████▄
+  ▄▄▄▄███████████▄▄▄▄▄
+ ▀▀▀██▀▀▀▀▀▀▀▀▀▀▀▀▀▀██▀▀▀
+      ▀███████████▀
+        ▀▀█████▀▀
+   ✦          ·     ✧
+''',
+    'samurai': r'''
+                     ▄▄▀
+                  ▄▄▀▀
+               ▄▄▀▀
+            ▄▄▀▀
+      ▐█▌ ▄▀▀
+     ▀▀███▀▀
+      ▄▀▐█▌
+    ▄▀▄▀
+   ▀▄▀
+''',
+    'steampunk': r'''
+       ▄█▄  ▄█▄
+   ▄█▄▄█████████▄▄█▄
+   ▀███▀▀     ▀▀███▀
+  ▄██▀   ▄▄▄▄   ▀██▄
+  ███   █▀  ▀█   ███
+  ▀██▄   ▀▀▀▀   ▄██▀
+   ▄███▄▄     ▄▄███▄
+   ▀█▀▀█████████▀▀█▀
+       ▀█▀  ▀█▀
+''',
+    'glacier': r'''
+         ▄█▄
+     ▀▄  ▐█▌  ▄▀
+   ▄▄ ▀▄▐█▌▄▀ ▄▄
+     ▀▀▄▄███▄▄▀▀
+  ━━━━━━█████━━━━━━
+     ▄▄▀▀███▀▀▄▄
+   ▀▀ ▄▀▐█▌▀▄ ▀▀
+     ▄▀  ▐█▌  ▀▄
+         ▀█▀
+''',
+    'witch': r'''
+              ▄▄█▀
+           ▄▄██▀
+         ▄████
+        ▐█████▌
+       ▐███████▌
+      ▄█▓▓▓▓▓▓▓█▄
+ ▄▄▄██████████████▄▄▄
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+''',
+    'dragon': r'''
+      ▄▄██████▄▄
+    ▄███▀▀▀▀▀▀███▄
+   ███  ▄████▄  ███
+   ███  █▀  ▀█  ███
+   ███  █▄  ▄█  ███
+   ███  ▀████▀  ███
+    ▀███▄▄▄▄▄▄███▀
+      ▀▀██████▀▀
+''',
+    'graffiti': r'''
+  ▄        ▄        ▄
+ ▐█▌      ▐█▌      ▐█▌
+  ██▄    ▄███▄    ▄██
+  ████▄▄███████▄▄████
+  ███████████████████
+  ▀▀▀▀█▀▀▀▀▀▀▀▀▀█▀▀▀▀
+      ▀    ▐    ▀
+           ▀
+''',
 }
 
 # box style per theme: (tl, h, tr, v, bl, br)
@@ -213,6 +336,18 @@ THEME = {   # box, emblem glyph, name, tagline
     'cyber': ('double', '󰚩', 'CYBERPUNK', 'futuristic'), 'hud': ('heavy', '󰆤', 'HUD', 'tech and professional'),
     'holo': ('rounded', '󰀘', 'HOLOGRAPHIC', 'space and orbits'), 'pixel': ('pixel', '󰮯', 'PIXEL', 'retro and classic'),
     'sketch': ('sketch', '󰏫', 'PENCIL', 'hand drawn'), 'minimal': ('rounded', '󰣇', 'MINIMAL', 'elegant and discreet'),
+    'halloween': ('heavy', '󰮣', 'HALLOWEEN', 'pumpkins · bats · moon'),
+    'desert': ('rounded', '󰶵', 'DESERT', 'sunset and sand'),
+    'neotokyo': ('double', '󱌴', 'NEO TOKYO', 'neon city · sakura'),
+    'abyss': ('rounded', '󰼁', 'ABYSS', 'deep sea light'),
+    'forest': ('rounded', '󰟟', 'ENCHANTED FOREST', 'moss · fireflies'),
+    'cosmos': ('rounded', '󱓞', 'COSMOS', 'planets · nebulae'),
+    'samurai': ('heavy', '󰞇', 'SAMURAI', 'blood moon · katana'),
+    'steampunk': ('heavy', '󰒓', 'STEAMPUNK', 'brass and steam'),
+    'glacier': ('rounded', '󰜗', 'GLACIER', 'ice · frost wolf'),
+    'witch': ('dashed', '󱙧', 'WITCHCRAFT', 'spells · candles'),
+    'dragon': ('double', '󱌱', 'GOLDEN DRAGON', 'imperial gold'),
+    'graffiti': ('dashed', '󰙥', 'GRAFFITI', 'spray paint · crowns')
 }
 
 

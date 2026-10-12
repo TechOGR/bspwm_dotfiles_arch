@@ -1,10 +1,13 @@
 #!/bin/bash
 # ~/.config/bspwm/rices/crackone/theme_colors.bash
 
+# Tokyo Night (the classic night palette of Tokyo) -- adapted to the themes:
+# bg darkest, black a panel a step lighter, accent_color between the two,
+# blackb the muted line color, arch_icon the accent (blue)
 cargar_tokyo_night() {
-    bg="#1a1b26"
+    bg="#16161e"
     fg="#c0caf5"
-    black="#15161e"
+    black="#1a1b26"
     red="#f7768e"
     green="#9ece6a"
     yellow="#e0af68"
@@ -20,83 +23,9 @@ cargar_tokyo_night() {
     magentab="#bb9af7"
     cyanb="#7dcfff"
     whiteb="#c0caf5"
-    accent_color="#222330"
-    arch_icon="#0f94d2"
+    accent_color="#24283b"
+    arch_icon="#7aa2f7"
     gtk_themeb="TokyoNight-zk"
-}
-
-cargar_obsidian_deep() {
-    bg="#111216"
-    fg="#e3e6ed"
-    black="#1c1d24"
-    red="#e06c75"
-    green="#5cba91"
-    yellow="#e5c07b"
-    blue="#61afef"
-    magenta="#c678dd"
-    cyan="#56b6c2"
-    white="#abb2bf"
-    blackb="#3e4452"
-    redb="#e06c75"
-    greenb="#5cba91"
-    yellowb="#e5c07b"
-    blueb="#61afef"
-    magentab="#c678dd"
-    cyanb="#56b6c2"
-    whiteb="#e3e6ed"
-    accent_color="#181a20"
-    arch_icon="#56b6c2"
-    gtk_themeb="TokyoNight-zk"
-}
-
-# Cyber Sunset (Inspirada en el bloque superior central / medio izquierdo de la foto)
-cargar_cyber_sunset() {
-    bg="#1a1224"        # Púrpura/negro muy oscuro
-    fg="#fce2f5"        # Blanco rosáceo muy suave
-    black="#22182e"
-    red="#ff4a74"       # Rosa neón vibrante
-    green="#2cdca4"     # Verde menta para contrastar
-    yellow="#ff8a5c"    # Naranja atardecer
-    blue="#6157ff"      # Azul eléctrico/violeta
-    magenta="#d3429f"   # Púrpura magenta
-    cyan="#3cd1e6"      # Cian cielo
-    white="#d6cbd9"
-    blackb="#3a2b4c"
-    redb="#ff4a74"
-    greenb="#2cdca4"
-    yellowb="#ff8a5c"
-    blueb="#6157ff"
-    magentab="#d3429f"
-    cyanb="#3cd1e6"
-    whiteb="#fce2f5"
-    accent_color="#291d38"
-    arch_icon="#ff4a74"
-    gtk_themeb="Materia-Dark" # Tema sugerido
-}
-
-#  Deep Ocean / Northern Lights (Inspirada en el bloque medio derecho de la foto)
-cargar_deep_ocean() {
-    bg="#0a1128"        # Azul marino profundo tirando a negro
-    fg="#e1f1ff"        # Blanco azulado ártico
-    black="#0f1938"
-    red="#ff5964"       # Coral suave
-    green="#00f5d4"     # Turquesa brillante / Aurora
-    yellow="#ffe45e"    # Amarillo pálido
-    blue="#1e6091"      # Azul oceánico
-    magenta="#7b2cbf"   # Púrpura profundo
-    cyan="#04e762"      # Verde cian
-    white="#b5c6e0"
-    blackb="#1a2a6c"
-    redb="#ff5964"
-    greenb="#00f5d4"
-    yellowb="#ffe45e"
-    blueb="#1e6091"
-    magentab="#7b2cbf"
-    cyanb="#04e762"
-    whiteb="#e1f1ff"
-    accent_color="#0d1b3e"
-    arch_icon="#00f5d4"
-    gtk_themeb="Graphite-Dark" # Tema sugerido
 }
 
 # Minimal Gold (Inspirada en el bloque inferior izquierdo de la foto)
@@ -147,31 +76,6 @@ cargar_cold_frost() {
     accent_color="#1d2133"
     arch_icon="#90e0ef"
     gtk_themeb="Nordic" # Tema sugerido
-}
-
-# Glassmorphism (modern and clean) -- RiceEditor -> Themes
-cargar_glassmorphism() {
-    bg="#0f1530"
-    fg="#e6ecff"
-    black="#141b3a"
-    red="#ff6b9a"
-    green="#6ee7c8"
-    yellow="#ffd479"
-    blue="#6fa8ff"
-    magenta="#b18cff"
-    cyan="#7fdcff"
-    white="#c9d4f5"
-    blackb="#3a4670"
-    redb="#ff6b9a"
-    greenb="#6ee7c8"
-    yellowb="#ffd479"
-    blueb="#6fa8ff"
-    magentab="#b18cff"
-    cyanb="#7fdcff"
-    whiteb="#e6ecff"
-    accent_color="#1b2450"
-    arch_icon="#7fdcff"
-    gtk_themeb="TokyoNight-zk"
 }
 
 # Neon Cyberpunk (futuristic and striking) -- RiceEditor -> Themes
@@ -299,31 +203,6 @@ cargar_hud() {
     gtk_themeb="TokyoNight-zk"
 }
 
-# Fire (intense and different) -- RiceEditor -> Themes
-cargar_fire() {
-    bg="#120604"
-    fg="#ffe9d6"
-    black="#1c0b06"
-    red="#ff3b1f"
-    green="#ffb300"
-    yellow="#ffc400"
-    blue="#ff7a18"
-    magenta="#ff5a36"
-    cyan="#ffa53a"
-    white="#f0c9a8"
-    blackb="#4a1f10"
-    redb="#ff3b1f"
-    greenb="#ffb300"
-    yellowb="#ffc400"
-    blueb="#ff7a18"
-    magentab="#ff5a36"
-    cyanb="#ffa53a"
-    whiteb="#ffe9d6"
-    accent_color="#2a0f08"
-    arch_icon="#ff8a1f"
-    gtk_themeb="TokyoNight-zk"
-}
-
 # Nature (calm and fresh) -- RiceEditor -> Themes
 cargar_nature() {
     bg="#06140c"
@@ -371,31 +250,6 @@ cargar_pencil_graphite() {
     whiteb="#e8e8e8"
     accent_color="#1f1f1f"
     arch_icon="#e8e8e8"
-    gtk_themeb="TokyoNight-zk"
-}
-
-# Crystal (frosted glass and light) -- RiceEditor -> Themes
-cargar_crystal() {
-    bg="#0a1228"
-    fg="#eef6ff"
-    black="#0f1a38"
-    red="#ff7aa8"
-    green="#7ff0d0"
-    yellow="#ffe08a"
-    blue="#4fb4ff"
-    magenta="#c58cff"
-    cyan="#8fe6ff"
-    white="#cfe2ff"
-    blackb="#34507a"
-    redb="#ff7aa8"
-    greenb="#7ff0d0"
-    yellowb="#ffe08a"
-    blueb="#4fb4ff"
-    magentab="#c58cff"
-    cyanb="#8fe6ff"
-    whiteb="#eef6ff"
-    accent_color="#142448"
-    arch_icon="#bfe6ff"
     gtk_themeb="TokyoNight-zk"
 }
 
@@ -571,5 +425,305 @@ cargar_snakes() {
     whiteb="#e8ffe0"
     accent_color="#0a2410"
     arch_icon="#9dff3a"
+    gtk_themeb="TokyoNight-zk"
+}
+
+# Halloween (pumpkins, bats and a full moon) -- RiceEditor -> Themes
+cargar_halloween() {
+    bg="#0d0612"
+    fg="#ffe8d6"
+    black="#170a1c"
+    red="#ff3b2f"
+    green="#9cff57"
+    yellow="#ffc43d"
+    blue="#ff7a1a"
+    magenta="#c04dff"
+    cyan="#ff9e4a"
+    white="#e8cfc0"
+    blackb="#3e2346"
+    redb="#ff3b2f"
+    greenb="#9cff57"
+    yellowb="#ffc43d"
+    blueb="#ff7a1a"
+    magentab="#c04dff"
+    cyanb="#ff9e4a"
+    whiteb="#ffe8d6"
+    accent_color="#1f0e26"
+    arch_icon="#ff7a1a"
+    gtk_themeb="TokyoNight-zk"
+}
+
+# Desert (sunset, cacti and sand) -- RiceEditor -> Themes
+cargar_desert() {
+    bg="#140904"
+    fg="#ffeccc"
+    black="#1f1007"
+    red="#e8502a"
+    green="#7fbf4a"
+    yellow="#ffd25a"
+    blue="#ffb52e"
+    magenta="#e8763a"
+    cyan="#f2c27a"
+    white="#e8d2b0"
+    blackb="#5a3418"
+    redb="#e8502a"
+    greenb="#7fbf4a"
+    yellowb="#ffd25a"
+    blueb="#ffb52e"
+    magentab="#e8763a"
+    cyanb="#f2c27a"
+    whiteb="#ffeccc"
+    accent_color="#2a160a"
+    arch_icon="#ffb52e"
+    gtk_themeb="TokyoNight-zk"
+}
+
+# Neo Tokyo (neon city, torii and sakura) -- RiceEditor -> Themes
+cargar_neo_tokyo() {
+    bg="#07041a"
+    fg="#f4e8ff"
+    black="#0e0828"
+    red="#ff3a7a"
+    green="#3affc8"
+    yellow="#ffd23a"
+    blue="#e03cff"
+    magenta="#ff3ab4"
+    cyan="#3ad8ff"
+    white="#cdb8ff"
+    blackb="#3a2466"
+    redb="#ff3a7a"
+    greenb="#3affc8"
+    yellowb="#ffd23a"
+    blueb="#e03cff"
+    magentab="#ff3ab4"
+    cyanb="#3ad8ff"
+    whiteb="#f4e8ff"
+    accent_color="#160c3a"
+    arch_icon="#e03cff"
+    gtk_themeb="TokyoNight-zk"
+}
+
+# Abyss (jellyfish and deep sea light) -- RiceEditor -> Themes
+cargar_abyss() {
+    bg="#010a1c"
+    fg="#dff8ff"
+    black="#04142c"
+    red="#ff5a7a"
+    green="#2affc8"
+    yellow="#c8ff6a"
+    blue="#2ccfff"
+    magenta="#4a8cff"
+    cyan="#5af0ff"
+    white="#a8d8f0"
+    blackb="#14406a"
+    redb="#ff5a7a"
+    greenb="#2affc8"
+    yellowb="#c8ff6a"
+    blueb="#2ccfff"
+    magentab="#4a8cff"
+    cyanb="#5af0ff"
+    whiteb="#dff8ff"
+    accent_color="#06203e"
+    arch_icon="#2ccfff"
+    gtk_themeb="TokyoNight-zk"
+}
+
+# Enchanted Forest (mushrooms, fireflies and moss) -- RiceEditor -> Themes
+cargar_enchanted_forest() {
+    bg="#060f04"
+    fg="#efffd8"
+    black="#0c1a08"
+    red="#ff5a3a"
+    green="#b8f02e"
+    yellow="#ffe066"
+    blue="#9ce02e"
+    magenta="#e8a03a"
+    cyan="#7af0a0"
+    white="#cfe8b0"
+    blackb="#2e4a18"
+    redb="#ff5a3a"
+    greenb="#b8f02e"
+    yellowb="#ffe066"
+    blueb="#9ce02e"
+    magentab="#e8a03a"
+    cyanb="#7af0a0"
+    whiteb="#efffd8"
+    accent_color="#13260a"
+    arch_icon="#b8f02e"
+    gtk_themeb="TokyoNight-zk"
+}
+
+# Cosmos (planets, nebulae and stardust) -- RiceEditor -> Themes
+cargar_cosmos() {
+    bg="#04051a"
+    fg="#e8ecff"
+    black="#0a0c2a"
+    red="#ff5a8a"
+    green="#5affd8"
+    yellow="#ffe08a"
+    blue="#6a6cff"
+    magenta="#c04dff"
+    cyan="#5ac8ff"
+    white="#c8ccff"
+    blackb="#2a2e6a"
+    redb="#ff5a8a"
+    greenb="#5affd8"
+    yellowb="#ffe08a"
+    blueb="#6a6cff"
+    magentab="#c04dff"
+    cyanb="#5ac8ff"
+    whiteb="#e8ecff"
+    accent_color="#12144a"
+    arch_icon="#8a8cff"
+    gtk_themeb="TokyoNight-zk"
+}
+
+# Samurai (blood moon, katana and sakura) -- RiceEditor -> Themes
+cargar_samurai() {
+    bg="#0e0406"
+    fg="#ffe8e8"
+    black="#1a080b"
+    red="#ff2a2a"
+    green="#ff8ab0"
+    yellow="#ffb84a"
+    blue="#ff3a3a"
+    magenta="#c04a8a"
+    cyan="#ff6a5a"
+    white="#e8c8c8"
+    blackb="#4a1a22"
+    redb="#ff2a2a"
+    greenb="#ff8ab0"
+    yellowb="#ffb84a"
+    blueb="#ff3a3a"
+    magentab="#c04a8a"
+    cyanb="#ff6a5a"
+    whiteb="#ffe8e8"
+    accent_color="#260a10"
+    arch_icon="#ff3a3a"
+    gtk_themeb="TokyoNight-zk"
+}
+
+# Steampunk (brass gears, steam and airships) -- RiceEditor -> Themes
+cargar_steampunk() {
+    bg="#0f0804"
+    fg="#ffe8c8"
+    black="#1a0f07"
+    red="#d8502a"
+    green="#5ab89a"
+    yellow="#ffc85a"
+    blue="#f0a13a"
+    magenta="#c8622a"
+    cyan="#e8b878"
+    white="#d8c0a0"
+    blackb="#5a3a1a"
+    redb="#d8502a"
+    greenb="#5ab89a"
+    yellowb="#ffc85a"
+    blueb="#f0a13a"
+    magentab="#c8622a"
+    cyanb="#e8b878"
+    whiteb="#ffe8c8"
+    accent_color="#24140a"
+    arch_icon="#f0a13a"
+    gtk_themeb="TokyoNight-zk"
+}
+
+# Glacier (ice crystals and a frost wolf) -- RiceEditor -> Themes
+cargar_glacier() {
+    bg="#030a18"
+    fg="#e8f6ff"
+    black="#071428"
+    red="#ff6a8a"
+    green="#6affe0"
+    yellow="#ffe8a8"
+    blue="#4fc8ff"
+    magenta="#8aa8ff"
+    cyan="#8af0ff"
+    white="#b8d8f0"
+    blackb="#24406a"
+    redb="#ff6a8a"
+    greenb="#6affe0"
+    yellowb="#ffe8a8"
+    blueb="#4fc8ff"
+    magentab="#8aa8ff"
+    cyanb="#8af0ff"
+    whiteb="#e8f6ff"
+    accent_color="#0c1e3a"
+    arch_icon="#4fc8ff"
+    gtk_themeb="TokyoNight-zk"
+}
+
+# Witchcraft (spellbooks, ravens and candles) -- RiceEditor -> Themes
+cargar_witchcraft() {
+    bg="#0a0418"
+    fg="#f4e8ff"
+    black="#130a26"
+    red="#ff4a6a"
+    green="#7aff9a"
+    yellow="#ffb347"
+    blue="#b43cff"
+    magenta="#ef57f9"
+    cyan="#9a7aff"
+    white="#d0b8f0"
+    blackb="#3a2066"
+    redb="#ff4a6a"
+    greenb="#7aff9a"
+    yellowb="#ffb347"
+    blueb="#b43cff"
+    magentab="#ef57f9"
+    cyanb="#9a7aff"
+    whiteb="#f4e8ff"
+    accent_color="#1c0e36"
+    arch_icon="#b43cff"
+    gtk_themeb="TokyoNight-zk"
+}
+
+# Golden Dragon (imperial gold among the clouds) -- RiceEditor -> Themes
+cargar_golden_dragon() {
+    bg="#120503"
+    fg="#fff0d0"
+    black="#1e0a05"
+    red="#e8322a"
+    green="#f0b030"
+    yellow="#ffd84a"
+    blue="#ffb22e"
+    magenta="#ff5a3a"
+    cyan="#ffc87a"
+    white="#f0d0a8"
+    blackb="#5a2410"
+    redb="#e8322a"
+    greenb="#f0b030"
+    yellowb="#ffd84a"
+    blueb="#ffb22e"
+    magentab="#ff5a3a"
+    cyanb="#ffc87a"
+    whiteb="#fff0d0"
+    accent_color="#2a0e06"
+    arch_icon="#ffc42e"
+    gtk_themeb="TokyoNight-zk"
+}
+
+# Graffiti (spray paint and street crowns) -- RiceEditor -> Themes
+cargar_graffiti() {
+    bg="#0a0614"
+    fg="#f8f0ff"
+    black="#120c22"
+    red="#ff2a5a"
+    green="#3aff6a"
+    yellow="#ffe014"
+    blue="#25ebf5"
+    magenta="#eb1fed"
+    cyan="#3ab0ff"
+    white="#d8d0f0"
+    blackb="#3a2a5a"
+    redb="#ff2a5a"
+    greenb="#3aff6a"
+    yellowb="#ffe014"
+    blueb="#25ebf5"
+    magentab="#eb1fed"
+    cyanb="#3ab0ff"
+    whiteb="#f8f0ff"
+    accent_color="#1a1030"
+    arch_icon="#eb1fed"
     gtk_themeb="TokyoNight-zk"
 }

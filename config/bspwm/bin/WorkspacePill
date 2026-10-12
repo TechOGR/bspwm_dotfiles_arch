@@ -20,6 +20,7 @@
 # =============================================================
 
 import os
+import re
 import sys
 import time
 import signal
@@ -63,6 +64,17 @@ def cli():
 def polybar_windows():
     out = subprocess.run(['xdotool', 'search', '--class', '^Polybar$'], capture_output=True, text=True).stdout
     return out.split()
+
+
+def stack_order():
+    """The ids of the top level windows, from the top of the stack down
+    (xwininfo lists them that way), or None when it can't be read."""
+    try:
+        out = subprocess.run(['xwininfo', '-root', '-children'], capture_output=True, text=True,
+                             timeout=2).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return [int(m, 16) for m in re.findall(r'^\s+(0x[0-9a-fA-F]+)\s', out, re.M)] or None
 
 
 def main():
@@ -254,6 +266,11 @@ def main():
         if not bars:
             return
         st['bar_id'] = bars[0]
+        # GTK raises a window to the top when it shows it (gdk_window_show),
+        # but only sends that when it next talks to the X server: let it get
+        # there first, or it arrives after xdo and puts the skin back over
+        # the bar (its dark fill then hides every module)
+        display.sync()
         # the pill right above the bar, the skin right under it: both under
         # every client, so a fullscreen window covers them
         for w, where in ((skin_win, 'below'), (win if has_pill else None, 'above')):
@@ -262,12 +279,32 @@ def main():
                 subprocess.run(['xdo', where, '-t', bars[0], hex(gw.get_xid())],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+    def stack_ok():
+        """The skin under the bar and the pill over it (True), something
+        restacked them since (False), or it can't be told (None)."""
+        bars = polybar_windows()
+        order = stack_order()
+        if not bars or not order or int(bars[0]) not in order:
+            return None
+        ib = order.index(int(bars[0]))
+        for w, above in ((skin_win, False), (win if has_pill else None, True)):
+            gw = w.get_window() if w and w.get_visible() else None
+            if gw and gw.get_xid() in order and (order.index(gw.get_xid()) < ib) != above:
+                return False
+        return True
+
+    def recheck():
+        if stack_ok() is False:
+            restack()
+        return False
+
     def restack_settled():
         # polybar (wm-restack = bspwm) puts its window at the bottom of the
-        # stack once it is up: do it again after it has, or the skin stays
-        # over the bar and its dark fill hides every module
+        # stack once it is up, seconds later while a theme is being applied:
+        # look again a few times and put the skin back under it if needed
         restack()
-        GLib.timeout_add(1500, lambda: (restack(), False)[1])
+        for ms in (600, 1500, 3000, 6000):
+            GLib.timeout_add(ms, recheck)
 
     def update_visibility():
         want = st['polybar'] and not st['hidden_bar'] and not st['fullscreen']
@@ -431,8 +468,11 @@ def main():
         # apply, ScreenWatch) never looked dead. Either way the skin was left
         # on top of the bar: follow the bar's window, not just whether it runs.
         lead = win if has_pill else skin_win
-        if alive and bars[0] != st['bar_id'] and lead.get_visible():
-            restack_settled()
+        if alive and lead.get_visible():
+            if bars[0] != st['bar_id']:
+                restack_settled()
+            else:   # the same bar, restacked by someone since (a theme, a bar style...)
+                recheck()
         return True
 
     win.connect('draw', on_draw)

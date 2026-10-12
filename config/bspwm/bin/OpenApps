@@ -92,6 +92,12 @@ case "$1" in
 	--usercard)
 		UserCard
 		;;
+	--lyrics)
+		RiceLyrics
+		;;
+	--visualizer)
+		RiceVisualizer
+		;;
 	--player)
 		MusicPlayer
 		;;

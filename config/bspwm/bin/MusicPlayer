@@ -36,6 +36,7 @@ import riceui as ui  # noqa: E402
 from riceui import Gtk, Gdk, GLib, GdkPixbuf, cairo  # noqa: E402
 
 W = 460
+MARGIN = 28        # room around the panel for the theme's ornaments
 ART = 150
 CACHE = os.path.join(ui.HOME, '.cache', os.environ.get('USER', 'user'), 'musicplayer')
 os.makedirs(CACHE, exist_ok=True)
@@ -204,9 +205,12 @@ class Player(Gtk.Window):
         self.closing, self.t0 = None, time.monotonic()
         self.alive = True
         self.install_css()
+        self.themed = bool(ui.theme_style())
 
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         outer.get_style_context().add_class('hud')
+        if self.themed:   # room around the panel for the theme's ornaments
+            outer.set_border_width(MARGIN - 4)
         self.add(outer)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         box.get_style_context().add_class('player')
@@ -372,7 +376,8 @@ scale slider { background-color: @fg; border-radius: 50%; min-width: 12px; min-h
             top = conf['height'] + conf['offset_y'] + 10 if conf['position'] == 'top' else 14
         except Exception:
             top = 50
-        self.move(geo.x + geo.width - w - 14, geo.y + top)
+        m = MARGIN if self.themed else 0
+        self.move(min(geo.x + geo.width - w, geo.x + geo.width - w - 14 + m), max(geo.y, geo.y + top - m))
 
     # ─────────────────────────────────────────────────────── data
     def poll_loop(self):
@@ -532,7 +537,8 @@ scale slider { background-color: @fg; border-radius: 50%; min-width: 12px; min-h
     def on_click(self, _w, ev):
         w, h = self.get_size()
         wx, wy = self.get_position()
-        if not (wx <= ev.x_root <= wx + w and wy <= ev.y_root <= wy + h):
+        m = MARGIN if self.themed else 0   # the ornaments' room is outside the panel
+        if not (wx + m <= ev.x_root <= wx + w - m and wy + m <= ev.y_root <= wy + h - m):
             self.close()
         return False
 
@@ -543,7 +549,7 @@ scale slider { background-color: @fg; border-radius: 50%; min-width: 12px; min-h
         cr.set_source_rgba(0, 0, 0, 0)
         cr.paint()
         cr.set_operator(cairo.OPERATOR_OVER)
-        if ui.paint_theme_panel(cr, Wd, H, self.pal, anim=ui.panel_anim(w, inside=True)):
+        if ui.paint_theme_panel(cr, Wd, H, self.pal, inset=MARGIN, anim=ui.panel_anim(w, inside=True)):
             return False   # the theme's scene + frame
         ui.rounded(cr, 0.5, 0.5, Wd - 1, H - 1, 22)
         cr.save()

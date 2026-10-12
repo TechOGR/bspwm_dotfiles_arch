@@ -1,0 +1,509 @@
+#!/usr/bin/env python3
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# RiceVisualizer - the spectrum of whatever is playing, in a window of
+# its own, in the theme. super + alt + v
+#
+#   ✔ Seven looks (lib/ricespectrum.py): bars (default), mirror, wave,
+#     radial, LEDs, blocks, terrain, or the theme's own
+#   ✔ The theme's panel and accent gradient; it follows a theme change
+#   ✔ Transparency: mouse wheel over the window (0 = only the spectrum,
+#     floating over the desktop), T toggles fully transparent
+#   ✔ Keys 1-7 change the look, 0 = the theme's · drag it anywhere ·
+#     Esc closes. Settings: config/visualizer.conf (re-read on save)
+#   ✔ Any size: drag an edge or a corner. Quick layouts: B a strip on
+#     the bottom edge, U hanging upside down from the top, F the whole screen,
+#     W back to a window. + / - the radial's size. L pins it: clicks go
+#     through it and it stays
+#     under the windows (a live wallpaper); super + alt + v closes it
+#
+# Usage: RiceVisualizer        (a second launch closes it)
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+import configparser
+import json
+import os
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, os.path.expanduser('~/.config/bspwm/lib'))
+import riceui as ui  # noqa: E402
+import riceapp as ra  # noqa: E402
+import ricespectrum as rs  # noqa: E402
+from riceui import Gtk, Gdk, GLib, cairo  # noqa: E402
+
+HOME = os.path.expanduser('~')
+BSPWM = os.path.join(HOME, '.config/bspwm')
+CONF = os.path.join(BSPWM, 'config/visualizer.conf')
+STATE = os.path.join(HOME, '.cache', os.environ.get('USER', 'user'), 'ricevisualizer.json')
+M = 16            # room around the panel for the theme's frame
+KEYS = ['theme'] + rs.STYLES   # 0 = theme, 1-7 = the looks
+
+T = ra.translator({'Opacity': 'Opacidad', 'theme': 'tema', 'Bottom strip': 'Franja inferior',
+                   'Top strip': 'Franja superior', 'Whole screen': 'Pantalla completa', 'Window': 'Ventana',
+                   'Pinned: clicks go through · super + alt + v closes':
+                       'Fijado: los clics lo atraviesan · super + alt + v lo cierra',
+                   'Unpinned': 'Sin fijar', 'Radial size': 'Tamaño del radial'})
+NAMES = {k: v[1 if ra.lang_es() else 0] for k, v in rs.STYLE_NAMES.items()}
+
+DEFAULTS = {
+    'spectrum': {'style': 'bars', 'bands': '56', 'glow': 'yes', 'colors': 'theme', 'device': 'default'},
+    'window': {'opacity': '0.85', 'width': '760', 'height': '240', 'fps': '40', 'layout': 'window',
+               'strip_height': '220', 'pinned': 'no'},
+}
+
+
+def load_conf():
+    cp = configparser.ConfigParser(inline_comment_prefixes=('#', ';'))
+    cp.read_dict(DEFAULTS)
+    try:
+        cp.read(CONF)
+    except configparser.Error:
+        pass
+    return cp
+
+
+def load_state():
+    try:
+        with open(STATE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(st):
+    try:
+        os.makedirs(os.path.dirname(STATE), exist_ok=True)
+        with open(STATE + '.tmp', 'w') as f:
+            json.dump(st, f)
+        os.replace(STATE + '.tmp', STATE)
+    except OSError:
+        pass
+
+
+def mtime(path):
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return 0
+
+
+def mix(a, b, t):
+    return tuple(x + (y - x) * t for x, y in zip(a, b))
+
+
+class Visualizer(Gtk.Window):
+    def __init__(self):
+        super().__init__(title='RiceVisualizer')
+        self.set_wmclass('RiceVisualizer', 'RiceVisualizer')
+        self.set_decorated(False)
+        self.set_skip_taskbar_hint(True)
+        ui.rgba_window(self)
+        subprocess.run(['bspc', 'rule', '-r', 'RiceVisualizer:*:*'], capture_output=True)
+        subprocess.run(['bspc', 'rule', '-a', 'RiceVisualizer', 'state=floating', 'border=off', 'focus=on'],
+                       capture_output=True)
+        self.state = load_state()
+        self.conf = load_conf()
+        self.conf_m = mtime(CONF)
+        if self.state.get('conf_m') != self.conf_m:
+            # visualizer.conf was edited since the keys last changed these:
+            # what the file says wins
+            for k in self.FROM_FILE:
+                self.state.pop(k, None)
+        w = self.conf['window']
+        self.opacity = float(self.state.get('opacity', w.get('opacity', '0.85')))
+        self.last_opacity = self.opacity or 0.85
+        self.set_default_size(int(w.get('width', '760')), int(w.get('height', '240')))
+        self.theme_key = None
+        self.theme()
+        self.start_analyzer()
+        self.t0 = time.monotonic()
+        self.toast, self.toast_t = '', 0.0
+        self.drag, self.where, self.panel_cache = None, None, {}
+        self.resizing = None      # (edge, x_root, y_root, x, y, w, h) while an edge is dragged
+        self.layout = self.state.get('layout') or w.get('layout', 'window').strip().lower()
+        self.pinned = bool(self.state.get('pinned', w.get('pinned', 'no').lower() in ('yes', 'true', '1', 'on')))
+        self.alive = True
+
+        area = Gtk.DrawingArea()
+        area.connect('draw', self.on_draw)
+        self.add(area)
+        self.area = area
+        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK |
+                        Gdk.EventMask.POINTER_MOTION_MASK | Gdk.EventMask.SCROLL_MASK |
+                        Gdk.EventMask.SMOOTH_SCROLL_MASK | Gdk.EventMask.KEY_PRESS_MASK)
+        self.connect('button-press-event', self.on_press)
+        self.connect('button-release-event', self.on_release)
+        self.connect('motion-notify-event', self.on_motion)
+        self.connect('scroll-event', self.on_scroll)
+        self.connect('key-press-event', self.on_key)
+        self.connect('configure-event', self.on_configure)
+        self.connect('map-event', lambda *_: GLib.timeout_add(80, self.restore_place))
+        self.connect('destroy', self.on_destroy)
+        self.tick_id = None
+        self.set_fps()
+        GLib.timeout_add_seconds(2, self.watch_files)
+
+    # ── settings and theme
+    def style(self):
+        s = self.state.get('style') or self.conf['spectrum'].get('style', 'bars').strip().lower()
+        if s == 'theme':
+            return rs.THEME_STYLE.get(self.kit or '', 'bars')
+        return s if s in rs.STYLES else 'bars'
+
+    def theme(self):
+        self.pal = ui.load_palette()
+        self.c = ui.rgb_palette(self.pal)
+        self.kit = ui.theme_style()
+        self.acc = ui.style_accent(self.kit, self.pal) if self.kit else self.c['blue']
+        self.panel_cache = {}
+        spec = self.conf['spectrum'].get('colors', 'theme').strip().lower()
+        if spec == 'palette':
+            self.cols = [self.c['blue'], self.c['magenta'], self.c['cyan']]
+        elif spec.startswith('#'):
+            try:
+                self.cols = [ui.hex_rgb(h.strip()) for h in spec.split(',') if h.strip()][:4]
+            except Exception:
+                self.cols = []
+        else:
+            self.cols = []
+        if len(self.cols) < 2:   # the theme's: the same gradient RiceMusic uses
+            self.cols = [mix(self.c['magenta'], self.c['bg'], 0.15), self.acc, mix(self.acc, (1, 1, 1), 0.5)]
+
+    def start_analyzer(self):
+        dev = self.conf['spectrum'].get('device', 'default').strip()
+        if getattr(self, 'an', None):
+            self.an.stop()
+        self.an = rs.Analyzer(bands=64, device='@DEFAULT_MONITOR@' if dev in ('', 'default') else dev).start()
+        self.dev = dev
+
+    def set_fps(self):
+        fps = max(15, min(60, int(self.conf['window'].get('fps', '40') or 40)))
+        if self.tick_id:
+            GLib.source_remove(self.tick_id)
+        self.tick_id = GLib.timeout_add(1000 // fps, self.tick)
+
+    # settings the keys change too: a save of visualizer.conf puts the file's back
+    FROM_FILE = ('style', 'opacity', 'layout', 'pinned', 'radial_size')
+
+    def watch_files(self):
+        if not self.alive:
+            return False
+        m = mtime(CONF)
+        if m != self.conf_m:   # visualizer.conf saved: apply it live
+            self.conf_m = m
+            self.conf = load_conf()
+            for k in self.FROM_FILE:
+                self.state.pop(k, None)
+            w = self.conf['window']
+            try:
+                self.opacity = max(0.0, min(1.0, float(w.get('opacity', '0.85'))))
+            except ValueError:
+                pass
+            if self.conf['spectrum'].get('device', 'default').strip() != self.dev:
+                self.start_analyzer()
+            self.set_fps()
+            self.theme()
+            self.set_layout(w.get('layout', 'window').strip().lower(), save=False)
+            self.set_pinned(w.get('pinned', 'no').strip().lower() in ('yes', 'true', '1', 'on'))
+        key = (mtime(ui.theme_cfg()), mtime(os.path.join(BSPWM, 'config/tint.json')))
+        if key != self.theme_key:
+            if self.theme_key is not None:
+                self.theme()
+            self.theme_key = key
+        return True
+
+    def remember(self):
+        self.state['opacity'] = round(self.opacity, 2)
+        self.state['conf_m'] = self.conf_m
+        if self.where:
+            self.state.update(self.where)
+        save_state(self.state)
+
+    def on_configure(self, *_):
+        if self.get_mapped():
+            x, y = self.get_position()
+            w, h = self.get_size()
+            self.where = dict(x=x, y=y, w=w, h=h)
+        return False
+
+    EDGE = 14   # px of the border that resize the window
+
+    def strip_h(self):
+        try:
+            return max(60, int(self.conf['window'].get('strip_height', '220')))
+        except ValueError:
+            return 220
+
+    def set_layout(self, lay, save=True):
+        """window | bottom | top | screen: where and how big it is."""
+        geo = ui.monitor_geometry()
+        if lay not in ('window', 'bottom', 'top', 'screen'):
+            lay = 'window'
+        if self.layout == 'window' and lay != 'window' and self.where:
+            self.state['free'] = dict(self.where)   # to go back to the window it was
+        self.layout = lay
+        sh = min(self.strip_h(), geo.height // 2)
+        try:
+            import barconf
+            conf = barconf.load()
+            bar = conf['height'] + conf['offset_y'] + 6 if conf['position'] == 'top' else 0
+        except Exception:
+            bar = 0
+        if lay == 'bottom':
+            x, y, w, h = geo.x, geo.y + geo.height - sh, geo.width, sh
+        elif lay == 'top':   # against the top edge of the screen, hanging down (the bar over it)
+            x, y, w, h = geo.x, geo.y, geo.width, sh + bar
+        elif lay == 'screen':
+            x, y, w, h = geo.x, geo.y, geo.width, geo.height
+        else:
+            f = self.state.get('free') or {}
+            w, h = int(f.get('w', 760)), int(f.get('h', 240))
+            x = int(f.get('x', geo.x + (geo.width - w) // 2))
+            y = int(f.get('y', geo.y + (geo.height - h) // 2))
+        self.resize(w, h)
+        self.move(x, y)
+        if save:
+            self.state['layout'] = lay
+            self.remember()
+
+    def set_pinned(self, on):
+        """Pinned: clicks go through it and it stays under the windows."""
+        self.pinned = on
+        gw = self.get_window()
+        if gw:
+            gw.input_shape_combine_region(cairo.Region() if on else None, 0, 0)
+            subprocess.run(['bspc', 'node', hex(gw.get_xid()), '-l', 'below' if on else 'normal'],
+                           capture_output=True)
+        self.state['pinned'] = on
+        self.remember()
+
+    def restore_place(self):
+        if self.layout != 'window':
+            self.set_layout(self.layout, save=False)
+            if self.pinned:
+                self.set_pinned(True)
+            return False
+        if self.pinned:
+            self.set_pinned(True)
+        if 'x' in self.state:
+            geo = ui.monitor_geometry()
+            w = max(240, min(int(self.state.get('w', 760)), geo.width))
+            h = max(100, min(int(self.state.get('h', 240)), geo.height))
+            self.resize(w, h)
+            self.move(max(geo.x, min(int(self.state['x']), geo.x + geo.width - w)),
+                      max(geo.y, min(int(self.state['y']), geo.y + geo.height - h)))
+        return False
+
+    def say(self, text):
+        self.toast, self.toast_t = text, time.monotonic()
+
+    # ── input
+    def edge_at(self, x, y):
+        """'n', 'se', 'w'...: the edges under the pointer ('' inside)."""
+        W, H = self.get_size()
+        e = self.EDGE
+        return ('n' if y < e else 's' if y > H - e else '') + ('w' if x < e else 'e' if x > W - e else '')
+
+    CURSORS = {'n': 'n-resize', 's': 's-resize', 'e': 'e-resize', 'w': 'w-resize', 'ne': 'ne-resize',
+               'nw': 'nw-resize', 'se': 'se-resize', 'sw': 'sw-resize'}
+
+    def on_press(self, _w, ev):
+        if ev.button == 1 and ev.type == Gdk.EventType.BUTTON_PRESS:
+            wx, wy = self.get_position()
+            edge = self.edge_at(ev.x, ev.y)
+            if edge:
+                w, h = self.get_size()
+                self.resizing = (edge, ev.x_root, ev.y_root, wx, wy, w, h)
+            else:
+                self.drag = (ev.x_root - wx, ev.y_root - wy)
+            if self.layout != 'window':   # moved / resized by hand: a window again
+                self.layout = 'window'
+                self.state['layout'] = 'window'
+        return False
+
+    def on_release(self, *_):
+        if self.drag or self.resizing:
+            self.drag = self.resizing = None
+            self.remember()
+        return False
+
+    def on_motion(self, _w, ev):
+        if (self.drag or self.resizing) and not ev.state & Gdk.ModifierType.BUTTON1_MASK:
+            self.drag = self.resizing = None   # the release went elsewhere: never drag on without the button
+        if self.resizing:
+            edge, x0, y0, wx, wy, w, h = self.resizing
+            dx, dy = ev.x_root - x0, ev.y_root - y0
+            nx, ny, nw, nh = wx, wy, w, h
+            if 'e' in edge:
+                nw = w + dx
+            if 's' in edge:
+                nh = h + dy
+            if 'w' in edge:
+                nw = w - dx
+                nx = wx + w - max(200, nw)
+            if 'n' in edge:
+                nh = h - dy
+                ny = wy + h - max(80, nh)
+            self.resize(max(200, int(nw)), max(80, int(nh)))
+            self.move(int(nx), int(ny))
+        elif self.drag:
+            self.move(int(ev.x_root - self.drag[0]), int(ev.y_root - self.drag[1]))
+        else:   # the resize cursor over the edges
+            gw = self.get_window()
+            name = self.CURSORS.get(self.edge_at(ev.x, ev.y), 'default')
+            if gw and getattr(self, 'cursor_name', None) != name:
+                self.cursor_name = name
+                gw.set_cursor(Gdk.Cursor.new_from_name(gw.get_display(), name))
+        return False
+
+    def on_scroll(self, _w, ev):
+        d = ev.direction
+        if d == Gdk.ScrollDirection.SMOOTH:
+            step = -ev.get_scroll_deltas()[2] * 0.05
+        else:
+            step = 0.05 if d == Gdk.ScrollDirection.UP else -0.05 if d == Gdk.ScrollDirection.DOWN else 0
+        if step:
+            self.opacity = max(0.0, min(1.0, self.opacity + step))
+            if self.opacity > 0:
+                self.last_opacity = self.opacity
+            self.say(f'{T("Opacity")} {round(self.opacity * 100)}%')
+            self.remember()
+        return True
+
+    def radial_size(self):
+        try:
+            v = float(self.state.get('radial_size', self.conf['spectrum'].get('radial_size', '1.0')))
+        except ValueError:
+            v = 1.0
+        return max(0.3, min(3.0, v))
+
+    def radial_ring(self):
+        try:
+            v = float(self.conf['spectrum'].get('radial_ring', '0.45'))
+        except ValueError:
+            v = 0.45
+        return max(0.1, min(0.9, v))
+
+    def on_key(self, _w, ev):
+        k = Gdk.keyval_name(ev.keyval) or ''
+        if k in ('Escape', 'q'):
+            self.close_all()
+            return True
+        if k in ('t', 'T'):
+            self.opacity = 0.0 if self.opacity > 0 else (self.last_opacity or 0.85)
+            self.say(f'{T("Opacity")} {round(self.opacity * 100)}%')
+        elif k in ('b', 'B', 'u', 'U', 'f', 'F', 'w', 'W'):
+            lay = {'b': 'bottom', 'u': 'top', 'f': 'screen', 'w': 'window'}[k.lower()]
+            self.set_layout('window' if lay == self.layout else lay)
+            self.say({'bottom': T('Bottom strip'), 'top': T('Top strip'), 'screen': T('Whole screen'),
+                      'window': T('Window')}[self.layout])
+        elif k in ('bracketright', 'plus', 'equal', 'KP_Add', 'bracketleft', 'minus', 'KP_Subtract'):
+            grow = k in ('bracketright', 'plus', 'equal', 'KP_Add')
+            self.state['radial_size'] = round(max(0.3, min(3.0, self.radial_size() + (0.1 if grow else -0.1))), 2)
+            self.say(f'{T("Radial size")} {self.state["radial_size"]:.1f}×')
+        elif k in ('l', 'L'):
+            self.set_pinned(not self.pinned)
+            self.say(T('Pinned: clicks go through · super + alt + v closes') if self.pinned else T('Unpinned'))
+        elif k.isdigit() and int(k) < len(KEYS):
+            s = KEYS[int(k)]
+            self.state['style'] = s
+            self.say(NAMES.get(s, T('theme')) if s != 'theme' else f'{T("theme")}: {NAMES.get(self.style())}')
+        else:
+            return False
+        self.remember()
+        return True
+
+    def close_all(self):
+        self.remember()
+        self.destroy()
+
+    def on_destroy(self, *_):
+        self.alive = False
+        self.an.stop()
+        Gtk.main_quit()
+
+    # ── drawing
+    def tick(self):
+        if not self.alive:
+            return False
+        self.area.queue_draw()
+        return True
+
+    def panel(self, W, H):
+        if (W, H) not in self.panel_cache:
+            surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, W, H)
+            ui.themed_panel(cairo.Context(surf), W, H, M, self.pal, radius=18, veil=0.62, style=self.kit)
+            self.panel_cache = {(W, H): surf}
+        return self.panel_cache[(W, H)]
+
+    def on_draw(self, w, cr):
+        W, H = w.get_allocated_width(), w.get_allocated_height()
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+        if self.opacity > 0.01:
+            cr.set_source_surface(self.panel(W, H), 0, 0)
+            cr.paint_with_alpha(self.opacity)
+        st = self.style()
+        sp = self.conf['spectrum']
+        glow = sp.get('glow', 'yes').lower() in ('yes', 'true', '1', 'on')
+        b = sp.get('bands', 'auto').strip().lower()
+        try:   # auto: about one bar every 22 px, so a wide strip gets more bars
+            bands = max(16, min(160, int(b))) if b != 'auto' else max(24, min(160, int((W - 60) / 22)))
+        except ValueError:
+            bands = 56
+        pad = M + 14
+        x, y, ww, hh = pad, pad, W - 2 * pad, H - 2 * pad
+        strip = self.layout in ('bottom', 'top') and st != 'radial'
+        if strip:   # the strips stand right on the screen's edge: no margin on that side
+            y, hh = pad, H - pad
+        t = time.monotonic() - self.t0
+        cr.save()
+        if strip and self.layout == 'top':   # upside down: hanging from the top edge
+            cr.translate(0, H)
+            cr.scale(1, -1)
+        if st == 'radial':
+            # size 1 = the whole circle (ring + bars) fits the short side of the
+            # window; bigger lets the bars run past it (cut at the window's edge)
+            k = self.radial_size()
+            r = (min(W, H) / 2 - 8) * k
+            ring = max(10.0, r * self.radial_ring())
+            rs.draw(cr, st, x, y, ww, hh, self.an, self.cols, t, bands=min(bands, 90), glow=glow,
+                    center=(W / 2, H / 2), radius=ring, reach=max(8.0, r - ring))
+        else:
+            rs.draw(cr, st, x, y, ww, hh, self.an, self.cols, t, bands=None if st == 'wave' else bands, glow=glow)
+        cr.restore()
+        if self.toast and time.monotonic() - self.toast_t < 1.4:
+            a = min(1.0, (1.4 - (time.monotonic() - self.toast_t)) * 3)
+            cr.select_font_face(ui.FONT, cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+            cr.set_font_size(13)
+            ext = cr.text_extents(self.toast)
+            cr.move_to((W - ext.x_advance) / 2, pad + 14)
+            cr.text_path(self.toast)
+            cr.set_source_rgba(0, 0, 0, 0.6 * a)
+            cr.set_line_width(3)
+            cr.stroke_preserve()
+            cr.set_source_rgba(*self.acc, a)
+            cr.fill()
+        return True
+
+
+def main():
+    _lock = ui.single_instance('ricevisualizer', toggle=True)  # noqa: F841
+    GLib.set_prgname('RiceVisualizer')
+    w = Visualizer()
+    ui.quit_on_sigterm(w.close_all)
+    w.show_all()
+    Gtk.main()
+
+
+if __name__ == '__main__':
+    main()

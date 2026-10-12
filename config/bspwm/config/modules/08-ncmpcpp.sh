@@ -12,9 +12,10 @@ kit="${RICE_KIT:-${WIN_SKIN:-}}"
 spec=$(sed -n 's/.*"spectrum": *"\([a-z]*\)".*/\1/p' "$HOME/.config/bspwm/config/music.json" 2>/dev/null)
 case "$spec" in bars|mirror|wave|radial|dots|blocks|terrain) ;; *)
     case "$kit" in
-        pixel) spec=blocks ;; cyber|hud) spec=dots ;; glass|crystal|venom) spec=mirror ;;
-        liquid|nature|lava) spec=terrain ;; holo|butterfly) spec=radial ;;
-        storm|sketch|snake) spec=wave ;; *) spec=bars ;;
+        pixel|steampunk) spec=blocks ;; cyber|hud|neotokyo|graffiti) spec=dots ;;
+        glass|crystal|venom|halloween|glacier) spec=mirror ;;
+        liquid|nature|lava|desert|forest) spec=terrain ;; holo|butterfly|cosmos|witch) spec=radial ;;
+        storm|sketch|snake|abyss) spec=wave ;; *) spec=bars ;;
     esac ;;
 esac
 case "$spec" in
@@ -33,6 +34,12 @@ case "$kit" in
     holo|butterfly)             acc=magenta; grad="magenta,blue,cyan" ;;
     cyber|neon|hud|liquid|crystal) acc=cyan; grad="cyan,blue,magenta" ;;
     nature|pixel|snake)         acc=green;   grad="green,cyan,yellow" ;;
+    # the fourth set: the palette's blue is the theme's own accent
+    halloween|desert|steampunk|dragon) acc=blue; grad="blue,yellow,red" ;;
+    neotokyo|witch|graffiti|cosmos) acc=blue;  grad="blue,magenta,cyan" ;;
+    abyss|glacier)              acc=blue;    grad="blue,cyan,white" ;;
+    forest)                     acc=blue;    grad="blue,yellow,green" ;;
+    samurai)                    acc=blue;    grad="blue,red,green" ;;
     sketch)                     acc=white;   grad="white,cyan,blue" ;;
     *)                          acc=blue;    grad="blue,cyan,magenta" ;;
 esac

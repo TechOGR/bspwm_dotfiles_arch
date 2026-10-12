@@ -13,8 +13,11 @@
 #   ✔ Shortcuts: RiceEditor, wallpapers, keybinds, screenshot, power
 #   ✔ Only one instance: a second launch closes it (no more double
 #     card); Esc or a click outside closes it too
+#   ✔ --pin: a real floating window (the jgmenu Widgets entry): it takes
+#     focus, is dragged with the mouse anywhere on the card, and closes
+#     with Esc, its button, super + q or launching it again
 #
-# Usage: UserCard
+# Usage: UserCard [--pin]
 #
 # Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
 # Licensed under GPL-3.0 license
@@ -37,6 +40,7 @@ import avatar  # noqa: E402
 
 SCRIPTS = os.path.join(ui.BSPWM, 'eww/profilecard/scripts')
 W = 392
+MARGIN = 28        # room around the card for the theme's ornaments (butterflies, flames...)
 
 
 def sh(cmd, timeout=6):
@@ -237,9 +241,19 @@ class Card(Gtk.Window):
         ('caf', 'Caffeine', '󰅶', '󰾪', None, ['CaffeinePolybar', '--toggle']),
     ]
 
-    def __init__(self):
-        super().__init__(type=Gtk.WindowType.POPUP)
+    def __init__(self, pinned=False):
+        super().__init__(type=Gtk.WindowType.TOPLEVEL if pinned else Gtk.WindowType.POPUP)
+        self.pinned = pinned
+        self.placed = False
+        self.drag = None
         self.set_title('UserCard')
+        if pinned:   # managed by bspwm: floating, no border / theme frame (it draws its own)
+            self.set_wmclass('UserCard', 'UserCard')
+            self.set_decorated(False)
+            self.set_skip_taskbar_hint(True)
+            subprocess.run(['bspc', 'rule', '-r', 'UserCard:*:*'], capture_output=True)
+            subprocess.run(['bspc', 'rule', '-a', 'UserCard', 'state=floating', 'border=off', 'focus=on'],
+                           capture_output=True)
         ui.rgba_window(self)
         self.pal = ui.load_palette()
         self.c = ui.rgb_palette(self.pal)
@@ -250,6 +264,8 @@ class Card(Gtk.Window):
 
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         outer.get_style_context().add_class('hud')
+        if self.themed:
+            outer.set_border_width(MARGIN - 4)
         self.add(outer)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         box.get_style_context().add_class('card')
@@ -274,6 +290,12 @@ class Card(Gtk.Window):
         head.pack_start(who, True, True, 0)
         btns = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         btns.set_valign(Gtk.Align.CENTER)
+        if pinned:   # no click outside closes it: its own close button
+            b = Gtk.Button(label='󰅖')
+            b.get_style_context().add_class('ibtn')
+            b.set_tooltip_text('Close')
+            b.connect('clicked', lambda *_: self.close())
+            btns.pack_start(b, False, False, 0)
         for icon, tip, cmd in (('󰌾', 'Lock', ['Lock']), ('󰐥', 'Session menu', ['PowerMenu'])):
             b = self.icon_btn(icon, tip, cmd)
             btns.pack_start(b, False, False, 0)
@@ -378,11 +400,18 @@ class Card(Gtk.Window):
             sc.pack_start(self.icon_btn(icon, tip, cmd, 'short'), True, True, 0)
         box.pack_start(sc, False, False, 0)
 
-        self.add_events(Gdk.EventMask.KEY_PRESS_MASK | Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.add_events(Gdk.EventMask.KEY_PRESS_MASK | Gdk.EventMask.BUTTON_PRESS_MASK |
+                        Gdk.EventMask.BUTTON_RELEASE_MASK | Gdk.EventMask.POINTER_MOTION_MASK)
         self.connect('key-press-event', self.on_key)
         self.connect('button-press-event', self.on_click)
+        self.connect('button-release-event', self.on_release)
+        self.connect('motion-notify-event', self.on_motion)
         self.connect('draw', self.on_draw)
-        self.connect('map-event', lambda *_: ui.grab_input(self))
+        if pinned:   # bspwm places a new floating window itself: moved once it is mapped
+            self.connect('map-event', lambda *_: GLib.timeout_add(60, self.pin_place))
+            GLib.timeout_add(1500, self.keep_borderless)
+        else:
+            self.connect('map-event', lambda *_: ui.grab_input(self))
         self.connect('destroy', Gtk.main_quit)
         self.connect('size-allocate', lambda *_: self.place())
         self.add_tick_callback(self.fade)
@@ -440,7 +469,29 @@ button.ibtn:hover, button.short:hover { border-color: @accent; color: @accent;
         b.connect('clicked', lambda *_: (spawn(*cmd), self.close()))
         return b
 
+    def pin_place(self):
+        self.placed = False
+        self.place()
+        return False
+
+    def keep_borderless(self):
+        """A theme (01-bspwm.sh) or RiceEditor sets bspwm's border width for
+        every window, this one too: take it off again (the card draws its own
+        frame). Checked every 1.5 s while the card is open."""
+        gw = self.get_window()
+        if self.closing or gw is None:
+            return not self.closing
+        node = hex(gw.get_xid())
+        cur = subprocess.run(['bspc', 'config', '-n', node, 'border_width'], capture_output=True,
+                             text=True).stdout.strip()
+        if cur and cur != '0':
+            subprocess.run(['bspc', 'config', '-n', node, 'border_width', '0'], capture_output=True)
+        return True
+
     def place(self):
+        if self.pinned and self.placed:   # where the user left it
+            return
+        self.placed = bool(self.get_mapped())
         geo = ui.monitor_geometry()
         try:
             sys.path.insert(0, os.path.join(ui.BSPWM, 'lib'))
@@ -449,7 +500,8 @@ button.ibtn:hover, button.short:hover { border-color: @accent; color: @accent;
             top = conf['height'] + conf['offset_y'] + 10 if conf['position'] == 'top' else 14
         except Exception:
             top = 50
-        self.move(geo.x + 14, geo.y + top)
+        m = MARGIN if self.themed else 0
+        self.move(max(geo.x, geo.x + 14 - m), max(geo.y, geo.y + top - m))
 
     # ─────────────────────────────────────────────────────────── data
     def tick_stats(self):
@@ -547,10 +599,27 @@ button.ibtn:hover, button.short:hover { border-color: @accent; color: @accent;
         return False
 
     def on_click(self, _w, ev):
+        if self.pinned:   # drag it from anywhere that isn't a button
+            if ev.button == 1 and ev.type == Gdk.EventType.BUTTON_PRESS:
+                wx, wy = self.get_position()
+                self.drag = (ev.x_root - wx, ev.y_root - wy)
+            return False
         w, h = self.get_size()
         wx, wy = self.get_position()
-        if not (wx <= ev.x_root <= wx + w and wy <= ev.y_root <= wy + h):
+        m = MARGIN if self.themed else 0   # the room for the ornaments is outside the card
+        if not (wx + m <= ev.x_root <= wx + w - m and wy + m <= ev.y_root <= wy + h - m):
             self.close()
+        return False
+
+    def on_motion(self, _w, ev):
+        if self.drag and not ev.state & Gdk.ModifierType.BUTTON1_MASK:
+            self.drag = None   # the release went elsewhere: never drag on without the button
+        if self.drag:
+            self.move(int(ev.x_root - self.drag[0]), int(ev.y_root - self.drag[1]))
+        return False
+
+    def on_release(self, _w, ev):
+        self.drag = None
         return False
 
     def on_draw(self, _w, cr):
@@ -560,7 +629,7 @@ button.ibtn:hover, button.short:hover { border-color: @accent; color: @accent;
         cr.set_operator(cairo.OPERATOR_OVER)
         if getattr(self, 'themed', False):
             W, H = self.get_allocated_width(), self.get_allocated_height()
-            ui.paint_theme_panel(cr, W, H, self.pal, anim=ui.panel_anim(self, inside=True))
+            ui.paint_theme_panel(cr, W, H, self.pal, inset=MARGIN, anim=ui.panel_anim(self, inside=True))
         return False
 
     def fade(self, *_):
@@ -585,7 +654,7 @@ button.ibtn:hover, button.short:hover { border-color: @accent; color: @accent;
 def main():
     GLib.set_prgname('UserCard')
     _lock = ui.single_instance('usercard', toggle=True)  # noqa: F841
-    win = Card()
+    win = Card(pinned='--pin' in sys.argv[1:])
     ui.quit_on_sigterm(win.close)
     win.show_all()
     Gtk.main()

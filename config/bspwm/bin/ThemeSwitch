@@ -4,10 +4,10 @@
 # Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
 #
 # ThemeSwitch - change the whole theme without opening RiceEditor.
-# alt + space
+# super + alt + t
 #
 #   ✔ Every theme as a small live preview (its wallpaper, bar, windows)
-#   ✔ Arrows move, Enter / click applies, Esc (or alt + space) closes
+#   ✔ Arrows move, Enter / click applies, Esc (or super + alt + t) closes
 #   ✔ "With its wallpaper" on / off
 #   ✔ A snapshot is saved first (RiceEditor -> Snapshots to go back)
 #
@@ -56,12 +56,18 @@ T = ra.translator({
 })
 # the taglines in Spanish (ricekit has them in English)
 TAG_ES = {
-    'glass': 'moderno y limpio', 'cyber': 'futurista y llamativo', 'minimal': 'elegante y discreto',
+    'cyber': 'futurista y llamativo', 'minimal': 'elegante y discreto',
     'pixel': 'retro y clásico', 'liquid': 'fluido y original', 'hud': 'técnico y profesional',
-    'fire': 'intenso y diferente', 'nature': 'calmo y fresco', 'sketch': 'dibujado a lápiz',
-    'crystal': 'cristal esmerilado y luz', 'lava': 'roca agrietada y fuego', 'neon': 'contorno neón limpio',
+    'nature': 'calmo y fresco', 'sketch': 'dibujado a lápiz',
+    'lava': 'roca agrietada y fuego', 'neon': 'contorno neón limpio',
     'holo': 'espacio, órbitas y partículas', 'storm': 'relámpagos, energía pura', 'venom': 'sombras vivas, veneno',
     'butterfly': 'delicado, libre, mágico', 'snake': 'poder, misterio, escamas',
+    'halloween': 'calabazas, murciélagos y luna llena', 'desert': 'atardecer, cactus y arena',
+    'neotokyo': 'ciudad de neón, torii y sakura', 'abyss': 'medusas y la luz del abismo',
+    'forest': 'setas, luciérnagas y musgo', 'cosmos': 'planetas, nebulosas y polvo estelar',
+    'samurai': 'luna de sangre, katana y sakura', 'steampunk': 'engranajes, vapor y dirigibles',
+    'glacier': 'cristales de hielo y un lobo', 'witch': 'grimorios, cuervos y velas',
+    'dragon': 'oro imperial entre las nubes', 'graffiti': 'aerosol y coronas callejeras',
 }
 
 

@@ -20,13 +20,21 @@ alt + F1
 super + {_,alt + }Return
     OpenApps --{terminal,floating}
 
-# App launcher
+# App launcher (Super alone also opens it: xcape, see bspwmrc)
 super + @space
     OpenApps --menu
 
 # Change the whole theme (without opening RiceEditor)
-alt + @space
+super + alt + t
     ThemeSwitch
+
+# Lyrics of the song playing, in time with the music
+super + alt + y
+    RiceLyrics
+
+# Spectrum of the music playing, in the theme
+super + alt + v
+    RiceVisualizer
 
 # Polybar Modules browser/toggler
 super + alt + m
@@ -51,10 +59,6 @@ super + r
     RiceEditor
 
 # ----- Rofi Applets ----- #
-
-#Terminal Selector
-super + alt + t
-    Term --selecterm
 
 # Wallpaper selector
 super + alt + w

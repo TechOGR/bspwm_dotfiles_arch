@@ -4,7 +4,7 @@
 #
 # baricons - the polybar icons of every theme (Material Design Icons):
 # the launcher becomes the theme's emblem (a lightning bolt, a skull, a
-# butterfly, a snake, a flame, a leaf...) and the other modules take a
+# butterfly, a snake, a pumpkin, a cactus, a jellyfish, a cog...) and the other modules take a
 # glyph in the same spirit (chip / radar / atom / spider for the CPU,
 # camera iris / target for the screenshot...). lib/barconf.py writes
 # rices/<rice>/modules.themed.ini (what config.ini includes) from
@@ -64,6 +64,30 @@ THEMES = {
     'butterfly': dict(emblem=0xf1589, cpu=0xf024a, mem=0xf09f1, disk=0xf0fa1, power=0xf0d08, help=0xf158a,
                       shot=0xf09f0),
     'snake': dict(emblem=0xf150e, cpu=0xf06d0, mem=0xf0aaf, disk=0xf1952, power=0xf0906, help=0xf0208),
+    'halloween': dict(emblem=0xf0ba3, cpu=0xf068c, mem=0xf02a0, disk=0xf0b7f, power=0xf0ba2, help=0xf0bca,
+                      user=0xf0bbf, shot=0xf0208),
+    'desert': dict(emblem=0xf0db5, cpu=0xf0599, mem=0xf0a58, disk=0xf0074, power=0xf059b, help=0xf018b,
+                   user=0xf0e9b),
+    'neotokyo': dict(emblem=0xf1334, cpu=0xf061a, mem=0xf024a, disk=0xf0146, power=0xf0594, help=0xf117e,
+                     shot=0xf0104),
+    'abyss': dict(emblem=0xf0f01, cpu=0xf078d, mem=0xf023a, disk=0xf0031, power=0xf1673, help=0xf0a00,
+                  user=0xf18b4),
+    'forest': dict(emblem=0xf07df, cpu=0xf032a, mem=0xf0531, disk=0xf1897, power=0xf0e66, help=0xf1589,
+                   user=0xf082d),
+    'cosmos': dict(emblem=0xf14de, cpu=0xf0471, mem=0xf1741, disk=0xf10c4, power=0xf0629, help=0xf0b4e,
+                   user=0xf0018),
+    'samurai': dict(emblem=0xf0787, cpu=0xf0680, mem=0xf024a, disk=0xf18be, power=0xf04e5, help=0xf117b,
+                    user=0xf082c),
+    'steampunk': dict(emblem=0xf0493, cpu=0xf08d6, mem=0xf01fa, disk=0xf184d, power=0xf1319, help=0xf1382,
+                      user=0xf001c),
+    'glacier': dict(emblem=0xf0717, cpu=0xf0f2a, mem=0xf01c8, disk=0xf04b7, power=0xf12cb, help=0xf03e9,
+                    user=0xf0ec0),
+    'witch': dict(emblem=0xf1667, cpu=0xf0b2f, mem=0xf14f7, disk=0xf0093, power=0xf05e2, help=0xf1477,
+                  user=0xf00e2),
+    'dragon': dict(emblem=0xf1331, cpu=0xf0238, mem=0xf188f, disk=0xf0b8a, power=0xf1807, help=0xf0680,
+                   user=0xf17dc),
+    'graffiti': dict(emblem=0xf0665, cpu=0xf027c, mem=0xf03d8, disk=0xf14c2, power=0xf01a5, help=0xf00e3,
+                     user=0xf0bc6),
 }
 
 

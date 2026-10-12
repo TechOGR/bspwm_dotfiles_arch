@@ -1,0 +1,717 @@
+#!/usr/bin/env python3
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# RiceLyrics - the lyrics of the song playing right now, in time with
+# the music, in the theme. super + alt + y
+#
+#   ✔ Any player: Spotify, the browser, mpv, MPD... (lib/ricemedia.py)
+#   ✔ Sources in order (config/lyrics.conf): LRCLIB (free, synced),
+#     Musixmatch (user token or API key), lyrics.ovh (free, plain text)
+#   ✔ Synced lines scroll smoothly, the current one lights up word by
+#     word (karaoke); plain lyrics are spread over the song
+#   ✔ The theme's panel, palette and accent; it follows a theme change
+#   ✔ Transparency: mouse wheel over the window (0 = only the lyrics,
+#     glowing over the desktop), T toggles fully transparent
+#   ✔ Drag it anywhere · + / - text size · Up / Down sync offset ·
+#     R search again · Esc closes. Settings are remembered.
+#   ✔ Lyrics are cached (~/.cache/rice-lyrics): a song is looked up once
+#
+# Usage: RiceLyrics            (a second launch closes it)
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+import configparser
+import hashlib
+import json
+import math
+import os
+import re
+import subprocess
+import sys
+import threading
+import time
+import urllib.parse
+import urllib.request
+
+sys.path.insert(0, os.path.expanduser('~/.config/bspwm/lib'))
+import riceui as ui  # noqa: E402
+import riceapp as ra  # noqa: E402
+import ricemedia as rm  # noqa: E402
+from riceui import Gtk, Gdk, GLib, cairo  # noqa: E402
+from gi.repository import Pango, PangoCairo  # noqa: E402
+
+HOME = os.path.expanduser('~')
+BSPWM = os.path.join(HOME, '.config/bspwm')
+CONF = os.path.join(BSPWM, 'config/lyrics.conf')
+STATE = os.path.join(HOME, '.cache', os.environ.get('USER', 'user'), 'ricelyrics.json')
+CACHE = os.path.join(HOME, '.cache', 'rice-lyrics')
+UA = 'RiceLyrics/1.0 (https://github.com/TechOGR/bspwm_dotfiles_arch)'
+M = 16            # room around the panel for the theme's frame
+HEAD = 40         # the title strip at the top
+
+T = ra.translator({
+    'Nothing playing': 'No se reproduce nada', 'Searching the lyrics…': 'Buscando la letra…',
+    'No lyrics found': 'No se encontró la letra', 'Instrumental': 'Instrumental',
+    'not synced': 'sin sincronizar', 'Opacity': 'Opacidad', 'Offset': 'Desfase', 'Size': 'Tamaño',
+    'Searching again…': 'Buscando de nuevo…', 'lyrics': 'letra',
+})
+
+
+# ═══════════════════════════════════════════════════════════ settings
+DEFAULTS = {
+    'sources': {'order': 'lrclib, musixmatch, lyricsovh'},
+    'musixmatch': {'usertoken': '', 'apikey': '', 'desktop_api': 'https://apic-desktop.musixmatch.com/ws/1.1/',
+                   'official_api': 'https://api.musixmatch.com/ws/1.1/'},
+    'lrclib': {'api': 'https://lrclib.net/api/'},
+    'lyricsovh': {'api': 'https://api.lyrics.ovh/v1/'},
+    'window': {'opacity': '0.85', 'font_size': '20', 'context': '3', 'width': '620', 'height': '400',
+               'karaoke': 'yes', 'offset': '0.0'},
+}
+
+
+def load_conf():
+    cp = configparser.ConfigParser(inline_comment_prefixes=('#', ';'))
+    cp.read_dict(DEFAULTS)
+    try:
+        cp.read(CONF)
+    except configparser.Error:
+        pass
+    return cp
+
+
+def load_state():
+    try:
+        with open(STATE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(st):
+    try:
+        os.makedirs(os.path.dirname(STATE), exist_ok=True)
+        with open(STATE + '.tmp', 'w') as f:
+            json.dump(st, f)
+        os.replace(STATE + '.tmp', STATE)
+    except OSError:
+        pass
+
+
+# ═══════════════════════════════════════════════════════════ the song
+JUNK = re.compile(r'\s*[\(\[][^)\]]*(official|video|audio|lyric|letra|visuali[sz]er|remaster|hd|4k|mv|'
+                  r'clip|live|en vivo|explicit)[^)\]]*[\)\]]', re.I)
+
+
+def clean_song(title, artist):
+    """A title / artist pair a lyrics site understands: no "(Official
+    Video)", no " - Topic" channels, "Artist - Title" titles split."""
+    title, artist = (title or '').strip(), (artist or '').strip()
+    artist = re.sub(r'\s*-\s*Topic$|VEVO$', '', artist).strip()
+    if ' - ' in title and (not artist or artist.lower() in title.lower()):
+        a, t = title.split(' - ', 1)
+        artist, title = a.strip(), t.strip()
+    title = JUNK.sub('', title)
+    title = re.sub(r'\s*[\(\[]?\s*(ft\.?|feat\.?|featuring)\s.*$', '', title, flags=re.I)
+    title = re.sub(r'\s*\|.*$', '', title).strip(' -–')
+    artist = re.split(r'\s*(,|&| x | feat\.?| ft\.?)\s*', artist, maxsplit=1, flags=re.I)[0].strip()
+    return title, artist
+
+
+def parse_lrc(text):
+    """[mm:ss.xx] lines -> [(seconds, text)], sorted."""
+    out = []
+    for raw in text.splitlines():
+        stamps = re.findall(r'\[(\d+):(\d+(?:[.:]\d+)?)\]', raw)
+        words = re.sub(r'\[[^\]]*\]', '', raw).strip()
+        for m, s in stamps:
+            out.append((int(m) * 60 + float(s.replace(':', '.')), words))
+    out.sort(key=lambda x: x[0])
+    return out
+
+
+def spread(plain, length):
+    """Plain lyrics over the song: the lines evenly from 5 % to 95 %."""
+    lines = [ln.strip() for ln in plain.strip().splitlines()]
+    while lines and not lines[-1]:
+        lines.pop()
+    if not lines:
+        return []
+    length = length if length and length > 20 else 200
+    a, b = length * 0.05, length * 0.95
+    return [(a + (b - a) * i / max(1, len(lines)), ln) for i, ln in enumerate(lines)]
+
+
+# ═══════════════════════════════════════════════════════════ sources
+def http(url, headers=None, timeout=8):
+    req = urllib.request.Request(url, headers={'User-Agent': UA, **(headers or {})})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read().decode('utf-8', errors='replace')
+
+
+def from_musixmatch(conf, title, artist, album, length):
+    mx = conf['musixmatch']
+    token, key = mx.get('usertoken', '').strip(), mx.get('apikey', '').strip()
+    if token:   # the desktop app's API: synced lyrics
+        q = {'format': 'json', 'namespace': 'lyrics_richsynched', 'subtitle_format': 'mxm',
+             'app_id': 'web-desktop-app-v1.0', 'usertoken': token, 'q_track': title, 'q_artist': artist,
+             'q_album': album or '', 'q_duration': str(int(length or 0)), 'f_subtitle_length': str(int(length or 0))}
+        url = mx.get('desktop_api').rstrip('/') + '/macro.subtitles.get?' + urllib.parse.urlencode(q)
+        body = json.loads(http(url, {'Cookie': 'x-mxm-token-guid=' + token, 'authority': 'apic-desktop.musixmatch.com'}))
+        calls = body.get('message', {}).get('body', {}).get('macro_calls', {}) or {}
+        try:
+            sub = calls['track.subtitles.get']['message']['body']['subtitle_list'][0]['subtitle']['subtitle_body']
+            lines = [(float(x['time']['total']), x.get('text', '')) for x in json.loads(sub)]
+            if lines:
+                return lines, True, 'Musixmatch'
+        except (KeyError, IndexError, TypeError, ValueError):
+            pass
+        try:
+            plain = calls['track.lyrics.get']['message']['body']['lyrics']['lyrics_body']
+            if plain.strip():
+                return spread(plain, length), False, 'Musixmatch'
+        except (KeyError, TypeError):
+            pass
+    if key:   # the official developer API
+        base = mx.get('official_api').rstrip('/') + '/'
+        q = {'q_track': title, 'q_artist': artist, 'apikey': key}
+        try:
+            body = json.loads(http(base + 'matcher.subtitle.get?' + urllib.parse.urlencode(
+                {**q, 'f_subtitle_length': str(int(length or 0)), 'f_subtitle_length_max_deviation': '3'})))
+            sub = body['message']['body']['subtitle']['subtitle_body']
+            lines = parse_lrc(sub)
+            if lines:
+                return lines, True, 'Musixmatch'
+        except (KeyError, TypeError, ValueError):
+            pass
+        body = json.loads(http(base + 'matcher.lyrics.get?' + urllib.parse.urlencode(q)))
+        try:
+            plain = body['message']['body']['lyrics']['lyrics_body']
+            plain = re.sub(r'\*{3,}.*$', '', plain, flags=re.S).strip()   # the "not for commercial use" footer
+            if plain:
+                return spread(plain, length), False, 'Musixmatch'
+        except (KeyError, TypeError):
+            pass
+    return None
+
+
+def from_lrclib(conf, title, artist, album, length):
+    base = conf['lrclib'].get('api').rstrip('/') + '/'
+    hits = []
+    try:
+        q = {'track_name': title, 'artist_name': artist, 'album_name': album or ''}
+        if length:
+            q['duration'] = str(int(round(length)))
+        hits = [json.loads(http(base + 'get?' + urllib.parse.urlencode(q)))]
+    except Exception:
+        pass
+    if not hits or not (hits[0].get('syncedLyrics') or hits[0].get('plainLyrics')):
+        q = {'track_name': title, 'artist_name': artist} if artist else {'q': title}
+        hits = json.loads(http(base + 'search?' + urllib.parse.urlencode(q))) or []
+        # the synced ones first, then the closest length
+        hits.sort(key=lambda h: (not h.get('syncedLyrics'), abs((h.get('duration') or 0) - (length or 0))))
+    for h in hits[:5]:
+        if h.get('instrumental'):
+            return [(0.0, '♪ ' + T('Instrumental') + ' ♪')], False, 'LRCLIB'
+        if h.get('syncedLyrics'):
+            lines = parse_lrc(h['syncedLyrics'])
+            if lines:
+                return lines, True, 'LRCLIB'
+        if h.get('plainLyrics'):
+            return spread(h['plainLyrics'], length), False, 'LRCLIB'
+    return None
+
+
+def from_lyricsovh(conf, title, artist, album, length):
+    if not artist:
+        return None
+    base = conf['lyricsovh'].get('api').rstrip('/') + '/'
+    url = base + urllib.parse.quote(artist) + '/' + urllib.parse.quote(title)
+    plain = json.loads(http(url)).get('lyrics', '')
+    plain = re.sub(r'^Paroles de la chanson.*?\n', '', plain)
+    return (spread(plain, length), False, 'lyrics.ovh') if plain.strip() else None
+
+
+SOURCES = {'musixmatch': from_musixmatch, 'lrclib': from_lrclib, 'lyricsovh': from_lyricsovh}
+
+
+def find_lyrics(conf, title, artist, album, length, fresh=False):
+    """(lines, synced, source) or None; cached per song."""
+    key = hashlib.md5(f'{artist.lower()}|{title.lower()}'.encode()).hexdigest()
+    path = os.path.join(CACHE, key + '.json')
+    if not fresh:
+        try:
+            with open(path) as f:
+                d = json.load(f)
+            return [tuple(x) for x in d['lines']], d['synced'], d['source']
+        except (OSError, ValueError, KeyError):
+            pass
+    order = [s.strip() for s in conf['sources'].get('order', '').split(',') if s.strip() in SOURCES]
+    for name in order or list(SOURCES):
+        try:
+            got = SOURCES[name](conf, title, artist, album, length)
+        except Exception:
+            got = None
+        if got and got[0]:
+            try:
+                os.makedirs(CACHE, exist_ok=True)
+                with open(path, 'w') as f:
+                    json.dump({'lines': got[0], 'synced': got[1], 'source': got[2]}, f)
+            except OSError:
+                pass
+            return got
+    return None
+
+
+# ═══════════════════════════════════════════════════════════ the window
+class Lyrics(Gtk.Window):
+    def __init__(self):
+        super().__init__(title='RiceLyrics')
+        self.set_wmclass('RiceLyrics', 'RiceLyrics')
+        self.set_decorated(False)
+        self.set_skip_taskbar_hint(True)
+        ui.rgba_window(self)
+        subprocess.run(['bspc', 'rule', '-r', 'RiceLyrics:*:*'], capture_output=True)   # (the bare class removes nothing)
+        subprocess.run(['bspc', 'rule', '-a', 'RiceLyrics', 'state=floating', 'border=off', 'focus=on'],
+                       capture_output=True)
+        self.conf = load_conf()
+        self.conf_mtime = self.mtime(CONF)
+        self.state = load_state()
+        win = self.conf['window']
+        self.opacity = float(self.state.get('opacity', win.get('opacity', '0.85')))
+        self.font_size = float(self.state.get('font_size', win.get('font_size', '20')))
+        self.offset = float(self.state.get('offset', win.get('offset', '0')))
+        self.last_opacity = self.opacity or 0.85
+        self.set_default_size(int(win.get('width', '620')), int(win.get('height', '400')))
+        self.theme()
+        self.be = rm.Backend()
+        self.player = None
+        self.song = None          # (title, artist) shown
+        self.lines, self.synced, self.source = [], True, ''
+        self.msg = T('Nothing playing')
+        self.pos, self.pos_t, self.playing, self.length = 0.0, time.monotonic(), False, 0.0
+        self.scroll = 0.0         # the eased line index
+        self.toast, self.toast_t = '', 0.0
+        self.drag, self.hover = None, False
+        self.panel_cache = {}
+        self.fetch_id = 0
+        self.alive = True
+
+        area = Gtk.DrawingArea()
+        area.connect('draw', self.on_draw)
+        self.add(area)
+        self.area = area
+        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK |
+                        Gdk.EventMask.POINTER_MOTION_MASK | Gdk.EventMask.SCROLL_MASK |
+                        Gdk.EventMask.SMOOTH_SCROLL_MASK | Gdk.EventMask.KEY_PRESS_MASK |
+                        Gdk.EventMask.ENTER_NOTIFY_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK)
+        self.connect('button-press-event', self.on_press)
+        self.connect('button-release-event', lambda *_: setattr(self, 'drag', None))
+        self.connect('motion-notify-event', self.on_motion)
+        self.connect('scroll-event', self.on_scroll)
+        self.connect('key-press-event', self.on_key)
+        self.connect('enter-notify-event', lambda *_: self.set_hover(True))
+        self.connect('leave-notify-event', lambda *_: self.set_hover(False))
+        self.connect('map-event', lambda *_: GLib.timeout_add(80, self.restore_place))
+        self.connect('destroy', self.on_destroy)
+        self.where = None
+        self.connect('configure-event', self.on_configure)
+        threading.Thread(target=self.poll, daemon=True).start()
+        GLib.timeout_add(33, self.tick)
+        GLib.timeout_add_seconds(2, self.watch_files)
+
+    # ── theme and settings
+    @staticmethod
+    def mtime(path):
+        try:
+            return os.path.getmtime(path)
+        except OSError:
+            return 0
+
+    def theme(self):
+        self.pal = ui.load_palette()
+        self.c = ui.rgb_palette(self.pal)
+        self.style = ui.theme_style()
+        self.acc = ui.style_accent(self.style, self.pal) if self.style else self.c['blue']
+        self.acc2 = self.c['magenta']
+        self.panel_cache = {}
+
+    def watch_files(self):
+        if not self.alive:
+            return False
+        m = self.mtime(CONF)
+        if m != self.conf_mtime:   # lyrics.conf edited: new keys / sources
+            self.conf_mtime = m
+            self.conf = load_conf()
+            if not self.lines and self.song:
+                self.lookup(fresh=True)
+        key = (self.mtime(ui.theme_cfg()), self.mtime(os.path.join(BSPWM, 'config/tint.json')))
+        if key != getattr(self, 'tkey', None):
+            if getattr(self, 'tkey', None) is not None:
+                self.theme()
+            self.tkey = key
+        return True
+
+    def on_configure(self, *_):
+        if self.get_mapped():   # where it is on screen (read while it is up: closing reports 0, 0)
+            x, y = self.get_position()
+            w, h = self.get_size()
+            self.where = dict(x=x, y=y, w=w, h=h)
+        return False
+
+    def remember(self):
+        self.state.update(opacity=round(self.opacity, 2), font_size=self.font_size, offset=round(self.offset, 2))
+        if self.where:
+            self.state.update(self.where)
+        save_state(self.state)
+
+    def restore_place(self):
+        if 'x' in self.state:
+            geo = ui.monitor_geometry()
+            w = max(260, min(int(self.state.get('w', 620)), int(geo.width * 0.9)))
+            h = max(160, min(int(self.state.get('h', 400)), int(geo.height * 0.8)))
+            x = max(geo.x, min(int(self.state['x']), geo.x + geo.width - w))
+            y = max(geo.y, min(int(self.state['y']), geo.y + geo.height - h))
+            self.resize(w, h)
+            self.move(x, y)
+        return False
+
+    def say(self, text):
+        self.toast, self.toast_t = text, time.monotonic()
+
+    def set_hover(self, v):
+        self.hover = v
+        return False
+
+    # ── the player
+    def poll(self):
+        while self.alive:
+            try:
+                players = self.be.players()
+                p = self.be.active(players, self.player)
+                st = self.be.state(p) if p else None
+            except Exception:
+                p, st = None, None
+            GLib.idle_add(self.update, p, st)
+            time.sleep(0.7)
+
+    def update(self, p, st):
+        self.player = p
+        if not st or not st.get('title'):
+            if self.song is not None:
+                self.song, self.lines = None, []
+            self.msg = T('Nothing playing')
+            self.playing = False
+            return False
+        self.playing = st.get('status') == 'Playing'
+        pos = float(st.get('position') or 0)
+        # re-sync the clock only when it drifted (the player reports in steps)
+        guess = self.pos + (time.monotonic() - self.pos_t if self.playing else 0)
+        if abs(guess - pos) > 0.35 or not self.playing:
+            self.pos, self.pos_t = pos, time.monotonic()
+        self.length = float(st.get('length') or 0)
+        song = clean_song(st.get('title', ''), st.get('artist', ''))
+        if song != self.song:
+            self.song, self.album = song, st.get('album', '')
+            self.pos, self.pos_t = pos, time.monotonic()
+            self.scroll = 0.0
+            self.lookup()
+        return False
+
+    def lookup(self, fresh=False):
+        self.fetch_id += 1
+        fid = self.fetch_id
+        self.lines, self.msg = [], T('Searching the lyrics…')
+        title, artist = self.song
+        conf, album, length = self.conf, self.album, self.length
+
+        def work():
+            got = find_lyrics(conf, title, artist, album, length, fresh)
+            GLib.idle_add(done, got)
+
+        def done(got):
+            if fid != self.fetch_id:
+                return False
+            if got:
+                self.lines, self.synced, self.source = got
+                self.msg = ''
+            else:
+                self.lines, self.msg = [], T('No lyrics found')
+            return False
+        threading.Thread(target=work, daemon=True).start()
+
+    def now(self):
+        return self.pos + (time.monotonic() - self.pos_t if self.playing else 0) + self.offset
+
+    def current(self, t):
+        """Index of the line being sung at t (-1 before the first)."""
+        idx = -1
+        for i, (lt, _txt) in enumerate(self.lines):
+            if lt <= t:
+                idx = i
+            else:
+                break
+        return idx
+
+    def tick(self):
+        if not self.alive:
+            return False
+        if self.lines:
+            target = max(0, self.current(self.now()))
+            self.scroll += (target - self.scroll) * 0.16
+        self.area.queue_draw()
+        return True
+
+    # ── input
+    def on_press(self, _w, ev):
+        if ev.button == 1 and ev.type == Gdk.EventType.BUTTON_PRESS:
+            wx, wy = self.get_position()
+            self.drag = (ev.x_root - wx, ev.y_root - wy)
+        return False
+
+    def on_motion(self, _w, ev):
+        if self.drag and not ev.state & Gdk.ModifierType.BUTTON1_MASK:
+            self.drag = None   # the release went elsewhere: never drag on without the button
+        if self.drag:
+            self.move(int(ev.x_root - self.drag[0]), int(ev.y_root - self.drag[1]))
+        return False
+
+    def on_scroll(self, _w, ev):
+        d = ev.direction
+        if d == Gdk.ScrollDirection.SMOOTH:
+            _ok, _dx, dy = ev.get_scroll_deltas()
+            step = -dy * 0.05
+        else:
+            step = 0.05 if d == Gdk.ScrollDirection.UP else -0.05 if d == Gdk.ScrollDirection.DOWN else 0
+        if step:
+            self.opacity = max(0.0, min(1.0, self.opacity + step))
+            if self.opacity > 0:
+                self.last_opacity = self.opacity
+            self.say(f'{T("Opacity")} {round(self.opacity * 100)}%')
+            self.remember()
+        return True
+
+    def on_key(self, _w, ev):
+        k = Gdk.keyval_name(ev.keyval) or ''
+        if k in ('Escape', 'q'):
+            self.close_all()
+        elif k in ('t', 'T'):
+            self.opacity = 0.0 if self.opacity > 0 else (self.last_opacity or 0.85)
+            self.say(f'{T("Opacity")} {round(self.opacity * 100)}%')
+        elif k in ('plus', 'equal', 'KP_Add'):
+            self.font_size = min(48, self.font_size + 2)
+            self.say(f'{T("Size")} {self.font_size:.0f}')
+        elif k in ('minus', 'KP_Subtract'):
+            self.font_size = max(10, self.font_size - 2)
+            self.say(f'{T("Size")} {self.font_size:.0f}')
+        elif k == 'Up':
+            self.offset += 0.25
+            self.say(f'{T("Offset")} {self.offset:+.2f} s')
+        elif k == 'Down':
+            self.offset -= 0.25
+            self.say(f'{T("Offset")} {self.offset:+.2f} s')
+        elif k in ('r', 'R') and self.song:
+            self.say(T('Searching again…'))
+            self.lookup(fresh=True)
+        else:
+            return False
+        self.remember()
+        return True
+
+    def close_all(self):
+        self.remember()
+        self.destroy()
+
+    def on_destroy(self, *_):
+        self.alive = False
+        Gtk.main_quit()
+
+    # ── drawing
+    def panel(self, W, H):
+        key = (W, H)
+        if key not in self.panel_cache:
+            surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, W, H)
+            pc = cairo.Context(surf)
+            ui.themed_panel(pc, W, H, M, self.pal, radius=18, veil=0.62, style=self.style)
+            self.panel_cache = {key: surf}
+        return self.panel_cache[key]
+
+    def layout(self, cr, text, size, bold, width):
+        lay = PangoCairo.create_layout(cr)
+        fd = Pango.FontDescription(f'{ui.FONT} {"Bold " if bold else ""}{size:.1f}')
+        lay.set_font_description(fd)
+        lay.set_width(int(width * Pango.SCALE))
+        lay.set_wrap(Pango.WrapMode.WORD_CHAR)
+        lay.set_alignment(Pango.Alignment.CENTER)
+        lay.set_text(text or '♪', -1)
+        return lay
+
+    def text(self, cr, lay, x, y, color, alpha, outline=True):
+        """A layout with a dark rim (readable on any wallpaper when the
+        window is transparent) and its color."""
+        cr.move_to(x, y)
+        PangoCairo.layout_path(cr, lay)
+        if outline:
+            k = 1 - min(1.0, self.opacity * 1.4)   # the more transparent, the stronger the rim
+            cr.set_line_join(cairo.LINE_JOIN_ROUND)
+            cr.set_line_width(2.4 + 2.2 * k)
+            cr.set_source_rgba(0, 0, 0, alpha * (0.25 + 0.55 * k))
+            cr.stroke_preserve()
+        cr.set_source_rgba(*color, alpha)
+        cr.fill()
+
+    def on_draw(self, w, cr):
+        W, H = w.get_allocated_width(), w.get_allocated_height()
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+        if self.opacity > 0.01:
+            cr.set_source_surface(self.panel(W, H), 0, 0)
+            cr.paint_with_alpha(self.opacity)
+        fg = self.c['fg']
+        # the title strip: shown with the panel, or while the pointer is over it
+        head_a = max(min(1.0, self.opacity * 1.5), 0.85 if self.hover else 0.0)
+        if self.song and head_a > 0.02:
+            title, artist = self.song
+            lay = self.layout(cr, f'{title}', 10, True, W - 2 * M - 150)
+            lay.set_alignment(Pango.Alignment.LEFT)
+            lay.set_ellipsize(Pango.EllipsizeMode.END)
+            lay.set_wrap(Pango.WrapMode.WORD)
+            lay.set_height(-1)
+            self.text(cr, lay, M + 16, M + 10, fg, head_a, outline=False)
+            if artist:
+                lay2 = self.layout(cr, artist, 8.5, False, W - 2 * M - 150)
+                lay2.set_alignment(Pango.Alignment.LEFT)
+                lay2.set_ellipsize(Pango.EllipsizeMode.END)
+                self.text(cr, lay2, M + 16, M + 26, self.acc, head_a * 0.9, outline=False)
+            if self.source:
+                chip = self.source + ('' if self.synced else ' · ' + T('not synced'))
+                lay3 = self.layout(cr, chip, 7.5, False, 140)
+                lay3.set_alignment(Pango.Alignment.RIGHT)
+                self.text(cr, lay3, W - M - 156, M + 14, self.acc2, head_a * 0.85, outline=False)
+        if self.toast and time.monotonic() - self.toast_t < 1.6:
+            a = min(1.0, (1.6 - (time.monotonic() - self.toast_t)) * 3)
+            lay = self.layout(cr, self.toast, 9, True, W - 2 * M)
+            self.text(cr, lay, M, H - M - 22, self.acc, a)
+        # the lyrics
+        top, bottom = M + HEAD, H - M - 12
+        cr.save()
+        cr.rectangle(0, top, W, bottom - top)
+        cr.clip()
+        cr.push_group()
+        width = W - 2 * M - 40
+        if not self.lines:
+            lay = self.layout(cr, self.msg, self.font_size * 0.75, True, width)
+            _ink, log = lay.get_pixel_extents()
+            self.text(cr, lay, M + 20, (top + bottom) / 2 - log.height / 2, fg, 0.75)
+        else:
+            self.draw_lines(cr, W, top, bottom, width)
+        cr.pop_group_to_source()
+        g = cairo.LinearGradient(0, top, 0, bottom)   # the lines fade out at both ends
+        g.add_color_stop_rgba(0, 0, 0, 0, 0)
+        g.add_color_stop_rgba(0.16, 0, 0, 0, 1)
+        g.add_color_stop_rgba(0.84, 0, 0, 0, 1)
+        g.add_color_stop_rgba(1, 0, 0, 0, 0)
+        cr.mask(g)
+        cr.restore()
+        return True
+
+    def draw_lines(self, cr, W, top, bottom, width):
+        t = self.now()
+        cur = self.current(t)
+        ctx = int(self.conf['window'].get('context', '3') or 3)
+        center = (top + bottom) / 2
+        base = int(math.floor(self.scroll))
+        frac = self.scroll - base
+        big, small = self.font_size, self.font_size * 0.66
+        lays = {}
+        for i in range(max(0, base - ctx - 1), min(len(self.lines), base + ctx + 3)):
+            # the size grows smoothly as a line becomes the current one
+            k = max(0.0, 1 - abs(i - self.scroll))
+            size = small + (big - small) * k
+            lays[i] = (self.layout(cr, self.lines[i][1] or '♪', size, k > 0.5, width), k)
+        if base not in lays:
+            return
+        heights = {i: lay.get_pixel_extents()[1].height + 10 for i, (lay, _k) in lays.items()}
+        # where each line goes: the eased index sits on the center
+        ys = {base: center - heights[base] / 2 - frac * heights[base]}
+        for i in range(base + 1, max(lays) + 1):
+            ys[i] = ys[i - 1] + heights[i - 1]
+        for i in range(base - 1, min(lays) - 1, -1):
+            ys[i] = ys[i + 1] - heights[i]
+        karaoke = self.conf['window'].get('karaoke', 'yes').lower() in ('yes', 'true', '1', 'on')
+        fg = self.c['fg']
+        for i, (lay, k) in lays.items():
+            y = ys[i]
+            if y > bottom or y + heights[i] < top:
+                continue
+            dist = abs(i - self.scroll)
+            alpha = max(0.18, 1 - dist * 0.24)
+            x = M + 20
+            if i == cur and karaoke and self.synced:
+                # the line lights up as it is sung: a dim base, then the lit part
+                start = self.lines[i][0]
+                end = self.lines[i + 1][0] if i + 1 < len(self.lines) else start + 4
+                p = max(0.0, min(1.0, (t - start) / max(0.3, end - start)))
+                self.text(cr, lay, x, y, fg, 0.42)
+                self.lit(cr, lay, x, y, p, alpha)
+            elif i == cur:
+                self.lit(cr, lay, x, y, 1.0, alpha)
+            else:
+                self.text(cr, lay, x, y, fg, alpha * (0.85 if i < cur else 1.0))
+
+    def lit(self, cr, lay, x, y, p, alpha):
+        """The sung part of a line (p from 0 to 1, row by row) in the
+        theme's accent gradient, glowing."""
+        _ink, log = lay.get_pixel_extents()
+        rows = []
+        it = lay.get_iter()
+        while True:
+            _i, r = it.get_line_extents()
+            rows.append((r.x / Pango.SCALE, r.y / Pango.SCALE, r.width / Pango.SCALE, r.height / Pango.SCALE))
+            if not it.next_line():
+                break
+        total = sum(r[2] for r in rows) or 1
+        left = p * total
+        cr.save()
+        cr.new_path()
+        for rx, ry, rw, rh in rows:
+            if left <= 0:
+                break
+            cr.rectangle(x + rx - 2, y + ry, min(rw, left) + 2, rh)
+            left -= rw
+        cr.clip()
+        g = cairo.LinearGradient(x, 0, x + log.width + log.x, 0)
+        g.add_color_stop_rgb(0, *self.acc)
+        g.add_color_stop_rgb(1, *self.acc2)
+        cr.move_to(x, y)
+        PangoCairo.layout_path(cr, lay)
+        path = cr.copy_path()
+        for lw, a in ((7, 0.12), (3.5, 0.25)):   # glow
+            cr.new_path()
+            cr.append_path(path)
+            cr.set_line_width(lw)
+            cr.set_source_rgba(*self.acc, a * alpha)
+            cr.stroke()
+        cr.new_path()
+        cr.append_path(path)
+        cr.set_source(g)
+        cr.fill()
+        cr.restore()
+
+
+def main():
+    _lock = ui.single_instance('ricelyrics', toggle=True)  # noqa: F841
+    GLib.set_prgname('RiceLyrics')
+    w = Lyrics()
+    ui.quit_on_sigterm(w.close_all)
+    w.show_all()
+    Gtk.main()
+
+
+if __name__ == '__main__':
+    main()

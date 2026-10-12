@@ -8,6 +8,14 @@ case ${WIN_STYLE:-custom} in
 esac
 
 bspc config border_width ${BORDER_WIDTH}
+# ...but not on the widgets that draw their own frame (user card, lyrics,
+# spectrum): the global setting just put bspwm's border back on them
+for _n in $(bspc query -N -n .window 2>/dev/null); do
+    case $(xprop -id "$_n" WM_CLASS 2>/dev/null) in
+        *'"UserCard"'* | *'"RiceLyrics"'* | *'"RiceVisualizer"'*) bspc config -n "$_n" border_width 0 ;;
+    esac
+done
+unset _n
 bspc config top_padding ${TOP_PADDING}
 bspc config bottom_padding ${BOTTOM_PADDING}
 bspc config left_padding ${LEFT_PADDING}

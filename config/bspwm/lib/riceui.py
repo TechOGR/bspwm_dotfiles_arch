@@ -175,6 +175,7 @@ class PanelAnim:
         import time as _time
         self._time = _time
         self.widget, self.inside = widget, inside
+        self.sector = sector
         self.style = style if style is not None else theme_style()
         self.fx = None
         self.outline, self.key, self.box = None, None, None
@@ -228,7 +229,15 @@ class PanelAnim:
 
 
 def panel_anim(widget, **kw):
+    """The widget's PanelAnim, made again when it is asked for another style
+    or sector: a long-lived widget (the dock, the OSD) follows a theme
+    change instead of keeping the effect of the theme it started with."""
     a = getattr(widget, '_panel_anim', None)
+    if a is not None:
+        style, sector = kw.get('style'), kw.get('sector', 'win')
+        if (style is not None and style != a.style) or sector != a.sector:
+            a.alive = False   # its timer stops on the next tick
+            a = None
     if a is None:
         a = widget._panel_anim = PanelAnim(widget, **kw)
     return a
@@ -251,9 +260,57 @@ def backdrop_anim(widget, cr, W, H):
     card_anim(widget, cr, m, m, W - 2 * m, H - 2 * m)
 
 
-def paint_theme_panel(cr, W, H, pal, inset=4, scale=0.55, anim=None):
+_FADE_MASKS = {}
+
+
+class edge_fade:
+    """with edge_fade(cr, W, H, f): what is drawn inside fades out over the
+    last f px of each side of a W x H window. Ornaments reaching past the
+    window then melt away instead of ending on its straight edge."""
+
+    def __init__(self, cr, W, H, f):
+        self.cr, self.W, self.H, self.f = cr, int(W), int(H), max(0, int(f))
+
+    def __enter__(self):
+        if self.f:
+            self.cr.push_group()
+        return self
+
+    def __exit__(self, *exc):
+        if not self.f:
+            return False
+        cr, W, H, f = self.cr, self.W, self.H, self.f
+        cr.pop_group_to_source()
+        key = (W, H, f)
+        mask = _FADE_MASKS.get(key)
+        if mask is None:
+            if len(_FADE_MASKS) > 6:
+                _FADE_MASKS.clear()
+            mask = cairo.ImageSurface(cairo.FORMAT_A8, W, H)
+            mc = cairo.Context(mask)
+            mc.set_source_rgba(0, 0, 0, 1)
+            mc.paint()
+            mc.set_operator(cairo.OPERATOR_DEST_IN)
+            for g in (cairo.LinearGradient(0, 0, W, 0), cairo.LinearGradient(0, 0, 0, H)):
+                n = W if g.get_linear_points()[2] else H
+                k = min(0.5, f / max(1, n))
+                g.add_color_stop_rgba(0, 0, 0, 0, 0)
+                g.add_color_stop_rgba(k, 0, 0, 0, 1)
+                g.add_color_stop_rgba(1 - k, 0, 0, 0, 1)
+                g.add_color_stop_rgba(1, 0, 0, 0, 0)
+                mc.set_source(g)
+                mc.paint()
+            mask.flush()
+            _FADE_MASKS[key] = mask
+        cr.mask_surface(mask, 0, 0)
+        return False
+
+
+def paint_theme_panel(cr, W, H, pal, inset=4, radius=20, anim=None, scale=None):
     """A popup's panel in the theme style: its scene under a readable veil,
-    framed by the style's card. False when no style is set."""
+    framed like a window of the style (its ornaments sized for a window,
+    fading out at the edges of the popup instead of being cut). False when
+    no style is set. (scale: older callers, unused.)"""
     style = theme_style()
     if not style:
         return False
@@ -263,16 +320,17 @@ def paint_theme_panel(cr, W, H, pal, inset=4, scale=0.55, anim=None):
     if w < 20 or h < 20:
         return False
     cr.save()
-    wscard.shape(cr, style, x, y, w, h, scale)
+    wscard.window_outline(cr, style, x, y, w, h, radius)
     cr.clip()
     cr.set_source_surface(wsback.render(style, int(w), int(h), wscard.ws.tint_target('windows')), x, y)
     cr.paint()
     cr.set_source_rgba(*hex_rgb(pal['bg']), 0.5)
     cr.paint()
     cr.restore()
-    wscard.paint_card(cr, style, x, y, w, h, scale, part='windows')
-    if anim:   # the theme's effect, inside the frame (the window has no room around it)
-        anim.outline_of((style, W, H, inset, scale), lambda c: wscard.shape(c, style, x, y, w, h, scale))
+    with edge_fade(cr, W, H, min(12, inset - 2)):
+        wscard.paint_window(cr, style, x, y, w, h, radius, True)
+    if anim:   # the theme's effect, inside the frame
+        anim.outline_of((style, W, H, inset, radius), lambda c: wscard.window_outline(c, style, x, y, w, h, radius))
         anim.draw(cr)
     return True
 
@@ -533,7 +591,8 @@ def themed_panel(cr, W, H, M, pal, radius=18, veil=0.55, style=None, anim=None, 
             cr.paint()
             cr.restore()
             if frame:   # frame=False: the scene only (the frame is drawn elsewhere, with room)
-                wscard.paint_window(cr, style, x, y, w, h, radius, True)
+                with edge_fade(cr, W, H, min(12, M - 2)):
+                    wscard.paint_window(cr, style, x, y, w, h, radius, True)
             if anim:   # the theme's effect around the frame (M px of room)
                 anim.outline_of((style, W, H, M, radius),
                                 lambda c: wscard.window_outline(c, style, x, y, w, h, radius))

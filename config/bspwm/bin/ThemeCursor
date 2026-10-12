@@ -1,0 +1,2582 @@
+#!/usr/bin/env python3
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# ThemeCursor - an animated cursor theme drawn for every rice theme.
+#
+#   ThemeCursor <style> [--size 32] [--anim full|calm|off] [bg=#rrggbb fg=... ...]
+#   ThemeCursor --sheet out.png       (a preview of every style)
+#
+#   ✔ One look per theme (cyber, pixel, snake, halloween, samurai,
+#     steampunk, graffiti...) in the colors of the palette in use, plus
+#     extra styles of their own
+#     (aurora, galaxy, rgb, frost, gold, matrix, sakura, plasma, comet,
+#     ocean, vortex, firefly, prism, love, circuit, synthwave)
+#   ✔ Rounded triangle pointer (Bibata like), every cursor animated:
+#     pointer, hand, text, help, crosshair, busy, progress, move, resize
+#   ✔ Any size (24 - 96), animation full, calm (slower) or off
+#   ✔ The rest is inherited from Bibata-Modern-Classic
+#   ✔ Written straight to Xcursor files (no xcursorgen), cached: it is
+#     only drawn again when the theme or its colors change
+#
+# Prints the name of the cursor theme (~/.icons/Rice-Cursor-<kit>-<hash>).
+# config/modules/03-gtk.sh runs it when gtk_cursor="Rice-Animated".
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+import colorsys
+import glob
+import hashlib
+import math
+import os
+import random
+import shutil
+import struct
+import sys
+
+import cairo
+
+HOME = os.path.expanduser('~')
+ICONS = os.path.join(HOME, '.icons')
+PREFIX = 'Rice-Cursor-'
+FALLBACK = 'Bibata-Modern-Classic'
+SIZE = 24          # default nominal size (--size)
+ANIMS = ('full', 'calm', 'off')
+KEEP = 4            # cursor themes kept in ~/.icons (switching back is instant)
+TAU = 2 * math.pi
+PI = math.pi
+
+# the kit palettes (lib/ricekit.py) when no colors are given
+DEFAULT_PAL = dict(bg='#0e1016', fg='#d8dce6', black='#151821', blackb='#3a4058', red='#e27d8b',
+                   green='#9cc9a0', yellow='#e6d3a3', blue='#a9c2ff', magenta='#c3b1e1', cyan='#a3d4e6')
+
+# the extra styles (not rice themes): name, tagline and their own palette
+# bg fg black blackb red green yellow blue magenta cyan
+EXTRA = {
+    'aurora': ('Aurora', 'northern lights flowing',
+               '#061018 #e8fff8 #0a1a24 #1f3a48 #ff6a9a #5affb0 #d8ff8a #4a8cff #b07aff #5ad8ff'),
+    'galaxy': ('Galaxy', 'nebula, stars, shooting stars',
+               '#0a0618 #f2eaff #120a26 #3a2a66 #ff6a9a #7affd8 #ffe08a #6a7aff #c06aff #6ad8ff'),
+    'rgb': ('RGB Gaming', 'rainbow edge spinning',
+            '#08080c #f0f0f0 #101014 #303038 #ff3b5c #3bff8a #ffe03b #3b8cff #c43bff #3bffe8'),
+    'frost': ('Frost', 'ice growing, snowflakes',
+              '#0a1420 #f0faff #102030 #2f4a66 #ff8aa8 #a8ffe8 #fff0b0 #5aaeff #b8a8ff #b8ecff'),
+    'gold': ('Gold', 'polished metal, diamonds',
+             '#1a1006 #fff4d6 #241608 #5a3a12 #e8573a #c8d86a #ffd24a #e8a83a #ffb86a #ffe8a8'),
+    'matrix': ('Matrix', 'falling green code',
+               '#020a04 #c8ffd0 #041208 #0f3a18 #ff4a4a #3aff6a #b8ff6a #2ad85a #8aff9a #6affb8'),
+    'sakura': ('Sakura', 'petals in the wind',
+               '#1a0a14 #fff0f6 #24101c #5a2a46 #ff5a8a #a8ffcf #ffe0a0 #ff9ac8 #ff6ab0 #ffc8e0'),
+    'plasma': ('Plasma', 'energy swirling inside',
+               '#0a0414 #fbeaff #140828 #3a1a66 #ff3a8a #3affc8 #ffe03a #3a7aff #ff3aff #3ae8ff'),
+    'comet': ('Comet', 'a comet orbiting it in 3D',
+              '#060a1a #eef4ff #0c1430 #2a3a6a #ff7a9a #7affc8 #ffe9a8 #5a8aff #b88aff #7ae0ff'),
+    'ocean': ('Ocean', 'rocking tide, foam and bubbles',
+              '#03141f #e8fbff #062234 #164a66 #ff8a7a #5affd0 #fff0b8 #1e8cff #7a9aff #4ae0ff'),
+    'vortex': ('Black Hole', 'accretion disk swallowing light',
+               '#040208 #fff1e0 #0c0612 #2e1a3a #ff4a3a #8aff9a #ffb43a #6a5aff #ff4ab0 #ffd88a'),
+    'firefly': ('Fireflies', 'glowing fireflies on a summer night',
+                '#04100c #eaffe8 #08201a #1e4a3a #ff9a6a #b8ff5a #f4ff7a #3aa88a #9ad86a #6affd0'),
+    'prism': ('Prism', 'light split into a rainbow',
+              '#0c0e16 #f6f8ff #141824 #3a4258 #ff4a6a #4aff9a #ffe04a #4a8aff #b44aff #4ae8ff'),
+    'love': ('Love', 'a beating heart, hearts floating up',
+             '#1a060e #fff0f4 #260a16 #5a1a36 #ff2a5a #ffd0de #ffd0a0 #ff6a9a #ff4a8a #ffc0d8'),
+    'circuit': ('Circuit', 'current racing through the traces',
+                '#02100e #d8fff4 #041a16 #0e3a32 #ff5a5a #3affb0 #ffd84a #2ac8a8 #8affe0 #5affff'),
+    'synthwave': ('Synthwave', 'retro sun over an endless grid',
+                  '#12041e #ffe8ff #1c0830 #4a1a6a #ff3a6a #3affd8 #ffb43a #3a6aff #ff3ad8 #3ae8ff'),
+}
+PAL_KEYS = ('bg', 'fg', 'black', 'blackb', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan')
+
+
+def palette_of(kit):
+    """The style's own palette (lib/ricekit.py or EXTRA) as rgb tuples."""
+    pal = dict(DEFAULT_PAL)
+    if kit in EXTRA:
+        pal.update(zip(PAL_KEYS, EXTRA[kit][2].split()))
+        return {k: rgb(v) for k, v in pal.items()}
+    try:
+        sys.path.insert(0, os.path.join(HOME, '.config/bspwm/lib'))
+        import ricekit
+        pal.update({k: v for k, v in ricekit.palette(kit).items() if k in pal})
+    except Exception:
+        pass
+    return {k: rgb(v) for k, v in pal.items()}
+
+
+# ═══════════════════════════════════════════════════════════ names
+NAMES = {
+    'arrow': ['left_ptr', 'default', 'arrow', 'top_left_arrow'],
+    'hand': ['hand2', 'pointer', 'hand1', 'pointing_hand', 'e29285e634086352946a0e7090d73106',
+             '9d800788f1b08800ae810202380a0822'],
+    'text': ['xterm', 'text', 'ibeam'],
+    'help': ['question_arrow', 'help', 'whats_this', 'left_ptr_help', 'd9ce0ab605698f320427677b458ad60b',
+             '5c6cd98b3f3ebcb1f9c7f1c204630408'],
+    'wait': ['watch', 'wait'],
+    'progress': ['left_ptr_watch', 'progress', 'half-busy', '00000000000000020006000e7e9ffc3f',
+                 '08e8e1c95fe2fc01f976f1e063a24ccd', '3ecb610c1bf2410f44200f48c40d3599'],
+    'cross': ['crosshair', 'cross', 'tcross'],
+    'forbid': ['not-allowed', 'crossed_circle', 'no-drop', 'forbidden', 'circle',
+               '03b6e0fcb3499374a867c041f52298f0'],
+    'move': ['fleur', 'move', 'all-scroll', 'size_all', '4498f0e0c1937ffe01fd06f973665830',
+             '9081237383d90e509aa00f00170e968f'],
+    'ew': ['sb_h_double_arrow', 'h_double_arrow', 'ew-resize', 'col-resize', 'size_hor', 'left_side',
+           'right_side', 'e-resize', 'w-resize', 'split_h', '028006030e0e7ebffc7f7070c0600140',
+           '14fef782d02440884392942c11205230'],
+    'ns': ['sb_v_double_arrow', 'v_double_arrow', 'ns-resize', 'row-resize', 'size_ver', 'top_side',
+           'bottom_side', 'n-resize', 's-resize', 'split_v', '00008160000006810000408080010102',
+           '2870a09082c103050810ffdffffe0204'],
+    'nwse': ['size_fdiag', 'bd_double_arrow', 'nwse-resize', 'top_left_corner', 'bottom_right_corner',
+             'nw-resize', 'se-resize', 'c7088f0f3e6c8088236ef8e1e3e70000'],
+    'nesw': ['size_bdiag', 'fd_double_arrow', 'nesw-resize', 'top_right_corner', 'bottom_left_corner',
+             'ne-resize', 'sw-resize', 'fcf1c3c7cd4491d801f1e1c78f100000'],
+}
+ALWAYS = ('wait', 'progress')     # animated even with --anim off
+# hotspots in the 32 x 32 design grid
+HOT = {'arrow': (5, 4), 'progress': (5, 4), 'help': (5, 4), 'hand': (12.2, 3.2)}
+
+
+# ═══════════════════════════════════════════════════════════ colors
+def rgb(h):
+    h = h.lstrip('#')
+    return tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+
+
+def mix(a, b, f):
+    return tuple(x + (y - x) * f for x, y in zip(a, b))
+
+
+def lum(c):
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+
+
+def hue(h, s=0.55, v=1.0):
+    return colorsys.hsv_to_rgb(h % 1, s, v)
+
+
+def src(cr, c, a=1.0):
+    cr.set_source_rgba(c[0], c[1], c[2], a)
+
+
+def tri(x):
+    """0 -> 1 -> 0 over x in [0, 1)."""
+    return 1 - abs((x % 1) * 2 - 1)
+
+
+def pulse(t, k=1):
+    return 0.5 + 0.5 * math.sin(TAU * t * k)
+
+
+# ═══════════════════════════════════════════════════════════ shapes
+def rrect(cr, x, y, w, h, r):
+    r = min(r, w / 2, h / 2)
+    cr.new_sub_path()
+    cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+    cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+    cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+    cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
+    cr.close_path()
+
+
+def round_poly(cr, pts, radii):
+    """A polygon with every corner rounded (radius in design units)."""
+    n = len(pts)
+    for i in range(n):
+        P, V, N = pts[i - 1], pts[i], pts[(i + 1) % n]
+        dp, dn = math.dist(V, P), math.dist(V, N)
+        fa, fb = min(radii[i], dp * 0.45) / dp, min(radii[i], dn * 0.45) / dn
+        a = (V[0] + (P[0] - V[0]) * fa, V[1] + (P[1] - V[1]) * fa)
+        b = (V[0] + (N[0] - V[0]) * fb, V[1] + (N[1] - V[1]) * fb)
+        (cr.move_to if i == 0 else cr.line_to)(*a)
+        cr.curve_to(a[0] + (V[0] - a[0]) * 0.6, a[1] + (V[1] - a[1]) * 0.6,
+                    b[0] + (V[0] - b[0]) * 0.6, b[1] + (V[1] - b[1]) * 0.6, *b)
+    cr.close_path()
+
+
+# the pointer: a rounded triangle with a soft notch (like Bibata Modern)
+ARROW = [(4.6, 3.2), (4.6, 24.2), (10.6, 19.4), (19.8, 18.6)]
+ARROW_R = [1.7, 2.8, 2.6, 2.8]
+
+
+def p_arrow(cr, t=0):
+    round_poly(cr, ARROW, ARROW_R)
+
+
+def p_hand(cr, t=0):
+    rrect(cr, 10.2, 2.2, 4.2, 16, 2.1)          # index finger
+    rrect(cr, 14.0, 10.4, 3.8, 9, 1.9)          # middle
+    rrect(cr, 17.4, 11.6, 3.6, 8, 1.8)          # ring
+    rrect(cr, 20.6, 13.2, 3.3, 7, 1.65)         # little
+    rrect(cr, 9.4, 15.0, 14.5, 13.5, 4.2)       # palm
+    cr.save()                                   # thumb
+    cr.translate(9.8, 21.5)
+    cr.rotate(-0.75)
+    rrect(cr, -1.9, -8.5, 3.8, 9.5, 1.9)
+    cr.restore()
+
+
+def p_text(cr, t=0):
+    rrect(cr, 15.1, 6.0, 1.8, 20, 0.6)
+    rrect(cr, 11.6, 4.4, 8.8, 2.2, 1.1)
+    rrect(cr, 11.6, 25.4, 8.8, 2.2, 1.1)
+
+
+def p_cross(cr, t=0):
+    g = 3.2 + 0.9 * pulse(t)
+    w = 1.9
+    for a in range(4):
+        cr.save()
+        cr.translate(16, 16)
+        cr.rotate(a * math.pi / 2)
+        rrect(cr, g, -w / 2, 11.5 - g, w, w / 2)
+        cr.restore()
+    cr.new_sub_path()
+    cr.arc(16, 16, 1.25, 0, TAU)
+
+
+def p_forbid(cr, t=0):
+    cr.new_sub_path()
+    cr.arc(16, 16, 10, 0, TAU)
+    cr.new_sub_path()
+    cr.arc_negative(16, 16, 7, TAU, 0)
+    cr.save()
+    cr.translate(16, 16)
+    cr.rotate(math.pi / 4)
+    cr.rectangle(-8, -1.4, 16, 2.8)
+    cr.restore()
+
+
+def _double(cr, angle, half=10.5, shaft=1.1, head=4.6, hw=3.6, t=0):
+    half += 0.9 * pulse(t)               # the arrows breathe outwards
+    cr.save()
+    cr.translate(16, 16)
+    cr.rotate(angle)
+    round_poly(cr, [(-half, 0), (-half + head, -hw), (-half + head, -shaft), (half - head, -shaft),
+                    (half - head, -hw), (half, 0), (half - head, hw), (half - head, shaft),
+                    (-half + head, shaft), (-half + head, hw)],
+               [1.0, 0.9, 0.3, 0.3, 0.9, 1.0, 0.9, 0.3, 0.3, 0.9])
+    cr.restore()
+
+
+def p_move(cr, t=0):
+    _double(cr, 0, half=11, head=4.2, hw=3.4, t=t)
+    _double(cr, math.pi / 2, half=11, head=4.2, hw=3.4, t=t)
+
+
+SHAPES = {
+    'arrow': p_arrow, 'progress': p_arrow, 'help': p_arrow, 'hand': p_hand, 'text': p_text, 'cross': p_cross,
+    'forbid': p_forbid, 'move': p_move,
+    'ew': lambda cr, t=0: _double(cr, 0, t=t), 'ns': lambda cr, t=0: _double(cr, math.pi / 2, t=t),
+    'nwse': lambda cr, t=0: _double(cr, math.pi / 4, t=t),
+    'nesw': lambda cr, t=0: _double(cr, -math.pi / 4, t=t),
+}
+
+
+# ═══════════════════════════════════════════════════════════ fills
+# fill(cr, t, P): paints the inside (the shape is the clip)
+def f_glass(cr, t, P):
+    g = cairo.LinearGradient(0, 0, 32, 32)
+    g.add_color_stop_rgba(0, *P['fg'], 0.70)
+    g.add_color_stop_rgba(0.5, *mix(P['blue'], P['fg'], 0.35), 0.55)
+    g.add_color_stop_rgba(1, *P['magenta'], 0.60)
+    cr.set_source(g)
+    cr.paint()
+    x = -16 + 64 * t                      # light streak
+    g = cairo.LinearGradient(x - 5, x - 5, x + 5, x + 5)
+    g.add_color_stop_rgba(0, 1, 1, 1, 0)
+    g.add_color_stop_rgba(0.5, 1, 1, 1, 0.85)
+    g.add_color_stop_rgba(1, 1, 1, 1, 0)
+    cr.set_source(g)
+    cr.paint()
+
+
+def f_cyber(cr, t, P):
+    src(cr, P['bg'], 0.92)
+    cr.paint()
+    g = cairo.LinearGradient(0, 0, 0, 32)
+    g.add_color_stop_rgba(0, *P['magenta'], 0.55)
+    g.add_color_stop_rgba(1, *P['cyan'], 0.35)
+    cr.set_source(g)
+    cr.paint()
+    off = (t * 32) % 2.4                  # running scanlines
+    y = -2.4 + off
+    while y < 34:
+        src(cr, P['bg'], 0.55)
+        cr.rectangle(0, y, 32, 1.0)
+        cr.fill()
+        y += 2.4
+    y = (t * 40) % 40 - 4                 # bright sweep
+    src(cr, P['cyan'], 0.9)
+    cr.rectangle(0, y, 32, 1.2)
+    cr.fill()
+
+
+def f_minimal(cr, t, P):
+    src(cr, P['fg'])
+    cr.paint()
+    x = -20 + 72 * t
+    g = cairo.LinearGradient(x - 6, x - 6, x + 6, x + 6)
+    g.add_color_stop_rgba(0, *P['blue'], 0)
+    g.add_color_stop_rgba(0.5, *P['blue'], 0.45)
+    g.add_color_stop_rgba(1, *P['blue'], 0)
+    cr.set_source(g)
+    cr.paint()
+
+
+def f_pixel(cr, t, P):
+    src(cr, (1, 1, 1))
+    cr.paint()
+    cols = [P['red'], P['yellow'], P['green'], P['cyan'], P['blue'], P['magenta']]
+    step = 2
+    shift = int(t * len(cols)) % len(cols)
+    for i, y in enumerate(range(0, 32, step)):
+        if 12 <= y < 20:
+            src(cr, cols[(i + shift) % len(cols)])
+            cr.rectangle(0, y, 32, step)
+            cr.fill()
+
+
+def f_liquid(cr, t, P):
+    g = cairo.LinearGradient(0, 0, 0, 32)
+    g.add_color_stop_rgb(0, *mix(P['blue'], P['bg'], 0.45))
+    g.add_color_stop_rgb(1, *mix(P['blue'], P['bg'], 0.15))
+    cr.set_source(g)
+    cr.paint()
+    level = 15 + 2.2 * math.sin(TAU * t)
+    for k, (col, a, ph) in enumerate(((P['blue'], 0.75, 0.5), (P['cyan'], 0.95, 0))):
+        cr.move_to(-1, 33)
+        for i in range(0, 35):
+            x = i - 1
+            cr.line_to(x, level + k * 0.8 + 1.3 * math.sin(x / 32 * TAU * 1.5 + TAU * (t + ph)))
+        cr.line_to(33, 33)
+        cr.close_path()
+        g = cairo.LinearGradient(0, level, 0, 32)
+        g.add_color_stop_rgba(0, *col, a)
+        g.add_color_stop_rgba(1, *mix(col, P['bg'], 0.3), a)
+        cr.set_source(g)
+        cr.fill()
+    for bx, ph in ((7, 0), (10.5, 0.45), (6, 0.75)):   # bubbles
+        f = (t + ph) % 1
+        y = 27 - f * (27 - level)
+        src(cr, (1, 1, 1), 0.75 * (1 - f))
+        cr.arc(bx + math.sin(TAU * f) * 0.6, y, 0.7, 0, TAU)
+        cr.fill()
+
+
+def f_hud(cr, t, P):
+    src(cr, P['bg'], 0.70)
+    cr.paint()
+    src(cr, P['cyan'], 0.16)
+    for y in range(0, 32, 2):
+        cr.rectangle(0, y, 32, 0.5)
+    cr.fill()
+    y = -3 + 38 * t
+    g = cairo.LinearGradient(0, y - 4, 0, y + 0.6)
+    g.add_color_stop_rgba(0, *P['cyan'], 0)
+    g.add_color_stop_rgba(1, *P['cyan'], 0.9)
+    cr.set_source(g)
+    cr.rectangle(0, y - 4, 32, 4.6)
+    cr.fill()
+
+
+def f_fire(cr, t, P):
+    g = cairo.LinearGradient(0, 4, 0, 30)
+    g.add_color_stop_rgb(0, *mix(P['red'], P['bg'], 0.35))
+    g.add_color_stop_rgb(1, *P['red'])
+    cr.set_source(g)
+    cr.paint()
+    layers = ((P['blue'], 0.95, 9.0), (P['yellow'], 0.95, 15.5), ((1, 1, 0.85), 0.85, 21.5))
+    for li, (col, a, base) in enumerate(layers):
+        cr.move_to(-1, 33)
+        for i in range(0, 35):
+            x = i - 1
+            h = (math.sin(x * 0.9 + TAU * t * 2 + li) * 1.6 + math.sin(x * 0.37 - TAU * t * 3) * 1.4
+                 + math.sin(x * 1.7 + TAU * t) * 0.7)
+            cr.line_to(x, base + h)
+        cr.line_to(33, 33)
+        cr.close_path()
+        src(cr, col, a)
+        cr.fill()
+    for i in range(3):                    # embers
+        f = (t * 2 + i / 3) % 1
+        src(cr, P['yellow'], 1 - f)
+        cr.arc(6 + i * 3.5 + math.sin(TAU * f) * 1.2, 26 - f * 22, 0.6, 0, TAU)
+        cr.fill()
+
+
+def f_nature(cr, t, P):
+    g = cairo.LinearGradient(4, 3, 16, 28)
+    g.add_color_stop_rgb(0, *mix(P['green'], (1, 1, 1), 0.35))
+    g.add_color_stop_rgb(0.6, *P['green'])
+    g.add_color_stop_rgb(1, *mix(P['green'], P['bg'], 0.45))
+    cr.set_source(g)
+    cr.paint()
+    src(cr, P['bg'], 0.30)                # leaf veins
+    cr.set_line_width(0.55)
+    cr.move_to(4.5, 4)
+    cr.curve_to(7, 12, 9, 17, 14, 26)
+    cr.stroke()
+    for i in range(1, 5):
+        y = 4 + i * 4.2
+        x = 4.5 + i * 1.6
+        cr.move_to(x, y)
+        cr.line_to(x + 3.2, y - 0.6)
+        cr.stroke()
+    x = -12 + 50 * t
+    g = cairo.LinearGradient(x - 4, x - 4, x + 4, x + 4)
+    g.add_color_stop_rgba(0, 1, 1, 1, 0)
+    g.add_color_stop_rgba(0.5, 1, 1, 0.8, 0.45)
+    g.add_color_stop_rgba(1, 1, 1, 1, 0)
+    cr.set_source(g)
+    cr.paint()
+
+
+def f_sketch(cr, t, P):
+    src(cr, mix(P['fg'], P['bg'], 0.08), 0.95)
+    cr.paint()
+    rnd = random.Random(int(t * 4) * 7 + 3)
+    src(cr, P['blackb'], 0.55)
+    cr.set_line_width(0.5)
+    for i in range(-32, 34, 3):           # hatching
+        j = rnd.uniform(-0.5, 0.5)
+        cr.move_to(i + j, 32)
+        cr.line_to(i + 32 + j, 0)
+    cr.stroke()
+
+
+def f_crystal(cr, t, P):
+    cx, cy = 9, 14.5
+    pts = ARROW + [ARROW[0]]
+    tones = [mix(P['cyan'], (1, 1, 1), 0.55), P['blue'], mix(P['cyan'], (1, 1, 1), 0.25),
+             mix(P['blue'], P['bg'], 0.35), P['cyan'], mix(P['blue'], (1, 1, 1), 0.4), P['blue']]
+    src(cr, P['blue'])
+    cr.paint()
+    for i in range(len(ARROW)):
+        tone = tones[i % len(tones)]
+        a = 0.75 + 0.25 * math.sin(TAU * (t + i / 7))
+        cr.move_to(cx, cy)
+        cr.line_to(*pts[i])
+        cr.line_to(*pts[i + 1])
+        cr.close_path()
+        src(cr, tone, a)
+        cr.fill()
+    src(cr, (1, 1, 1), 0.35)
+    cr.set_line_width(0.35)
+    for p in ARROW:
+        cr.move_to(cx, cy)
+        cr.line_to(*p)
+    cr.stroke()
+
+
+LAVA_CRACKS = [[(4.5, 6), (6.5, 9.5), (5.6, 13), (8.2, 16), (7.0, 20.5), (5, 23)],
+               [(6.5, 9.5), (10, 12.4), (12.5, 13.2), (16, 17.5)],
+               [(8.2, 16), (9.5, 19.5), (7.5, 22.5)],
+               [(5.6, 13), (4.2, 15)]]
+
+
+def f_lava(cr, t, P):
+    g = cairo.RadialGradient(8, 14, 1, 8, 14, 16)
+    g.add_color_stop_rgb(0, *mix(P['blackb'], P['red'], 0.25))
+    g.add_color_stop_rgb(1, *P['black'])
+    cr.set_source(g)
+    cr.paint()
+    heat = 0.55 + 0.45 * math.sin(TAU * t)
+    cr.set_line_join(cairo.LINE_JOIN_ROUND)
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    for w, col, a in ((2.6, P['red'], 0.35 * heat), (1.3, P['blue'], 0.9), (0.5, P['yellow'], 0.6 + 0.4 * heat)):
+        cr.set_line_width(w)
+        for line in LAVA_CRACKS:
+            cr.move_to(*line[0])
+            for p in line[1:]:
+                cr.line_to(*p)
+        src(cr, col, a)
+        cr.stroke()
+
+
+def f_neon(cr, t, P):
+    src(cr, P['bg'], 0.82)
+    cr.paint()
+    g = cairo.LinearGradient(0, 0, 20, 28)
+    g.add_color_stop_rgba(0, *P['cyan'], 0.30 * neon_flicker(t))
+    g.add_color_stop_rgba(1, *P['magenta'], 0.22 * neon_flicker(t))
+    cr.set_source(g)
+    cr.paint()
+
+
+def neon_flicker(t):
+    f = t % 1
+    return 0.35 if 0.40 <= f < 0.44 or 0.47 <= f < 0.49 else 1.0
+
+
+def f_holo(cr, t, P):
+    g = cairo.LinearGradient(0, 0, 24, 28)
+    for i in range(7):
+        g.add_color_stop_rgb(i / 6, *hue(t + i / 6 * 0.8, 0.45, 1.0))
+    cr.set_source(g)
+    cr.paint()
+    src(cr, (1, 1, 1), 0.25)
+    for i in range(-32, 34, 3):
+        cr.rectangle(0, (i + t * 6) % 34 - 1, 32, 0.6)
+    cr.fill()
+
+
+STORM_BOLT = [(6.2, 5.5), (9.2, 10.5), (6.6, 11.6), (10.4, 17.2), (8.3, 17.6), (9.6, 22)]
+
+
+def storm_flash(t):
+    f = t % 1
+    return 1.0 if f < 0.06 or 0.12 <= f < 0.17 else (0.5 if 0.06 <= f < 0.12 else 0.0)
+
+
+def f_storm(cr, t, P):
+    g = cairo.LinearGradient(0, 0, 0, 30)
+    g.add_color_stop_rgb(0, *mix(P['blue'], P['bg'], 0.35))
+    g.add_color_stop_rgb(1, *mix(P['bg'], P['blue'], 0.15))
+    cr.set_source(g)
+    cr.paint()
+    for cx, cy, ph in ((8, 9, 0), (12, 20, 0.5)):   # drifting clouds
+        x = cx + 3 * math.sin(TAU * (t + ph))
+        g = cairo.RadialGradient(x, cy, 0, x, cy, 6)
+        g.add_color_stop_rgba(0, *P['fg'], 0.22)
+        g.add_color_stop_rgba(1, *P['fg'], 0)
+        cr.set_source(g)
+        cr.paint()
+    fl = storm_flash(t)
+    if fl:
+        src(cr, P['cyan'], 0.35 * fl)
+        cr.paint()
+    cr.set_line_join(cairo.LINE_JOIN_ROUND)
+    for w, col, a in ((2.2, P['cyan'], 0.35 + 0.5 * fl), (0.8, (1, 1, 1), 0.25 + 0.75 * fl)):
+        cr.move_to(*STORM_BOLT[0])
+        for p in STORM_BOLT[1:]:
+            cr.line_to(*p)
+        cr.set_line_width(w)
+        src(cr, col, a)
+        cr.stroke()
+
+
+def f_venom(cr, t, P):
+    g = cairo.RadialGradient(7, 9, 0.5, 9, 14, 16)
+    g.add_color_stop_rgb(0, *mix(P['black'], P['fg'], 0.25))
+    g.add_color_stop_rgb(0.35, *P['black'])
+    g.add_color_stop_rgb(1, *P['bg'])
+    cr.set_source(g)
+    cr.paint()
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)  # veins crawling inside
+    for i, (x0, y0) in enumerate(((4.5, 8), (5, 15), (6, 21))):
+        w = 0.5 + 0.4 * pulse(t, 1)
+        src(cr, P['red'], 0.55 + 0.35 * pulse(t + i / 3))
+        cr.set_line_width(w)
+        cr.move_to(x0, y0)
+        cr.curve_to(x0 + 3, y0 + 1 + math.sin(TAU * (t + i / 3)), x0 + 5, y0 - 1, x0 + 8, y0 + 2)
+        cr.stroke()
+
+
+def f_butterfly(cr, t, P):
+    g = cairo.LinearGradient(0, 0, 18, 28)
+    g.add_color_stop_rgb(0, *mix(P['magenta'], (1, 1, 1), 0.45))
+    g.add_color_stop_rgb(0.55, *P['magenta'])
+    g.add_color_stop_rgb(1, *P['blue'])
+    cr.set_source(g)
+    cr.paint()
+    for i in range(5):                    # sparkles
+        f = (t + i / 5) % 1
+        x, y = 5 + (i * 3.7) % 11, 6 + (i * 5.3) % 17
+        src(cr, (1, 1, 1), tri(f) * 0.9)
+        cr.arc(x, y, 0.35 + 0.45 * tri(f), 0, TAU)
+        cr.fill()
+
+
+def f_snake(cr, t, P):
+    g = cairo.LinearGradient(0, 0, 16, 30)
+    g.add_color_stop_rgb(0, *mix(P['green'], P['yellow'], 0.35))
+    g.add_color_stop_rgb(1, *mix(P['green'], P['bg'], 0.55))
+    cr.set_source(g)
+    cr.paint()
+    s = 3.0                               # sliding scales
+    off = t * s * 2
+    cr.set_line_width(0.55)
+    row = 0
+    y = -s + (off % s)
+    while y < 34:
+        x0 = -s + (s / 2 if (row + int(off // s)) % 2 else 0)
+        x = x0
+        while x < 34:
+            cr.new_sub_path()
+            cr.arc(x, y, s / 2, 0, math.pi)
+            x += s
+        y += s * 0.75
+        row += 1
+    src(cr, P['bg'], 0.55)
+    cr.stroke()
+    x = -12 + 50 * t
+    g = cairo.LinearGradient(x - 3, 0, x + 3, 0)
+    g.add_color_stop_rgba(0, 1, 1, 0.7, 0)
+    g.add_color_stop_rgba(0.5, 1, 1, 0.7, 0.4)
+    g.add_color_stop_rgba(1, 1, 1, 0.7, 0)
+    cr.set_source(g)
+    cr.paint()
+
+
+# ═══════════════════════════════════════════════════════════ extras
+# extra(cr, t, P, shape): drawn over the cursor, outside the clip
+def x_cyber(cr, t, P, shape, path):
+    f = t % 1
+    glitch = 0.2 <= f < 0.26 or 0.62 <= f < 0.66
+    d = 1.4 if glitch else 0.45
+    cr.set_line_join(cairo.LINE_JOIN_ROUND)
+    for dx, col in ((-d, P['cyan']), (d, P['magenta'])):
+        cr.save()
+        cr.translate(dx, 0)
+        path(cr, t)
+        cr.set_line_width(0.6)
+        src(cr, col, 0.85 if glitch else 0.45)
+        cr.stroke()
+        cr.restore()
+    if glitch and shape in ('arrow', 'hand'):
+        src(cr, P['cyan'], 0.9)
+        cr.rectangle(3 + 6 * f, 12 + 20 * f % 8, 8, 0.9)
+        cr.fill()
+
+
+def x_hud(cr, t, P, shape, path):
+    if shape not in ('arrow', 'hand'):
+        return
+    bx, by = (15, 25) if shape == 'arrow' else (25.5, 9)
+    for i in range(3):
+        h = 1 + 3.2 * tri(t * 2 + i * 0.3)
+        src(cr, P['cyan'], 0.9)
+        cr.rectangle(bx + i * 1.9, by - h, 1.2, h)
+        cr.fill()
+    src(cr, P['cyan'], 1.0 if t % 0.5 < 0.25 else 0.25)
+    cr.rectangle(bx + 6, by - 1.2, 1.2, 1.2)
+    cr.fill()
+
+
+def x_nature(cr, t, P, shape, path):
+    if shape not in ('arrow', 'hand'):
+        return
+    ax, ay = (11.2, 20.2) if shape == 'arrow' else (22.5, 15)
+    cr.save()
+    cr.translate(ax, ay)
+    cr.rotate(-0.75 + 0.28 * math.sin(TAU * t))
+    for sc, col in ((1.0, mix(P['green'], P['bg'], 0.5)), (0.82, P['green'])):
+        cr.save()
+        cr.scale(sc, sc)
+        cr.move_to(0, 0)
+        cr.curve_to(2.5, -2.6, 6, -2.4, 8, 0)
+        cr.curve_to(6, 2.4, 2.5, 2.6, 0, 0)
+        cr.restore()
+        src(cr, col)
+        cr.fill()
+    src(cr, mix(P['green'], P['bg'], 0.6))
+    cr.set_line_width(0.4)
+    cr.move_to(0.4, 0)
+    cr.line_to(6.4, 0)
+    cr.stroke()
+    cr.restore()
+
+
+def x_sketch(cr, t, P, shape, path):
+    rnd = random.Random(int(t * 4) * 13 + 1)
+    cr.set_line_join(cairo.LINE_JOIN_ROUND)
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    for i in range(2):
+        cr.save()
+        cr.translate(16, 16)
+        cr.rotate(rnd.uniform(-0.025, 0.025))
+        cr.translate(-16 + rnd.uniform(-0.45, 0.45), -16 + rnd.uniform(-0.45, 0.45))
+        path(cr, t)
+        cr.restore()
+        cr.set_line_width(0.9 if i == 0 else 0.55)
+        src(cr, P['bg'], 0.95 if i == 0 else 0.7)
+        cr.stroke()
+
+
+def x_crystal(cr, t, P, shape, path):
+    if shape not in ('arrow', 'hand', 'progress'):
+        return
+    a, b = ((5, 4), (18.5, 18.2)) if shape != 'hand' else ((12.3, 2.5), (12.3, 16))
+    f = t % 1
+    x, y = a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f
+    s = 3.2 * tri(f)
+    if s < 0.2:
+        return
+    cr.save()
+    cr.translate(x, y)
+    cr.rotate(TAU * f * 0.25)
+    cr.move_to(0, -s)
+    for k in range(4):
+        ang = k * math.pi / 2
+        cr.line_to(math.sin(ang + math.pi / 4) * s * 0.22, -math.cos(ang + math.pi / 4) * s * 0.22)
+        cr.line_to(math.sin(ang + math.pi / 2) * s, -math.cos(ang + math.pi / 2) * s)
+    cr.close_path()
+    src(cr, (1, 1, 1), 0.95)
+    cr.fill()
+    cr.restore()
+
+
+def x_holo(cr, t, P, shape, path):
+    if shape not in ('arrow', 'hand'):
+        return
+    cx, cy = (11, 15) if shape == 'arrow' else (16.5, 16)
+    for i in range(2):
+        for k in range(5):                # particle + trail
+            a = TAU * (t - k * 0.025 + i * 0.5)
+            x = cx + 11 * math.cos(a) * 0.72 - 4.5 * math.sin(a) * 0.69
+            y = cy + 11 * math.cos(a) * 0.69 + 4.5 * math.sin(a) * 0.72
+            src(cr, hue(t + i * 0.5, 0.35, 1.0), (1 - k / 5) * 0.95)
+            cr.arc(x, y, 1.0 - k * 0.15, 0, TAU)
+            cr.fill()
+
+
+def x_storm(cr, t, P, shape, path):
+    fl = storm_flash(t)
+    if fl:
+        path(cr, t)
+        cr.set_line_width(0.8)
+        src(cr, (1, 1, 1), 0.8 * fl)
+        cr.stroke()
+
+
+def x_venom(cr, t, P, shape, path):
+    if shape not in ('arrow', 'hand', 'progress'):
+        return
+    drips = ((5.4, 23.6, 0.0), (10.6, 20.4, 0.45)) if shape != 'hand' else ((12, 28.4, 0), (20, 28.4, 0.5))
+    for x, y0, ph in drips:
+        f = (t + ph) % 1
+        if f < 0.6:                       # growing
+            L = 0.5 + 3.2 * (f / 0.6)
+            yb = y0 + L
+        else:                             # falling
+            L = 1.2
+            yb = y0 + 3.7 + (f - 0.6) / 0.4 * 6
+        r = 0.95
+        top = yb - L if f < 0.6 else yb - 1.6
+        a = 1.0 if f < 0.6 else 1 - (f - 0.6) / 0.4
+        if f < 0.6:
+            cr.move_to(x - 0.6, y0 - 0.5)
+            cr.line_to(x + 0.6, y0 - 0.5)
+            cr.line_to(x + r * 0.7, yb - r)
+            cr.line_to(x - r * 0.7, yb - r)
+            cr.close_path()
+        cr.new_sub_path()
+        cr.arc(x, yb - r, r, 0, TAU)
+        if f >= 0.6:
+            cr.move_to(x - r * 0.7, yb - r)
+            cr.line_to(x, top)
+            cr.line_to(x + r * 0.7, yb - r)
+        src(cr, P['red'], a)
+        cr.fill()
+
+
+def x_butterfly(cr, t, P, shape, path):
+    if shape not in ('arrow', 'hand'):
+        return
+    ax, ay = (22.5, 24) if shape == 'arrow' else (26.5, 7)
+    ay += 1.2 * math.sin(TAU * t)
+    flap = 0.25 + 0.75 * abs(math.cos(TAU * t * 2))
+    cr.save()
+    cr.translate(ax, ay)
+    cr.rotate(-0.35)
+    for side in (-1, 1):
+        for (wx, wy, rx, ry, col) in ((3.0, -1.6, 3.0, 2.4, P['magenta']), (2.2, 1.6, 2.0, 1.7, P['blue'])):
+            cr.save()
+            cr.scale(side * flap, 1)
+            cr.translate(wx, wy)
+            cr.scale(rx, ry)
+            cr.arc(0, 0, 1, 0, TAU)
+            cr.restore()
+            g = cairo.RadialGradient(0, 0, 0, 0, 0, 5)
+            g.add_color_stop_rgb(0, *mix(col, (1, 1, 1), 0.5))
+            g.add_color_stop_rgb(1, *col)
+            cr.set_source(g)
+            cr.fill_preserve()
+            src(cr, P['bg'], 0.8)
+            cr.set_line_width(0.45)
+            cr.stroke()
+    src(cr, P['bg'])
+    rrect(cr, -0.45, -3.2, 0.9, 6.0, 0.45)
+    cr.fill()
+    cr.set_line_width(0.35)
+    cr.move_to(0, -3)
+    cr.line_to(-1, -4.6)
+    cr.move_to(0, -3)
+    cr.line_to(1, -4.6)
+    cr.stroke()
+    cr.restore()
+
+
+def x_snake(cr, t, P, shape, path):
+    if shape != 'arrow':
+        return
+    f = t % 1                             # forked tongue flicking out of the tail
+    out = tri(f * 2) if f < 0.5 else 0
+    if out < 0.05:
+        return
+    cr.save()
+    cr.translate(11, 20.8)
+    cr.rotate(1.0)
+    L = 4.2 * out
+    src(cr, P['red'])
+    cr.set_line_width(0.7)
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    cr.move_to(0, 0)
+    cr.line_to(L, 0)
+    cr.line_to(L + 1.4 * out, -1.0 * out)
+    cr.move_to(L, 0)
+    cr.line_to(L + 1.4 * out, 1.0 * out)
+    cr.stroke()
+    cr.restore()
+
+
+# ═══════════════════════════════════════════════════════════ extra styles
+def f_aurora(cr, t, P):
+    g = cairo.LinearGradient(0, 0, 0, 32)
+    g.add_color_stop_rgb(0, *P['bg'])
+    g.add_color_stop_rgb(1, *mix(P['bg'], P['blue'], 0.25))
+    cr.set_source(g)
+    cr.paint()
+    for k, (col, ph, y0) in enumerate(((P['green'], 0, 7), (P['cyan'], 0.33, 13), (P['magenta'], 0.66, 19))):
+        cr.move_to(-1, 40)
+        for i in range(0, 35):
+            x = i - 1
+            cr.line_to(x, y0 + 2.2 * math.sin(x * 0.32 + TAU * (t + ph)) + math.sin(x * 0.9 - TAU * t))
+        cr.line_to(33, 40)
+        cr.close_path()
+        g = cairo.LinearGradient(0, y0 - 3, 0, y0 + 9)
+        g.add_color_stop_rgba(0, *col, 0)
+        g.add_color_stop_rgba(0.3, *col, 0.9)
+        g.add_color_stop_rgba(1, *col, 0)
+        cr.set_source(g)
+        cr.fill()
+
+
+GALAXY_STARS = [(random.Random(i).uniform(4, 19), random.Random(i * 7 + 1).uniform(3, 24),
+                 random.Random(i * 3 + 2).random()) for i in range(22)]
+
+
+def f_galaxy(cr, t, P):
+    src(cr, P['bg'])
+    cr.paint()
+    for col, ph, r in ((P['magenta'], 0, 9), (P['blue'], 0.5, 8)):
+        x, y = 9 + 3 * math.cos(TAU * (t + ph)), 14 + 4 * math.sin(TAU * (t + ph))
+        g = cairo.RadialGradient(x, y, 0, x, y, r)
+        g.add_color_stop_rgba(0, *col, 0.75)
+        g.add_color_stop_rgba(1, *col, 0)
+        cr.set_source(g)
+        cr.paint()
+    for x, y, ph in GALAXY_STARS:
+        a = tri(t * 2 + ph)
+        src(cr, (1, 1, 1), 0.25 + 0.75 * a)
+        cr.arc(x, y, 0.3 + 0.4 * a, 0, TAU)
+        cr.fill()
+
+
+def x_galaxy(cr, t, P, shape, path):
+    f = (t * 2) % 1                       # a shooting star now and then
+    if f > 0.35 or shape not in ('arrow', 'hand', 'help'):
+        return
+    k = f / 0.35
+    x, y = 30 - 12 * k, 2 + 7 * k
+    g = cairo.LinearGradient(x, y, x + 7, y - 4)
+    g.add_color_stop_rgba(0, 1, 1, 1, 1 - k * 0.5)
+    g.add_color_stop_rgba(1, *P['cyan'], 0)
+    cr.set_source(g)
+    cr.set_line_width(0.9)
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    cr.move_to(x, y)
+    cr.line_to(x + 7, y - 4)
+    cr.stroke()
+
+
+def f_rgb(cr, t, P):
+    src(cr, P['bg'], 0.93)
+    cr.paint()
+    g = cairo.LinearGradient(0, 0, 32, 32)
+    for i in range(7):
+        g.add_color_stop_rgba(i / 6, *hue(t + i / 6, 0.85), 0.28)
+    cr.set_source(g)
+    cr.paint()
+
+
+def x_rgb(cr, t, P, shape, path):
+    a = TAU * t                           # a rainbow edge spinning around
+    cx, cy = 16 + 16 * math.cos(a), 16 + 16 * math.sin(a)
+    g = cairo.LinearGradient(cx, cy, 32 - cx, 32 - cy)
+    for i in range(7):
+        g.add_color_stop_rgb(i / 6, *hue(t + i / 6, 0.85))
+    cr.set_line_join(cairo.LINE_JOIN_ROUND)
+    for w, al in ((4.4, 0.22), (1.7, 1.0)):
+        cr.push_group()
+        path(cr, t)
+        cr.set_line_width(w)
+        cr.set_source(g)
+        cr.stroke()
+        cr.pop_group_to_source()
+        cr.paint_with_alpha(al)
+
+
+def f_frost(cr, t, P):
+    g = cairo.LinearGradient(4, 3, 14, 24)
+    g.add_color_stop_rgb(0, *mix(P['fg'], (1, 1, 1), 0.5))
+    g.add_color_stop_rgb(1, *mix(P['blue'], P['cyan'], 0.4))
+    cr.set_source(g)
+    cr.paint()
+    grow = 0.35 + 0.65 * tri(t)            # ice crystals growing and melting
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    src(cr, (1, 1, 1), 0.9)
+    cr.set_line_width(0.5)
+    for x0, y0, ang in ((5, 9, 0.6), (5, 17, 0.2), (8, 20, -0.4)):
+        L = 7 * grow
+        cr.move_to(x0, y0)
+        ex, ey = x0 + math.cos(ang) * L, y0 - math.sin(ang) * L
+        cr.line_to(ex, ey)
+        for f in (0.35, 0.65):
+            bx, by = x0 + (ex - x0) * f, y0 + (ey - y0) * f
+            for side in (-1, 1):
+                b = ang + side * 0.8
+                cr.move_to(bx, by)
+                cr.line_to(bx + math.cos(b) * L * 0.25, by - math.sin(b) * L * 0.25)
+    cr.stroke()
+
+
+def x_frost(cr, t, P, shape, path):
+    if shape not in ('arrow', 'hand', 'help'):
+        return
+    cr.set_line_width(0.4)
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    for x0, ph in ((22, 0), (27, 0.4), (17.5, 0.7)):
+        f = (t + ph) % 1
+        x, y = x0 + 1.2 * math.sin(TAU * f), 2 + f * 26
+        if shape == 'arrow' and y > 15 and x < 21:
+            continue
+        r = 1.1
+        src(cr, (1, 1, 1), 0.9 * (1 - f * 0.6))
+        for k in range(3):
+            a = k * math.pi / 3 + TAU * f
+            cr.move_to(x - math.cos(a) * r, y - math.sin(a) * r)
+            cr.line_to(x + math.cos(a) * r, y + math.sin(a) * r)
+        cr.stroke()
+
+
+def f_gold(cr, t, P):
+    sh = 10 * math.sin(TAU * t)           # the metal reflections slide
+    g = cairo.LinearGradient(sh, sh, 22 + sh, 22 + sh)
+    for f, c in ((0, mix(P['blue'], P['bg'], 0.45)), (0.25, P['cyan']), (0.45, P['blue']), (0.62, P['yellow']),
+                 (0.8, mix(P['blue'], P['bg'], 0.35)), (1, P['cyan'])):
+        g.add_color_stop_rgb(f, *c)
+    g.set_extend(cairo.EXTEND_REFLECT)
+    cr.set_source(g)
+    cr.paint()
+    x = -14 + 56 * t
+    g = cairo.LinearGradient(x - 2.5, x - 2.5, x + 2.5, x + 2.5)
+    g.add_color_stop_rgba(0, 1, 1, 1, 0)
+    g.add_color_stop_rgba(0.5, 1, 1, 1, 0.9)
+    g.add_color_stop_rgba(1, 1, 1, 1, 0)
+    cr.set_source(g)
+    cr.paint()
+
+
+def x_gold(cr, t, P, shape, path):
+    for (x, y, ph) in ((7, 8, 0), (9, 18, 0.5)) if shape != 'hand' else ((12, 6, 0), (18, 20, 0.5)):
+        k = tri(t * 2 + ph)
+        if k < 0.3:
+            continue
+        s = 2.4 * k
+        cr.save()
+        cr.translate(x, y)
+        cr.move_to(0, -s)
+        cr.curve_to(0.2, -0.2, 0.2, -0.2, s, 0)
+        cr.curve_to(0.2, 0.2, 0.2, 0.2, 0, s)
+        cr.curve_to(-0.2, 0.2, -0.2, 0.2, -s, 0)
+        cr.curve_to(-0.2, -0.2, -0.2, -0.2, 0, -s)
+        src(cr, (1, 1, 1), 0.95)
+        cr.fill()
+        cr.restore()
+
+
+MATRIX_COLS = [(x * 2.1 + 3, random.Random(x * 11 + 5).random(), 1 + int(random.Random(x * 5).random() * 2))
+               for x in range(14)]
+
+
+def f_matrix(cr, t, P):
+    src(cr, P['bg'])
+    cr.paint()
+    for x, ph, sp in MATRIX_COLS:
+        head = ((t * sp + ph) % 1) * 40 - 6
+        for k in range(7):
+            y = head - k * 1.9
+            a = (1 - k / 7)
+            src(cr, (0.85, 1, 0.9) if k == 0 else P['green'], a * (1 if k == 0 else 0.8))
+            cr.rectangle(x - 0.7, y, 1.4, 1.4)
+            cr.fill()
+
+
+def f_sakura(cr, t, P):
+    g = cairo.LinearGradient(4, 3, 14, 24)
+    g.add_color_stop_rgb(0, *mix(P['fg'], P['cyan'], 0.3))
+    g.add_color_stop_rgb(0.6, *P['blue'])
+    g.add_color_stop_rgb(1, *P['magenta'])
+    cr.set_source(g)
+    cr.paint()
+    x = -12 + 50 * t
+    g = cairo.LinearGradient(x - 4, x - 4, x + 4, x + 4)
+    g.add_color_stop_rgba(0, 1, 1, 1, 0)
+    g.add_color_stop_rgba(0.5, 1, 1, 1, 0.5)
+    g.add_color_stop_rgba(1, 1, 1, 1, 0)
+    cr.set_source(g)
+    cr.paint()
+
+
+def petal(cr, x, y, ang, s, col):
+    cr.save()
+    cr.translate(x, y)
+    cr.rotate(ang)
+    cr.scale(s, s)
+    cr.move_to(0, -1.6)
+    cr.curve_to(1.4, -1, 1.2, 1.2, 0, 1.6)
+    cr.curve_to(-1.2, 1.2, -1.4, -1, 0, -1.6)
+    cr.restore()
+    src(cr, col)
+    cr.fill()
+
+
+def x_sakura(cr, t, P, shape, path):
+    if shape not in ('arrow', 'hand', 'help'):
+        return
+    for x0, ph in ((26, 0), (21, 0.35), (29, 0.7)):
+        f = (t + ph) % 1
+        x, y = x0 - 6 * f + 1.5 * math.sin(TAU * f * 2), 1 + f * 29
+        if shape == 'arrow' and x < 20.5 and y < 20:
+            continue
+        petal(cr, x, y, TAU * f, 1.0, mix(P['magenta'], (1, 1, 1), 0.35 * (1 - f)))
+
+
+def f_plasma(cr, t, P):
+    src(cr, P['bg'])
+    cr.paint()
+    cr.set_operator(cairo.OPERATOR_ADD)
+    for col, ph, r in ((P['magenta'], 0, 9), (P['cyan'], 0.33, 8), (P['blue'], 0.66, 10)):
+        a = TAU * (t + ph)
+        x, y = 9 + 5 * math.cos(a), 14 + 7 * math.sin(a * 2)
+        g = cairo.RadialGradient(x, y, 0, x, y, r)
+        g.add_color_stop_rgba(0, *col, 0.95)
+        g.add_color_stop_rgba(1, *col, 0)
+        cr.set_source(g)
+        cr.paint()
+    cr.set_operator(cairo.OPERATOR_OVER)
+
+
+# ── helpers of the new extra styles
+def clip_center(cr):
+    """A point inside the shape being filled (from the clip) and its size."""
+    x1, y1, x2, y2 = cr.clip_extents()
+    return x1 + (x2 - x1) * 0.38, y1 + (y2 - y1) * 0.6, x1, y1, x2, y2
+
+
+def behind(cr, path, t, draw):
+    """Draws something that goes behind the cursor (the shape hides it)."""
+    cr.push_group()
+    draw()
+    cr.set_operator(cairo.OPERATOR_DEST_OUT)
+    cr.set_fill_rule(cairo.FILL_RULE_WINDING)
+    path(cr, t)
+    cr.set_line_width(2.4)
+    cr.stroke_preserve()
+    cr.fill()
+    cr.pop_group_to_source()
+    cr.paint()
+
+
+def glow_dot(cr, x, y, r, col, a=1.0, core=(1, 1, 1)):
+    g = cairo.RadialGradient(x, y, 0, x, y, r)
+    g.add_color_stop_rgba(0, *core, a)
+    g.add_color_stop_rgba(0.25, *col, a * 0.85)
+    g.add_color_stop_rgba(1, *col, 0)
+    cr.set_source(g)
+    cr.arc(x, y, r, 0, TAU)
+    cr.fill()
+
+
+def sparkle(cr, x, y, s, col, a=1.0):
+    """A four pointed star."""
+    cr.move_to(x, y - s)
+    cr.curve_to(x + s * 0.12, y - s * 0.12, x + s * 0.12, y - s * 0.12, x + s, y)
+    cr.curve_to(x + s * 0.12, y + s * 0.12, x + s * 0.12, y + s * 0.12, x, y + s)
+    cr.curve_to(x - s * 0.12, y + s * 0.12, x - s * 0.12, y + s * 0.12, x - s, y)
+    cr.curve_to(x - s * 0.12, y - s * 0.12, x - s * 0.12, y - s * 0.12, x, y - s)
+    src(cr, col, a)
+    cr.fill()
+
+
+def orbit_center(shape):
+    return (16.5, 16.5) if shape == 'hand' else (12.5, 14.5)
+
+
+# ── comet: a comet orbiting the cursor in 3D (behind / in front of it)
+def f_comet(cr, t, P):
+    g = cairo.LinearGradient(4, 3, 16, 24)
+    g.add_color_stop_rgb(0, *mix(P['cyan'], (1, 1, 1), 0.35))
+    g.add_color_stop_rgb(0.45, *P['blue'])
+    g.add_color_stop_rgb(1, *mix(P['magenta'], P['bg'], 0.3))
+    cr.set_source(g)
+    cr.paint()
+    for x, y, ph in GALAXY_STARS[:12]:
+        a = tri(t * 3 + ph)
+        src(cr, (1, 1, 1), 0.15 + 0.6 * a)
+        cr.arc(x, y, 0.25 + 0.3 * a, 0, TAU)
+        cr.fill()
+
+
+def x_comet(cr, t, P, shape, path):
+    if shape not in ('arrow', 'hand', 'help', 'progress'):
+        return
+    cx, cy = orbit_center(shape)
+    rx, ry, tilt = 12.0, 4.4, -0.55
+    ct, sn = math.cos(tilt), math.sin(tilt)
+
+    def pos(a):
+        x, y = rx * math.cos(a), ry * math.sin(a)
+        return cx + x * ct - y * sn, cy + x * sn + y * ct, math.sin(a)
+
+    a0 = TAU * t
+    pts = []
+    for k in range(18, -1, -1):           # tail first, head last
+        x, y, z = pos(a0 - k * 0.075)
+        pts.append((x, y, z, 1 - k / 19))
+
+    def draw(front):
+        for x, y, z, f in pts:
+            if (z >= 0) != front:
+                continue
+            depth = 0.8 + 0.2 * z
+            if f > 0.97:                  # the head
+                glow_dot(cr, x, y, 3.4 * depth, P['cyan'], 0.95)
+                sparkle(cr, x, y, 2.4 * depth, (1, 1, 1), 0.9)
+            else:
+                src(cr, mix(P['magenta'], P['cyan'], f), 0.85 * f * depth)
+                cr.arc(x, y, (0.35 + 1.15 * f) * depth, 0, TAU)
+                cr.fill()
+        for k, ph in ((24, 0.0), (30, 0.33), (37, 0.66)):   # stardust left behind
+            x, y, z = pos(a0 - k * 0.075)
+            if (z >= 0) == front:
+                sparkle(cr, x, y, 1.1 * tri(t * 3 + ph), mix(P['yellow'], (1, 1, 1), 0.5), 0.9)
+
+    behind(cr, path, t, lambda: draw(False))
+    draw(True)
+
+
+# ── ocean: a rocking tide with foam, light and bubbles inside
+def f_ocean(cr, t, P):
+    cx, cy, x1, y1, x2, y2 = clip_center(cr)
+    g = cairo.LinearGradient(0, y1, 0, y2)
+    g.add_color_stop_rgb(0, *mix(P['yellow'], P['cyan'], 0.55))
+    g.add_color_stop_rgb(0.5, *mix(P['blue'], P['bg'], 0.3))
+    g.add_color_stop_rgb(1, *P['bg'])
+    cr.set_source(g)
+    cr.paint()
+    level = y1 + (y2 - y1) * 0.4 + 1.1 * math.sin(TAU * t)
+    tilt = 0.12 * math.sin(TAU * t + 1)   # the water rocks like in a glass
+
+    def wave(off, amp, k, sp):
+        for i in range(int(x1) - 2, int(x2) + 4):
+            yy = level + off + (i - cx) * tilt + amp * math.sin(i * k + sp * TAU * t)
+            (cr.move_to if i == int(x1) - 2 else cr.line_to)(i, yy)
+
+    for off, amp, k, sp, col in ((-0.9, 1.1, 0.55, 1, mix(P['blue'], P['bg'], 0.2)), (0.4, 0.9, 0.8, -1, P['cyan'])):
+        wave(off, amp, k, sp)
+        cr.line_to(x2 + 4, y2 + 4)
+        cr.line_to(x1 - 2, y2 + 4)
+        cr.close_path()
+        g = cairo.LinearGradient(0, level, 0, y2)
+        g.add_color_stop_rgba(0, *col, 0.95)
+        g.add_color_stop_rgba(1, *mix(col, P['bg'], 0.75), 1)
+        cr.set_source(g)
+        cr.fill()
+    wave(0.4, 0.9, 0.8, -1)                # foam on the front wave
+    cr.set_line_width(0.55)
+    src(cr, (1, 1, 1), 0.85)
+    cr.stroke()
+    cr.set_line_width(0.3)                 # caustics
+    for k in range(3):
+        y0 = level + 3 + k * 2.6
+        for i in range(int(x1), int(x2) + 2):
+            yy = y0 + 0.5 * math.sin(i * 1.3 + TAU * (t + k * 0.3))
+            (cr.move_to if i == int(x1) else cr.line_to)(i, yy)
+        src(cr, (1, 1, 1), 0.18)
+        cr.stroke()
+    for i in range(5):                     # bubbles
+        f = (t + i * 0.21) % 1
+        bx = x1 + (x2 - x1) * (0.15 + 0.12 * i) + 0.6 * math.sin(TAU * (f * 2 + i * 0.3))
+        by = y2 - 1 - f * (y2 - level - 1)
+        r = 0.45 + 0.25 * (i % 3)
+        a = math.sin(math.pi * f)
+        cr.arc(bx, by, r, 0, TAU)
+        src(cr, (1, 1, 1), 0.75 * a)
+        cr.set_line_width(0.28)
+        cr.stroke()
+        cr.arc(bx - r * 0.35, by - r * 0.35, r * 0.3, 0, TAU)
+        src(cr, (1, 1, 1), 0.9 * a)
+        cr.fill()
+
+
+# ── black hole: a spinning accretion disk swallowing particles
+def f_vortex(cr, t, P):
+    cx, cy, *_ = clip_center(cr)
+    src(cr, P['bg'])
+    cr.paint()
+    g = cairo.RadialGradient(cx, cy, 0, cx, cy, 16)
+    g.add_color_stop_rgba(0, *P['magenta'], 0.45)
+    g.add_color_stop_rgba(1, *P['blue'], 0.0)
+    cr.set_source(g)
+    cr.paint()
+    cr.set_operator(cairo.OPERATOR_ADD)
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    for arm in range(3):                   # 3 arms: a third of a turn loops
+        base = TAU * arm / 3 - TAU * t / 3
+        prev = None
+        for i in range(34):
+            r = 1.8 + i * 0.42
+            a = base + math.log(r) * 2.1
+            p = (cx + r * math.cos(a), cy + r * math.sin(a))
+            if prev:
+                f = i / 34
+                col = mix(mix(P['yellow'], (1, 1, 1), 0.4), P['red'], min(1, f * 1.6)) if f < 0.6 \
+                    else mix(P['red'], P['magenta'], (f - 0.6) / 0.4)
+                cr.set_line_width(1.5 * (1 - f) + 0.3)
+                src(cr, col, 0.9 * (1 - f))
+                cr.move_to(*prev)
+                cr.line_to(*p)
+                cr.stroke()
+            prev = p
+    cr.set_operator(cairo.OPERATOR_OVER)
+    ring = 2.7 + 0.25 * pulse(t, 3)       # photon ring + event horizon
+    glow_dot(cr, cx, cy, ring + 2.2, P['yellow'], 0.8)
+    cr.arc(cx, cy, ring, 0, TAU)
+    src(cr, mix(P['yellow'], (1, 1, 1), 0.6))
+    cr.set_line_width(0.6)
+    cr.stroke()
+    cr.arc(cx, cy, ring - 0.4, 0, TAU)
+    src(cr, (0, 0, 0))
+    cr.fill()
+
+
+def x_vortex(cr, t, P, shape, path):
+    if shape not in ('arrow', 'hand', 'help', 'progress'):
+        return
+    cx, cy = orbit_center(shape)
+
+    def draw():
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        for i in range(7):
+            ph = i / 7
+            for k in range(4):             # the particle and its trail
+                f = (t + ph - k * 0.018) % 1
+                r = 2 + 14 * (1 - f) ** 1.3
+                a = TAU * ph + f * TAU * 1.25
+                x, y = cx + r * math.cos(a), cy + r * 0.8 * math.sin(a)
+                al = math.sin(math.pi * f) * (1 - k / 4)
+                src(cr, mix(P['magenta'], P['yellow'], f), al)
+                cr.arc(x, y, 0.85 - k * 0.15, 0, TAU)
+                cr.fill()
+
+    behind(cr, path, t, draw)
+
+
+# ── fireflies: glowing fireflies flying around the cursor at night
+FIREFLIES = [(1, 2, 0.0, 0.3, 11, 9), (2, 1, 0.35, 0.0, 10, 8), (1, 1, 0.6, 0.15, 12, 6),
+             (2, 3, 0.15, 0.55, 9, 10), (1, 2, 0.8, 0.7, 13, 7)]
+
+
+def f_firefly(cr, t, P):
+    cx, cy, x1, y1, x2, y2 = clip_center(cr)
+    g = cairo.LinearGradient(0, y1, 0, y2)
+    g.add_color_stop_rgb(0, *mix(P['blue'], P['bg'], 0.35))
+    g.add_color_stop_rgb(1, *P['bg'])
+    cr.set_source(g)
+    cr.paint()
+    glow_dot(cr, x1 + 3, y1 + 4, 6, mix(P['yellow'], P['fg'], 0.5), 0.35)   # the moon
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)  # grass swaying
+    for i in range(14):
+        x = x1 + i * (x2 - x1) / 13
+        h = 3 + 2.5 * ((i * 7) % 5) / 5
+        sway = 0.9 * math.sin(TAU * t + i * 0.7)
+        cr.move_to(x, y2 + 1)
+        cr.curve_to(x, y2 - h * 0.5, x + sway * 0.5, y2 - h * 0.8, x + sway, y2 - h)
+        cr.set_line_width(0.7)
+        src(cr, mix(P['black'], P['green'], 0.25))
+        cr.stroke()
+    for x, y, ph in GALAXY_STARS[:6]:      # far fireflies
+        a = tri(t * 2 + ph) ** 2
+        glow_dot(cr, x1 + (x - 4) * (x2 - x1) / 15, y, 1.4, P['green'], a, P['yellow'])
+
+
+def x_firefly(cr, t, P, shape, path):
+    if shape not in ('arrow', 'hand', 'help', 'progress'):
+        return
+    cx, cy = orbit_center(shape)
+    cx += 3
+    flies = []
+    for fa, fb, p1, p2, ax, ay in FIREFLIES:
+        a = TAU * (fa * t + p1)
+        x, y, z = cx + ax * math.sin(a), cy + ay * math.sin(TAU * (fb * t + p2)), math.cos(a)
+        bright = 0.25 + 0.75 * tri(t * 2 + p1 + p2) ** 2
+        flies.append((x, y, z, bright))
+
+    def draw(front):
+        for x, y, z, b in flies:
+            if (z >= 0) == front:
+                s = 0.85 + 0.15 * z
+                glow_dot(cr, x, y, 3.6 * s, mix(P['green'], P['yellow'], 0.5), 0.75 * b, P['yellow'])
+                src(cr, mix(P['yellow'], (1, 1, 1), 0.6), 0.5 + 0.5 * b)
+                cr.arc(x, y, 0.6 * s, 0, TAU)
+                cr.fill()
+
+    behind(cr, path, t, lambda: draw(False))
+    draw(True)
+
+
+# ── prism: frosted glass with a rainbow sweeping it, light split out of it
+def f_prism(cr, t, P):
+    g = cairo.LinearGradient(4, 3, 14, 24)
+    g.add_color_stop_rgb(0, *mix(P['fg'], (1, 1, 1), 0.6))
+    g.add_color_stop_rgb(1, *mix(P['fg'], P['blue'], 0.35))
+    cr.set_source(g)
+    cr.paint()
+    p = -12 + 46 * t                       # the rainbow band (off the shape at both ends)
+    g = cairo.LinearGradient(p - 5, p - 5, p + 5, p + 5)
+    for i in range(8):
+        g.add_color_stop_rgba(i / 7, *hue(i / 8.5, 0.8), 0 if i in (0, 7) else 0.7)
+    cr.set_source(g)
+    cr.paint()
+    cr.set_line_width(0.35)                # facets
+    for ex, ey in ((19, 19), (12, 20), (7, 23), (16, 14)):
+        cr.move_to(5, 4)
+        cr.line_to(ex, ey)
+    src(cr, (1, 1, 1), 0.45)
+    cr.stroke()
+
+
+def x_prism(cr, t, P, shape, path):
+    if shape != 'arrow':
+        return
+
+    def draw():
+        # the white beam coming in
+        k = 0.7 + 0.3 * pulse(t, 2)
+        g = cairo.LinearGradient(31, 3, 13, 12)
+        g.add_color_stop_rgba(0, 1, 1, 1, 0)
+        g.add_color_stop_rgba(1, 1, 1, 1, 0.9 * k)
+        cr.set_source(g)
+        cr.set_line_width(1.1)
+        cr.move_to(31, 3)
+        cr.line_to(13, 12)
+        cr.stroke()
+        # the spectrum fanning out
+        ox, oy = 13.5, 18.5
+        for i in range(7):
+            a0 = 0.30 + i * 0.13
+            L = 12.5 * (0.82 + 0.18 * math.sin(TAU * (t + i / 7)))
+            col = hue(i / 8.5, 0.85)
+            g = cairo.LinearGradient(ox, oy, ox + L * math.cos(a0), oy + L * math.sin(a0))
+            g.add_color_stop_rgba(0, *col, 0.95)
+            g.add_color_stop_rgba(1, *col, 0)
+            cr.set_source(g)
+            cr.move_to(ox, oy)
+            cr.line_to(ox + L * math.cos(a0 - 0.055), oy + L * math.sin(a0 - 0.055))
+            cr.line_to(ox + L * math.cos(a0 + 0.075), oy + L * math.sin(a0 + 0.075))
+            cr.close_path()
+            cr.fill()
+
+    behind(cr, path, t, draw)
+    k = tri(t * 2)                         # a glint on the tip
+    if k > 0.4:
+        sparkle(cr, 6.2, 5.5, 2.2 * (k - 0.4) / 0.6, (1, 1, 1), 0.95)
+
+
+# ── love: a beating heart and hearts floating up
+def heartbeat(t):
+    """lub-dub: two quick beats per cycle."""
+    d1 = min(abs(t - 0.08), 1 - abs(t - 0.08))
+    d2 = min(abs(t - 0.27), 1 - abs(t - 0.27))
+    return max(math.exp(-(d1 / 0.055) ** 2), 0.7 * math.exp(-(d2 / 0.055) ** 2))
+
+
+def heart(cr, x, y, s):
+    cr.move_to(x, y + s * 0.9)
+    cr.curve_to(x - s * 1.7, y - s * 0.2, x - s * 0.7, y - s * 1.5, x, y - s * 0.45)
+    cr.curve_to(x + s * 0.7, y - s * 1.5, x + s * 1.7, y - s * 0.2, x, y + s * 0.9)
+    cr.close_path()
+
+
+def f_love(cr, t, P):
+    b = heartbeat(t)
+    g = cairo.LinearGradient(4, 3, 14, 24)
+    g.add_color_stop_rgb(0, *mix(P['green'], (1, 1, 1), 0.3 + 0.4 * b))
+    g.add_color_stop_rgb(0.5, *mix(P['blue'], (1, 1, 1), 0.25 * b))
+    g.add_color_stop_rgb(1, *mix(P['red'], P['bg'], 0.15 - 0.15 * b))
+    cr.set_source(g)
+    cr.paint()
+    cx, cy, *_ = clip_center(cr)           # a little heart beating inside
+    heart(cr, cx, cy, 2.1 + 0.9 * b)
+    src(cr, mix(P['red'], (1, 1, 1), 0.2 * b), 0.85)
+    cr.fill()
+
+
+def x_love(cr, t, P, shape, path):
+    b = heartbeat(t)
+
+    def aura():
+        for c in (0.08, 0.27):             # a ring expanding on every beat
+            k = ((t - c) % 1) / 0.4
+            if k < 1:
+                path(cr, t)
+                cr.set_line_width(2 + 9 * k)
+                src(cr, P['red'], 0.5 * (1 - k) ** 2)
+                cr.stroke()
+
+    behind(cr, path, t, aura)
+    if shape not in ('arrow', 'hand'):
+        return
+    for x0, ph, s in ((25, 0.0, 1.5), (21.5, 0.33, 1.1), (28, 0.66, 1.25)):
+        f = (t + ph) % 1
+        x, y = x0 + 1.6 * math.sin(TAU * f * 2), 29 - f * 25
+        if shape == 'arrow' and x < 22 and y < 21:
+            continue
+        a = math.sin(math.pi * f)
+        size = s * (0.6 + 0.5 * f) * (1 + 0.12 * b)
+        heart(cr, x, y, size)
+        src(cr, mix(P['magenta'], (1, 1, 1), 0.25 * (1 - f)), a)
+        cr.fill()
+        cr.arc(x - size * 0.5, y - size * 0.55, size * 0.25, 0, TAU)
+        src(cr, (1, 1, 1), 0.7 * a)
+        cr.fill()
+
+
+# ── circuit: current racing through the traces and around the edge
+CIRCUIT = []
+for _i, _x in enumerate((5.5, 8.2, 10.9, 13.6, 16.3, 19.0, 21.7)):
+    _j = 5 + (_i * 5) % 9
+    CIRCUIT.append([(_x, -1), (_x, _j), (_x + 2.7, _j + 2.7), (_x + 2.7, 33)])
+
+
+def poly_point(pts, s):
+    """The point at distance s along a polyline."""
+    for a, b in zip(pts, pts[1:]):
+        d = math.dist(a, b)
+        if s <= d:
+            f = s / d
+            return a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f
+        s -= d
+    return pts[-1]
+
+
+def f_circuit(cr, t, P):
+    src(cr, mix(P['bg'], P['blue'], 0.18))
+    cr.paint()
+    cr.set_line_width(0.6)
+    cr.set_line_join(cairo.LINE_JOIN_ROUND)
+    for pts in CIRCUIT:
+        cr.move_to(*pts[0])
+        for p in pts[1:]:
+            cr.line_to(*p)
+        src(cr, mix(P['blackb'], P['blue'], 0.4))
+        cr.stroke()
+        for p in pts[1:3]:
+            cr.arc(*p, 0.75, 0, TAU)
+            src(cr, mix(P['blackb'], P['yellow'], 0.5))
+            cr.fill()
+    for i, pts in enumerate(CIRCUIT):
+        L = sum(math.dist(a, b) for a, b in zip(pts, pts[1:]))
+        for k in range(6):
+            s = ((t * (1 + i % 2) + i * 0.37) % 1) * L - k * 0.7
+            if s < 0:
+                continue
+            x, y = poly_point(pts, s)
+            if k == 0:
+                glow_dot(cr, x, y, 2.2, P['cyan'], 0.9)
+            else:
+                src(cr, P['green'], 0.7 * (1 - k / 6))
+                cr.arc(x, y, 0.45, 0, TAU)
+                cr.fill()
+
+
+def x_circuit(cr, t, P, shape, path):
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    for w, col, a in ((2.4, P['cyan'], 0.35), (0.9, mix(P['cyan'], (1, 1, 1), 0.6), 1.0)):
+        for off in (0, 13):
+            path(cr, t)
+            cr.set_dash([4.5, 21.5], -t * 26 - off)
+            cr.set_line_width(w)
+            src(cr, col, a)
+            cr.stroke()
+    cr.set_dash([])
+
+
+# ── synthwave: a retro striped sun over an endless neon grid
+def f_synthwave(cr, t, P):
+    cx, cy, x1, y1, x2, y2 = clip_center(cr)
+    hy = y1 + (y2 - y1) * 0.62
+    g = cairo.LinearGradient(0, y1, 0, hy)
+    g.add_color_stop_rgb(0, *P['black'])
+    g.add_color_stop_rgb(0.6, *mix(P['black'], P['magenta'], 0.45))
+    g.add_color_stop_rgb(1, *mix(P['magenta'], P['yellow'], 0.4))
+    cr.set_source(g)
+    cr.paint()
+    sx, r = x1 + (x2 - x1) * 0.36, max(3.6, (x2 - x1) * 0.32)
+    cr.push_group()                        # the sun, its stripes sliding down
+    g = cairo.LinearGradient(0, hy - r, 0, hy + 0.5)
+    g.add_color_stop_rgb(0, *P['yellow'])
+    g.add_color_stop_rgb(1, *P['magenta'])
+    cr.set_source(g)
+    cr.arc(sx, hy - 0.6, r, 0, TAU)
+    cr.fill()
+    cr.set_operator(cairo.OPERATOR_DEST_OUT)
+    for k in range(4):
+        f = (k + t) / 4
+        cr.rectangle(sx - r - 1, hy - 0.6 - f * r, 2 * r + 2, 0.3 + 0.75 * (1 - f))
+    cr.fill()
+    cr.pop_group_to_source()
+    cr.paint()
+    glow_dot(cr, sx, hy - 0.6, r + 3, P['magenta'], 0.35, P['yellow'])
+    cr.rectangle(x1 - 1, hy, x2 - x1 + 2, y2 - hy + 2)   # the ground
+    src(cr, P['bg'])
+    cr.fill()
+    cr.set_line_width(0.4)
+    for i in range(-7, 8):                 # lines to the vanishing point
+        cr.move_to(sx + i * 0.5, hy)
+        cr.line_to(sx + i * 5.5, y2 + 3)
+    src(cr, P['cyan'], 0.75)
+    cr.stroke()
+    for k in range(5):                     # rows coming closer
+        f = (k + t) / 5
+        y = hy + (y2 + 1 - hy) * f * f
+        cr.move_to(x1 - 1, y)
+        cr.line_to(x2 + 1, y)
+        src(cr, P['magenta'], 0.3 + 0.7 * f)
+        cr.stroke()
+    cr.set_line_width(0.7)                 # the horizon
+    cr.move_to(x1 - 1, hy)
+    cr.line_to(x2 + 1, hy)
+    src(cr, mix(P['magenta'], (1, 1, 1), 0.4))
+    cr.stroke()
+
+
+# ═══════════════════════════════════════════════════ the fourth set of themes
+# Halloween, Desert, Neo Tokyo, Abyss, Enchanted Forest, Cosmos, Samurai,
+# Steampunk, Glacier, Witchcraft, Golden Dragon, Graffiti (lib/wsfour.py)
+def flicker(t, seed=0.0):
+    """Candle light: an irregular flicker that still loops."""
+    return 0.72 + 0.16 * math.sin(TAU * (t * 3 + seed)) + 0.12 * math.sin(TAU * (t * 7 + seed * 2))
+
+
+def diag_sheen(cr, t, a=0.55, width=4.0, col=(1, 1, 1)):
+    """A bright band gliding across (off the shape at both ends of the loop)."""
+    p = -12 + 46 * t
+    g = cairo.LinearGradient(p - width, p - width, p + width, p + width)
+    g.add_color_stop_rgba(0, *col, 0)
+    g.add_color_stop_rgba(0.5, *col, a)
+    g.add_color_stop_rgba(1, *col, 0)
+    cr.set_source(g)
+    cr.paint()
+
+
+def side_spot(shape):
+    """Where an extra can live without covering the hotspot, the help
+    badge or the busy spinner (up right of the pointer)."""
+    return (27.0, 12.0) if shape == 'hand' else (24.5, 8.5)
+
+
+def f_halloween(cr, t, P):
+    cx, cy, x1, y1, x2, y2 = clip_center(cr)
+    g = cairo.LinearGradient(x1, y1, x1 + (x2 - x1) * 0.7, y2)
+    g.add_color_stop_rgb(0, *mix(P['yellow'], P['blue'], 0.35))
+    g.add_color_stop_rgb(0.5, *P['blue'])
+    g.add_color_stop_rgb(1, *mix(P['blue'], (0.25, 0.04, 0), 0.65))
+    cr.set_source(g)
+    cr.paint()
+    cr.set_line_width(0.55)   # pumpkin ribs
+    for k in range(-2, 3):
+        cr.save()
+        cr.translate(cx + k * 3.0, cy)
+        cr.scale(1.8, 13)
+        cr.arc(0, 0, 1, 0, TAU)
+        cr.restore()
+        src(cr, mix(P['blue'], (0.2, 0.03, 0), 0.7), 0.45)
+        cr.stroke()
+    fl = flicker(t)
+    fx, fy = cx - 1.4, cy - 1.0   # a carved face lit by a candle inside
+    glow_dot(cr, fx, fy + 1, 5.5, P['yellow'], 0.55 * fl)
+    fire = mix(P['yellow'], (1, 1, 0.85), 0.4)
+    for ex in (fx - 2.1, fx + 1.3):
+        cr.move_to(ex - 0.9, fy)
+        cr.line_to(ex + 0.9, fy)
+        cr.line_to(ex, fy - 1.6)
+        cr.close_path()
+    cr.move_to(fx - 2.6, fy + 1.6)
+    for i in range(1, 7):
+        cr.line_to(fx - 2.6 + i * 0.9, fy + (1.6 if i % 2 == 0 else 2.3))
+    cr.line_to(fx + 2.8, fy + 1.9)
+    cr.line_to(fx, fy + 3.4)
+    cr.close_path()
+    src(cr, fire, 0.55 + 0.45 * fl)
+    cr.fill()
+
+
+def cursor_bat(cr, x, y, s, flap, body, rim, eye):
+    up = 0.7 - 1.1 * flap
+    cr.save()
+    cr.translate(x, y)
+    cr.scale(s, s)
+    cr.new_path()
+    for sx in (-1, 1):
+        cr.move_to(0.08 * sx, -0.08)
+        cr.curve_to(0.4 * sx, -0.25 + up * 0.3, 0.75 * sx, -0.35 + up * 0.6, 1.0 * sx, -0.25 + up)
+        cr.curve_to(0.85 * sx, 0.0 + up * 0.5, 0.7 * sx, 0.05 + up * 0.4, 0.55 * sx, -0.02 + up * 0.35)
+        cr.curve_to(0.45 * sx, 0.12 + up * 0.3, 0.3 * sx, 0.1 + up * 0.2, 0.12 * sx, 0.14)
+        cr.close_path()
+    cr.new_sub_path()
+    cr.arc(0, 0.02, 0.2, 0, TAU)
+    cr.move_to(-0.13, -0.12)
+    cr.line_to(-0.16, -0.36)
+    cr.line_to(-0.02, -0.18)
+    cr.close_path()
+    cr.move_to(0.13, -0.12)
+    cr.line_to(0.16, -0.36)
+    cr.line_to(0.02, -0.18)
+    cr.close_path()
+    cr.restore()
+    path = cr.copy_path()
+    cr.set_line_width(1.0)
+    src(cr, rim, 0.55)
+    cr.stroke()
+    cr.append_path(path)
+    src(cr, body)
+    cr.fill()
+    for sx in (-1, 1):
+        cr.arc(x + sx * 0.07 * s, y - 0.02 * s, 0.32, 0, TAU)
+        src(cr, eye)
+        cr.fill()
+
+
+def x_halloween(cr, t, P, shape, path):
+    if shape not in ('arrow', 'hand', 'help', 'progress'):
+        return
+    ox, oy = side_spot(shape)
+    a = TAU * t
+    x, y = ox + 3.2 * math.cos(a), oy + 1.8 * math.sin(a * 2)
+    glow_dot(cr, x, y, 4.5, P['magenta'], 0.35)
+    cursor_bat(cr, x, y, 4.6, abs(math.sin(TAU * t * 3)), mix(P['bg'], P['magenta'], 0.15), P['magenta'], P['blue'])
+
+
+def f_desert(cr, t, P):
+    cx, cy, x1, y1, x2, y2 = clip_center(cr)
+    g = cairo.LinearGradient(x1, y1, x1 + (x2 - x1) * 0.6, y2)
+    g.add_color_stop_rgb(0, *mix(P['yellow'], (1, 1, 0.9), 0.35))
+    g.add_color_stop_rgb(0.5, *P['blue'])
+    g.add_color_stop_rgb(1, *mix(P['magenta'], (0.3, 0.1, 0), 0.4))
+    cr.set_source(g)
+    cr.paint()
+    cr.set_line_width(0.5)   # dune ripples drifting down
+    for k in range(-1, 7):
+        y0 = y1 + (k + t) * 4.0
+        cr.move_to(x1 - 1, y0)
+        for i in range(int(x1), int(x2) + 3):
+            cr.line_to(i, y0 + 0.6 * math.sin(i * 0.9 + k))
+        src(cr, mix(P['magenta'], (0.3, 0.1, 0), 0.6), 0.4)
+        cr.stroke()
+    diag_sheen(cr, t, 0.45, 3.5, mix(P['yellow'], (1, 1, 1), 0.6))
+
+
+def x_desert(cr, t, P, shape, path):
+    if shape not in ('arrow', 'hand'):
+        return
+    f = t   # a tumbleweed rolling past under the pointer
+    x = 31 - 23 * f
+    y = (29.0 if shape == 'arrow' else 30.2) - 1.6 * abs(math.sin(TAU * f * 2))
+    a = min(1.0, 5 * min(f, 1 - f))
+    if shape == 'arrow' and x < 7:
+        return
+    rot = -TAU * f * 2
+    cr.set_line_width(0.45)
+    for k in range(7):
+        a0 = rot + k * 0.9
+        cr.new_sub_path()
+        cr.arc(x + 0.5 * math.cos(k * 2.1), y + 0.5 * math.sin(k * 1.7), 2.0 + 0.5 * (k % 3) / 2, a0, a0 + 2.6)
+    src(cr, mix(P['magenta'], P['yellow'], 0.3), 0.9 * a)
+    cr.stroke()
+
+
+def f_neotokyo(cr, t, P):
+    cx, cy, x1, y1, x2, y2 = clip_center(cr)
+    g = cairo.LinearGradient(x1, y1, x2, y2)
+    g.add_color_stop_rgb(0, *mix(P['blue'], P['bg'], 0.35))
+    g.add_color_stop_rgb(1, *mix(P['bg'], P['blue'], 0.2))
+    cr.set_source(g)
+    cr.paint()
+    cr.set_line_width(0.5)   # scan lines rolling down
+    k = y1 + (t * 3.0) % 3.0 - 3
+    while k < y2 + 3:
+        cr.move_to(x1 - 1, k)
+        cr.line_to(x2 + 1, k)
+        k += 3.0
+    src(cr, P['magenta'], 0.35)
+    cr.stroke()
+    p = -10 + 44 * t   # a neon sweep, pink to cyan
+    g = cairo.LinearGradient(p - 5, p - 5, p + 5, p + 5)
+    g.add_color_stop_rgba(0, *P['magenta'], 0)
+    g.add_color_stop_rgba(0.45, *P['magenta'], 0.6)
+    g.add_color_stop_rgba(0.6, *P['cyan'], 0.6)
+    g.add_color_stop_rgba(1, *P['cyan'], 0)
+    cr.set_source(g)
+    cr.paint()
+
+
+def x_neotokyo(cr, t, P, shape, path):
+    if 0.46 < t % 0.5 < 0.5:   # now and then the sign glitches
+        for dx, col in ((-1.0, P['cyan']), (1.0, P['magenta'])):
+            cr.save()
+            cr.translate(dx, 0)
+            path(cr, t)
+            cr.set_line_width(0.6)
+            src(cr, col, 0.8)
+            cr.stroke()
+            cr.restore()
+    if shape not in ('arrow', 'hand', 'help'):
+        return
+    for x0, ph in ((24, 0.0), (28, 0.5)):
+        f = (t + ph) % 1
+        x, y = x0 - 4 * f + 1.2 * math.sin(TAU * f * 2), 1 + f * 16
+        petal(cr, x, y, TAU * f, 0.9, mix(P['green'] if False else P['magenta'], (1, 1, 1), 0.45 * (1 - f)))
+
+
+def f_abyss(cr, t, P):
+    cx, cy, x1, y1, x2, y2 = clip_center(cr)
+    g = cairo.LinearGradient(0, y1, 0, y2)
+    g.add_color_stop_rgb(0, *mix(P['cyan'], (1, 1, 1), 0.25))
+    g.add_color_stop_rgb(0.45, *P['blue'])
+    g.add_color_stop_rgb(1, *mix(P['bg'], P['magenta'], 0.25))
+    cr.set_source(g)
+    cr.paint()
+    cr.set_line_width(0.4)   # caustics
+    for k in range(4):
+        y0 = y1 + 3 + k * 4.5
+        cr.move_to(x1 - 1, y0)
+        for i in range(int(x1), int(x2) + 3):
+            cr.line_to(i, y0 + 0.8 * math.sin(i * 1.1 + TAU * t + k * 1.7))
+        src(cr, (1, 1, 1), 0.3)
+        cr.stroke()
+    for i in range(4):   # bubbles rising
+        f = (t + i * 0.27) % 1
+        bx = x1 + (x2 - x1) * (0.2 + 0.15 * i) + 0.5 * math.sin(TAU * (f * 2 + i * 0.3))
+        by = y2 - f * (y2 - y1)
+        cr.arc(bx, by, 0.5 + 0.2 * (i % 2), 0, TAU)
+        cr.set_line_width(0.3)
+        src(cr, (1, 1, 1), 0.8 * math.sin(PI * f))
+        cr.stroke()
+
+
+def x_abyss(cr, t, P, shape, path):
+    if shape not in ('arrow', 'hand', 'help', 'progress'):
+        return
+    ox, oy = side_spot(shape)   # a little jellyfish, its bell pulsing
+    oy += 1.2 * math.sin(TAU * t)
+    k = 0.82 + 0.18 * math.sin(TAU * t * 2)
+    glow_dot(cr, ox, oy, 6, P['cyan'], 0.35)
+    cr.set_line_width(0.35)
+    for i in range(4):
+        tx = ox - 1.8 + i * 1.2
+        cr.move_to(tx, oy + 0.6)
+        for j in range(1, 6):
+            f = j / 5
+            cr.line_to(tx + 0.6 * math.sin(f * 5 + TAU * t + i), oy + 0.6 + f * 4.5)
+    src(cr, mix(P['cyan'], (1, 1, 1), 0.3), 0.75)
+    cr.stroke()
+    cr.save()
+    cr.translate(ox, oy)
+    cr.scale(1 / k, k)
+    cr.new_path()
+    cr.move_to(-2.6, 0.6)
+    cr.curve_to(-2.7, -3.0, 2.7, -3.0, 2.6, 0.6)
+    cr.curve_to(1.3, 0.1, -1.3, 0.1, -2.6, 0.6)
+    cr.close_path()
+    cr.restore()
+    g = cairo.RadialGradient(ox, oy - 1.5, 0, ox, oy - 1, 3.2)
+    g.add_color_stop_rgba(0, 1, 1, 1, 0.95)
+    g.add_color_stop_rgba(1, *P['cyan'], 0.75)
+    cr.set_source(g)
+    cr.fill()
+
+
+def f_forest(cr, t, P):
+    cx, cy, x1, y1, x2, y2 = clip_center(cr)
+    g = cairo.LinearGradient(x1, y1, x1 + (x2 - x1) * 0.6, y2)
+    g.add_color_stop_rgb(0, *mix(P['green'], (1, 1, 0.8), 0.35))
+    g.add_color_stop_rgb(0.55, *P['green'])
+    g.add_color_stop_rgb(1, *mix(P['blue'], (0, 0.15, 0), 0.55))
+    cr.set_source(g)
+    cr.paint()
+    cr.set_line_width(0.5)   # veins of a leaf
+    vx0, vy0 = x1 + 0.6, y1 + 0.8
+    vx1, vy1 = x1 + (x2 - x1) * 0.55, y2 - 2
+    cr.move_to(vx0, vy0)
+    cr.line_to(vx1, vy1)
+    for k in range(1, 6):
+        f = k / 6
+        bx, by = vx0 + (vx1 - vx0) * f, vy0 + (vy1 - vy0) * f
+        cr.move_to(bx, by)
+        cr.line_to(bx + 3.2, by - 1.2)
+        cr.move_to(bx, by)
+        cr.line_to(bx - 1.2, by + 2.0)
+    src(cr, mix(P['blue'], (0, 0.15, 0), 0.7), 0.55)
+    cr.stroke()
+    for i in range(3):   # light through the canopy, drifting
+        f = (t + i / 3) % 1
+        glow_dot(cr, x1 + (x2 - x1) * (0.2 + 0.25 * i) + 2 * math.sin(TAU * f), y1 + (y2 - y1) * f, 3.2,
+                 mix(P['yellow'], (1, 1, 1), 0.4), 0.35 * math.sin(PI * f))
+
+
+def x_forest(cr, t, P, shape, path):
+    if shape not in ('arrow', 'hand', 'help', 'progress'):
+        return
+    ox, oy = side_spot(shape)
+    for i, (fa, fb, ph) in enumerate(((1, 2, 0.0), (2, 1, 0.45))):
+        x = ox + 4.0 * math.sin(TAU * (fa * t + ph))
+        y = oy + 3.2 * math.sin(TAU * (fb * t + ph + 0.2))
+        b = 0.3 + 0.7 * tri(t * 2 + ph) ** 2
+        glow_dot(cr, x, y, 3.4, mix(P['green'], P['yellow'], 0.5), 0.75 * b, P['yellow'])
+        cr.arc(x, y, 0.55, 0, TAU)
+        src(cr, mix(P['yellow'], (1, 1, 1), 0.5), 0.5 + 0.5 * b)
+        cr.fill()
+
+
+def f_cosmos(cr, t, P):
+    cx, cy, x1, y1, x2, y2 = clip_center(cr)
+    src(cr, mix(P['bg'], P['blue'], 0.25))
+    cr.paint()
+    for col, ph, r in ((P['magenta'], 0.0, 8), (P['blue'], 0.5, 9)):   # nebula turning
+        x, y = cx + 3 * math.cos(TAU * (t + ph)), cy + 4 * math.sin(TAU * (t + ph))
+        g = cairo.RadialGradient(x, y, 0, x, y, r)
+        g.add_color_stop_rgba(0, *col, 0.85)
+        g.add_color_stop_rgba(1, *col, 0)
+        cr.set_source(g)
+        cr.paint()
+    for x, y, ph in GALAXY_STARS:
+        a = tri(t * 2 + ph)
+        src(cr, (1, 1, 1), 0.2 + 0.8 * a)
+        cr.arc(x, y, 0.25 + 0.35 * a, 0, TAU)
+        cr.fill()
+
+
+def x_cosmos(cr, t, P, shape, path):
+    if shape not in ('arrow', 'hand', 'help', 'progress'):
+        return
+    cx, cy = orbit_center(shape)   # a ringed planet orbiting in 3D
+    rx, ry, tilt = 12.5, 4.2, -0.5
+    a = TAU * t
+    px_, py_ = rx * math.cos(a), ry * math.sin(a)
+    x = cx + px_ * math.cos(tilt) - py_ * math.sin(tilt)
+    y = cy + px_ * math.sin(tilt) + py_ * math.cos(tilt)
+    depth = 0.8 + 0.2 * math.sin(a)
+
+    def draw():
+        r = 1.7 * depth
+        glow_dot(cr, x, y, 4 * depth, P['magenta'], 0.35)
+        cr.arc(x, y, r, 0, TAU)
+        g = cairo.RadialGradient(x - r * 0.4, y - r * 0.4, 0, x, y, r)
+        g.add_color_stop_rgb(0, *mix(P['blue'], (1, 1, 1), 0.5))
+        g.add_color_stop_rgb(1, *mix(P['blue'], (0, 0, 0.2), 0.4))
+        cr.set_source(g)
+        cr.fill()
+        cr.save()
+        cr.translate(x, y)
+        cr.rotate(-0.4)
+        cr.scale(r * 2.0, r * 0.5)
+        cr.arc(0, 0, 1, 0, TAU)
+        cr.restore()
+        cr.set_line_width(0.45)
+        src(cr, mix(P['magenta'], (1, 1, 1), 0.4), 0.9)
+        cr.stroke()
+    if math.sin(a) < 0:
+        behind(cr, path, t, draw)
+    else:
+        draw()
+
+
+def f_samurai(cr, t, P):
+    cx, cy, x1, y1, x2, y2 = clip_center(cr)
+    g = cairo.LinearGradient(x1, y1, x1 + (x2 - x1) * 0.6, y2)
+    g.add_color_stop_rgb(0, *mix(P['red'], (1, 0.85, 0.8), 0.35))
+    g.add_color_stop_rgb(0.5, *P['red'])
+    g.add_color_stop_rgb(1, *mix(P['red'], (0.1, 0, 0.02), 0.65))
+    cr.set_source(g)
+    cr.paint()
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)   # a brush stroke passing through
+    p = -14 + 48 * t
+    cr.move_to(p - 6, p + 4)
+    cr.curve_to(p - 2, p + 1, p + 2, p + 2, p + 7, p - 2)
+    cr.set_line_width(2.2)
+    src(cr, (0.08, 0, 0.02), 0.45)
+    cr.stroke()
+    cr.set_line_width(0.4)   # the temper line of a blade, shimmering
+    cr.move_to(x1, y1 + 4)
+    for i in range(1, 12):
+        cr.line_to(x1 + i * 1.6, y1 + 4 + i * 1.6 + 0.5 * math.sin(i * 1.8 + TAU * t))
+    src(cr, P['yellow'], 0.45 + 0.35 * pulse(t, 2))
+    cr.stroke()
+
+
+def x_samurai(cr, t, P, shape, path):
+    if shape not in ('arrow', 'hand', 'help', 'progress'):
+        return
+    f = (t - 0.1) / 0.3   # a katana slash
+    if 0 <= f <= 1:
+        ox, oy = (22.0, 22.0) if shape == 'hand' else (14.0, 15.0)
+        a1 = -2.4 + 2.6 * f
+        for k in range(8):
+            a = a1 - k * 0.12
+            if a < -2.4:
+                break
+            cr.arc(ox, oy, 12, a, a + 0.12)
+            cr.set_line_width(1.6 * (1 - k / 8))
+            src(cr, (1, 1, 1), (1 - k / 8) * (1 - f * 0.5))
+            cr.stroke()
+    ox, oy = side_spot(shape)
+    fp = (t * 1.0) % 1
+    petal(cr, ox + 2 - 5 * fp + math.sin(TAU * fp * 2), 1 + fp * 14, TAU * fp, 0.9,
+          mix(P['green'], (1, 1, 1), 0.35 * (1 - fp)))
+
+
+def f_steampunk(cr, t, P):
+    cx, cy, x1, y1, x2, y2 = clip_center(cr)
+    g = cairo.LinearGradient(x1, y1, x1 + (x2 - x1) * 0.6, y2)
+    g.add_color_stop_rgb(0, *mix(P['yellow'], (1, 1, 0.85), 0.4))
+    g.add_color_stop_rgb(0.45, *P['blue'])
+    g.add_color_stop_rgb(1, *mix(P['magenta'], (0.15, 0.05, 0), 0.6))
+    cr.set_source(g)
+    cr.paint()
+    cr.set_line_width(0.35)   # engraving
+    for k in range(4):
+        cr.arc(cx - 2, cy, 2.2 + k * 2.2, -2.2, 0.6)
+        cr.new_sub_path()
+    src(cr, mix(P['magenta'], (0.1, 0.03, 0), 0.6), 0.5)
+    cr.stroke()
+    for x, y in ((6.6, 7.5), (6.6, 13), (6.6, 18.5), (10.5, 17.6)):   # rivets
+        cr.arc(x, y, 0.6, 0, TAU)
+        src(cr, mix(P['magenta'], (0.1, 0.03, 0), 0.5))
+        cr.fill()
+        cr.arc(x - 0.2, y - 0.2, 0.25, 0, TAU)
+        src(cr, (1, 1, 0.9), 0.85)
+        cr.fill()
+    diag_sheen(cr, t, 0.5, 3.0, mix(P['yellow'], (1, 1, 1), 0.6))
+
+
+def cursor_gear(cr, x, y, r, teeth, rot, face, dark):
+    cr.new_path()
+    for i in range(teeth * 2):
+        a = rot + i * PI / teeth
+        rr = r if i % 2 == 0 else r * 0.76
+        for d in (-0.3, 0.3):
+            aa = a + d * PI / teeth
+            cr.line_to(x + math.cos(aa) * rr, y + math.sin(aa) * rr)
+    cr.close_path()
+    cr.new_sub_path()
+    cr.arc_negative(x, y, r * 0.3, TAU, 0)
+    cr.set_fill_rule(cairo.FILL_RULE_EVEN_ODD)
+    g = cairo.RadialGradient(x - r * 0.3, y - r * 0.3, 0, x, y, r)
+    g.add_color_stop_rgb(0, *mix(face, (1, 1, 0.85), 0.45))
+    g.add_color_stop_rgb(1, *dark)
+    cr.set_source(g)
+    cr.fill_preserve()
+    cr.set_fill_rule(cairo.FILL_RULE_WINDING)
+    cr.set_line_width(0.35)
+    src(cr, dark, 0.9)
+    cr.stroke()
+
+
+def x_steampunk(cr, t, P, shape, path):
+    if shape not in ('arrow', 'hand'):
+        return
+    x, y = (27.5, 27.5) if shape == 'hand' else (16.0, 24.2)
+    glow_dot(cr, x, y, 5, P['blue'], 0.3)
+    cursor_gear(cr, x, y, 3.4, 8, TAU * t / 4, P['blue'], mix(P['magenta'], (0.1, 0.03, 0), 0.6))
+    cursor_gear(cr, x + 4.6, y - 2.6, 2.0, 6, -TAU * t / 3 + 0.3, P['yellow'], mix(P['magenta'], (0.1, 0.03, 0), 0.6))
+
+
+def f_glacier(cr, t, P):
+    cx, cy, x1, y1, x2, y2 = clip_center(cr)
+    g = cairo.LinearGradient(x1, y1, x1 + (x2 - x1) * 0.6, y2)
+    g.add_color_stop_rgb(0, *mix(P['fg'], (1, 1, 1), 0.5))
+    g.add_color_stop_rgb(0.5, *mix(P['cyan'], P['blue'], 0.4))
+    g.add_color_stop_rgb(1, *mix(P['blue'], P['bg'], 0.45))
+    cr.set_source(g)
+    cr.paint()
+    cr.set_line_width(0.4)   # facets of the crystal
+    for ex, ey in ((19, 19), (11, 20), (7, 23), (15, 12), (8, 12)):
+        cr.move_to(5, 4)
+        cr.line_to(ex, ey)
+    src(cr, (1, 1, 1), 0.5)
+    cr.stroke()
+    diag_sheen(cr, t, 0.7, 2.6)
+    for i in range(3):   # frost glints
+        f = (t * 2 + i / 3) % 1
+        x, y = 6 + (i * 4.1) % 9, 9 + (i * 5.3) % 12
+        sparkle(cr, x, y, 1.6 * tri(f), (1, 1, 1), 0.9)
+
+
+def x_glacier(cr, t, P, shape, path):
+    if shape not in ('arrow', 'hand', 'help'):
+        return
+    ox, oy = side_spot(shape)
+    y = 1 + t * 18
+    x = ox + 1.5 * math.sin(TAU * t)
+    a = math.sin(PI * t)
+    rot = TAU * t / 6
+    cr.set_line_width(0.45)
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    for k in range(6):
+        ang = rot + k * PI / 3
+        ca, sa = math.cos(ang), math.sin(ang)
+        cr.move_to(x, y)
+        cr.line_to(x + ca * 2.6, y + sa * 2.6)
+        bx, by = x + ca * 1.5, y + sa * 1.5
+        for d in (-0.8, 0.8):
+            cr.move_to(bx, by)
+            cr.line_to(bx + math.cos(ang + d) * 0.9, by + math.sin(ang + d) * 0.9)
+    src(cr, (0.95, 0.99, 1), 0.95 * a)
+    cr.stroke()
+    glow_dot(cr, x, y, 3.2, P['cyan'], 0.35 * a)
+
+
+def f_witch(cr, t, P):
+    cx, cy, x1, y1, x2, y2 = clip_center(cr)
+    g = cairo.RadialGradient(cx, cy, 0.5, cx, cy, 14)
+    g.add_color_stop_rgb(0, *mix(P['magenta'], (1, 1, 1), 0.3))
+    g.add_color_stop_rgb(0.5, *P['blue'])
+    g.add_color_stop_rgb(1, *mix(P['bg'], P['blue'], 0.3))
+    cr.set_source(g)
+    cr.paint()
+    cr.set_line_width(0.45)   # a spell swirling (two arms: half a turn loops)
+    for arm in range(2):
+        base = PI * arm + PI * t
+        prev = None
+        for i in range(22):
+            r = 0.8 + i * 0.5
+            a = base + math.log(r + 1) * 2.4
+            p = (cx + r * math.cos(a), cy + r * math.sin(a))
+            if prev:
+                cr.move_to(*prev)
+                cr.line_to(*p)
+                src(cr, mix(P['magenta'], (1, 1, 1), 0.5), 0.6 * (1 - i / 22))
+                cr.stroke()
+            prev = p
+
+
+def x_witch(cr, t, P, shape, path):
+    if shape not in ('arrow', 'hand', 'help', 'progress'):
+        return
+    ox, oy = side_spot(shape)   # sparks circling, a magic ring
+    cr.arc(ox, oy, 3.6, 0, TAU)
+    cr.set_line_width(0.35)
+    src(cr, P['blue'], 0.35)
+    cr.stroke()
+    for k in range(3):
+        a = TAU * (t + k / 3)
+        x, y = ox + 3.6 * math.cos(a), oy + 3.6 * math.sin(a)
+        glow_dot(cr, x, y, 2.4, P['magenta'], 0.7)
+        sparkle(cr, x, y, 1.4 + 0.5 * pulse(t * 2 + k / 3), (1, 1, 1), 0.95)
+
+
+def f_dragon(cr, t, P):
+    cx, cy, x1, y1, x2, y2 = clip_center(cr)
+    g = cairo.LinearGradient(x1, y1, x1 + (x2 - x1) * 0.6, y2)
+    g.add_color_stop_rgb(0, *mix(P['yellow'], (1, 1, 0.85), 0.4))
+    g.add_color_stop_rgb(0.5, *P['blue'])
+    g.add_color_stop_rgb(1, *mix(P['red'], (0.15, 0, 0), 0.5))
+    cr.set_source(g)
+    cr.paint()
+    r = 1.35   # scales
+    cr.set_line_width(0.35)
+    for row in range(-1, 20):
+        for col in range(-1, 14):
+            x = col * r * 1.6 + (row % 2) * r * 0.8 + 2
+            y = row * r * 0.95 + 2
+            cr.new_sub_path()
+            cr.arc(x, y, r, 0, PI)
+    src(cr, mix(P['red'], (0.2, 0, 0), 0.5), 0.5)
+    cr.stroke()
+    diag_sheen(cr, t, 0.55, 3.2, mix(P['yellow'], (1, 1, 1), 0.6))
+
+
+def x_dragon(cr, t, P, shape, path):
+    if shape not in ('arrow', 'hand', 'help', 'progress'):
+        return
+    ox, oy = side_spot(shape)   # a gold coin spinning
+    k = math.cos(TAU * t)
+    w = 2.8 * max(0.12, abs(k))
+    glow_dot(cr, ox, oy, 5, P['blue'], 0.4)
+    cr.save()
+    cr.translate(ox, oy)
+    cr.scale(w / 2.8, 1)
+    cr.new_path()
+    cr.arc(0, 0, 2.8, 0, TAU)
+    cr.rectangle(0.85, -0.85, -1.7, 1.7)
+    cr.restore()
+    cr.set_fill_rule(cairo.FILL_RULE_EVEN_ODD)
+    g = cairo.LinearGradient(ox - w, oy - 2.8, ox + w, oy + 2.8)
+    g.add_color_stop_rgb(0, *mix(P['yellow'], (1, 1, 1), 0.4 if k > 0 else 0.1))
+    g.add_color_stop_rgb(1, *mix(P['blue'], (0.3, 0.1, 0), 0.4))
+    cr.set_source(g)
+    cr.fill()
+    cr.set_fill_rule(cairo.FILL_RULE_WINDING)
+    for i in range(2):   # embers rising
+        f = (t + i * 0.5) % 1
+        cr.arc(ox - 2 + i * 4 + math.sin(TAU * f) * 0.8, oy + 6 - f * 9, 0.45, 0, TAU)
+        src(cr, P['red'], math.sin(PI * f))
+        cr.fill()
+
+
+def f_graffiti(cr, t, P):
+    cx, cy, x1, y1, x2, y2 = clip_center(cr)
+    cols = [P['blue'], P['magenta'], P['yellow'], P['green'], P['blue']]
+    off = (t * 24) % 24   # the colors flowing down the shape
+    g = cairo.LinearGradient(0, y1 - 24 + off, 0, y1 + off)
+    for i, c in enumerate(cols):
+        g.add_color_stop_rgb(i / (len(cols) - 1), *c)
+    g.set_extend(cairo.EXTEND_REPEAT)
+    cr.set_source(g)
+    cr.paint()
+    rnd = random.Random(3)
+    for _ in range(26):   # spray speckle
+        cr.arc(rnd.uniform(x1, x2), rnd.uniform(y1, y2), rnd.uniform(0.15, 0.45), 0, TAU)
+        src(cr, rnd.choice(((1, 1, 1), P['bg'])), rnd.uniform(0.25, 0.6))
+        cr.fill()
+
+
+def x_graffiti(cr, t, P, shape, path):
+    if shape not in ('arrow', 'hand', 'progress'):
+        return
+    drips = ((5.6, 23.4, 0.0, P['magenta']), (10.6, 20.2, 0.5, P['blue'])) if shape != 'hand' \
+        else ((12, 28.4, 0.0, P['magenta']), (19, 28.4, 0.5, P['yellow']))
+    for x, y0, ph, col in drips:   # paint running off the bottom, dripping
+        f = (t + ph) % 1
+        if f < 0.6:
+            L = 0.5 + 3.4 * (f / 0.6)
+            cr.move_to(x - 0.65, y0 - 0.5)
+            cr.line_to(x + 0.65, y0 - 0.5)
+            cr.line_to(x + 0.65, y0 + L - 0.9)
+            cr.arc(x, y0 + L - 0.9, 0.9, 0, PI)
+            cr.close_path()
+            src(cr, col)
+            cr.fill()
+        else:
+            g = (f - 0.6) / 0.4
+            cr.arc(x, y0 + 3.9 + g * 5, 0.85, 0, TAU)
+            src(cr, col, 1 - g)
+            cr.fill()
+
+
+# ═══════════════════════════════════════════════════════════ kits
+# outline: color key, ow: outline width, glow: color key (None = no glow),
+# acc/acc2: spinner colors, frames + delay (ms) of the animated cursors
+STYLES = {
+    'glass': dict(fill=f_glass, outline='fg', ow=1.1, glow='blue', acc='blue', acc2='magenta'),
+    'cyber': dict(fill=f_cyber, outline='magenta', ow=1.2, glow='magenta', acc='magenta', acc2='cyan',
+                  extra=x_cyber),
+    'minimal': dict(fill=f_minimal, outline='bg', ow=1.1, glow=None, acc='blue', acc2='fg', frames=36,
+                    delay=70),
+    'pixel': dict(fill=f_pixel, outline='bg', ow=1.0, glow=None, acc='yellow', acc2='red', pixel=True,
+                  frames=12, delay=110, spinner='blocks'),
+    'liquid': dict(fill=f_liquid, outline='fg', ow=1.1, glow='cyan', acc='cyan', acc2='blue'),
+    'hud': dict(fill=f_hud, outline='cyan', ow=0.9, glow='blue', acc='cyan', acc2='blue', extra=x_hud,
+                spinner='ticks'),
+    'fire': dict(fill=f_fire, outline='bg', ow=1.1, glow='blue', acc='yellow', acc2='red'),
+    'nature': dict(fill=f_nature, outline='bg', ow=1.1, glow='green', acc='green', acc2='cyan',
+                   extra=x_nature),
+    'sketch': dict(fill=f_sketch, outline=None, ow=0, glow=None, acc='fg', acc2='blackb', extra=x_sketch,
+                   frames=4, delay=140),
+    'crystal': dict(fill=f_crystal, outline='fg', ow=1.0, glow='cyan', acc='cyan', acc2='fg',
+                    extra=x_crystal),
+    'lava': dict(fill=f_lava, outline='blue', ow=1.0, glow='red', acc='blue', acc2='yellow'),
+    'neon': dict(fill=f_neon, outline='cyan', ow=1.2, glow='magenta', acc='cyan', acc2='magenta'),
+    'holo': dict(fill=f_holo, outline='fg', ow=1.0, glow='magenta', acc='magenta', acc2='cyan',
+                 extra=x_holo),
+    'storm': dict(fill=f_storm, outline='cyan', ow=1.1, glow='blue', acc='cyan', acc2='yellow',
+                  extra=x_storm, spinner='ticks'),
+    'venom': dict(fill=f_venom, outline='red', ow=1.1, glow='red', acc='red', acc2='magenta',
+                  extra=x_venom),
+    'butterfly': dict(fill=f_butterfly, outline='fg', ow=1.0, glow='magenta', acc='magenta', acc2='blue',
+                      extra=x_butterfly),
+    'snake': dict(fill=f_snake, outline='bg', ow=1.1, glow='green', acc='green', acc2='yellow',
+                  extra=x_snake),
+}
+
+
+STYLES.update({
+    'aurora': dict(fill=f_aurora, outline='fg', ow=1.0, glow='green', acc='green', acc2='magenta', frames=40,
+                   delay=60),
+    'galaxy': dict(fill=f_galaxy, outline='fg', ow=1.0, glow='magenta', acc='magenta', acc2='cyan',
+                   extra=x_galaxy, frames=40, delay=55),
+    'rgb': dict(fill=f_rgb, outline=None, ow=0.9, glow=None, acc='red', acc2='blue', extra=x_rgb, frames=36,
+                delay=45),
+    'frost': dict(fill=f_frost, outline='blue', ow=1.0, glow='cyan', acc='cyan', acc2='blue', extra=x_frost,
+                  frames=40, delay=60),
+    'gold': dict(fill=f_gold, outline='bg', ow=1.1, glow='yellow', acc='yellow', acc2='blue', extra=x_gold,
+                 frames=36, delay=55),
+    'matrix': dict(fill=f_matrix, outline='green', ow=1.0, glow='green', acc='green', acc2='cyan',
+                   spinner='ticks', frames=36, delay=55),
+    'sakura': dict(fill=f_sakura, outline='bg', ow=1.0, glow='magenta', acc='magenta', acc2='blue',
+                   extra=x_sakura, frames=40, delay=60),
+    'plasma': dict(fill=f_plasma, outline='fg', ow=1.0, glow='magenta', acc='magenta', acc2='cyan', frames=36,
+                   delay=50),
+    'comet': dict(fill=f_comet, outline='fg', ow=1.0, glow='cyan', acc='cyan', acc2='magenta', extra=x_comet,
+                  frames=40, delay=45),
+    'ocean': dict(fill=f_ocean, outline='fg', ow=1.0, glow='cyan', acc='cyan', acc2='blue', frames=40,
+                  delay=65),
+    'vortex': dict(fill=f_vortex, outline='yellow', ow=1.0, glow='magenta', acc='yellow', acc2='magenta',
+                   extra=x_vortex, frames=36, delay=50),
+    'firefly': dict(fill=f_firefly, outline='green', ow=1.0, glow='green', acc='yellow', acc2='green',
+                    extra=x_firefly, frames=48, delay=60),
+    'prism': dict(fill=f_prism, outline='bg', ow=1.0, glow=None, acc='blue', acc2='magenta', extra=x_prism,
+                  frames=40, delay=55),
+    'love': dict(fill=f_love, outline='fg', ow=1.0, glow='red', acc='red', acc2='magenta', extra=x_love,
+                 glowfn=lambda t: 0.45 + 0.55 * heartbeat(t), frames=40, delay=45),
+    'circuit': dict(fill=f_circuit, outline='green', ow=1.0, glow='cyan', acc='cyan', acc2='green',
+                    extra=x_circuit, spinner='ticks', frames=36, delay=50),
+    'synthwave': dict(fill=f_synthwave, outline='magenta', ow=1.1, glow='magenta', acc='magenta', acc2='cyan',
+                      frames=32, delay=60),
+})
+
+
+STYLES.update({   # the fourth set of themes
+    'halloween': dict(fill=f_halloween, outline='bg', ow=1.1, glow='blue', acc='blue', acc2='magenta',
+                      extra=x_halloween, frames=36, delay=50, glowfn=lambda t: 0.55 + 0.45 * flicker(t)),
+    'desert': dict(fill=f_desert, outline='bg', ow=1.1, glow='yellow', acc='blue', acc2='magenta', extra=x_desert,
+                   frames=40, delay=55),
+    'neotokyo': dict(fill=f_neotokyo, outline='magenta', ow=1.2, glow='blue', acc='magenta', acc2='cyan',
+                     extra=x_neotokyo, frames=36, delay=50),
+    'abyss': dict(fill=f_abyss, outline='cyan', ow=1.0, glow='blue', acc='cyan', acc2='blue', extra=x_abyss,
+                  frames=40, delay=60),
+    'forest': dict(fill=f_forest, outline='bg', ow=1.1, glow='green', acc='green', acc2='yellow', extra=x_forest,
+                   frames=40, delay=60),
+    'cosmos': dict(fill=f_cosmos, outline='fg', ow=1.0, glow='blue', acc='blue', acc2='magenta', extra=x_cosmos,
+                   frames=40, delay=55),
+    'samurai': dict(fill=f_samurai, outline='bg', ow=1.1, glow='red', acc='red', acc2='green', extra=x_samurai,
+                    frames=36, delay=50),
+    'steampunk': dict(fill=f_steampunk, outline='bg', ow=1.2, glow='blue', acc='blue', acc2='yellow',
+                      extra=x_steampunk, spinner='ticks', frames=32, delay=60),
+    'glacier': dict(fill=f_glacier, outline='fg', ow=1.0, glow='cyan', acc='blue', acc2='cyan', extra=x_glacier,
+                    frames=36, delay=60),
+    'witch': dict(fill=f_witch, outline='bg', ow=1.1, glow='blue', acc='blue', acc2='magenta', extra=x_witch,
+                  frames=40, delay=55),
+    'dragon': dict(fill=f_dragon, outline='bg', ow=1.1, glow='yellow', acc='blue', acc2='red', extra=x_dragon,
+                   frames=36, delay=55),
+    'graffiti': dict(fill=f_graffiti, outline='bg', ow=1.1, glow='magenta', acc='blue', acc2='magenta',
+                     extra=x_graffiti, frames=36, delay=50),
+})
+
+
+def glow_amount(kit, t):
+    if STYLES[kit].get('glowfn'):
+        return STYLES[kit]['glowfn'](t)
+    if kit == 'neon':
+        return neon_flicker(t)
+    if kit == 'storm':
+        return 0.6 + 0.4 * storm_flash(t)
+    return 0.75 + 0.25 * pulse(t)
+
+
+# ═══════════════════════════════════════════════════════════ drawing
+def draw_shape(cr, kit, st, P, shape, t):
+    path = SHAPES[shape]
+    cr.set_line_join(cairo.LINE_JOIN_ROUND)
+    cr.set_fill_rule(cairo.FILL_RULE_WINDING)
+    oc = P[st['outline']] if st['outline'] else P['bg']
+    ow = st['ow'] or 0.7
+    # soft shadow
+    cr.save()
+    cr.translate(0.5, 1.1)
+    path(cr, t)
+    cr.set_line_width(ow * 2 + 1.0)
+    src(cr, (0, 0, 0), 0.28)
+    cr.stroke_preserve()
+    cr.fill()
+    cr.restore()
+    # glow
+    if st['glow']:
+        g = glow_amount(kit, t)
+        for w, a in ((4.6, 0.10), (3.0, 0.20)):
+            path(cr, t)
+            cr.set_line_width(ow * 2 + w)
+            src(cr, P[st['glow']], a * g)
+            cr.stroke()
+    # outline under the fill: only the outer edge shows (a light outline
+    # gets a dark rim so it still reads over white pages)
+    if st['outline'] and lum(oc) > 0.5:
+        path(cr, t)
+        cr.set_line_width(ow * 2 + 1.1)
+        src(cr, P['bg'], 0.75)
+        cr.stroke()
+    if st['outline']:
+        path(cr, t)
+        cr.set_line_width(ow * 2)
+        src(cr, oc)
+        cr.stroke()
+    cr.save()
+    path(cr, t)
+    cr.clip()
+    if shape == 'forbid':
+        src(cr, P['red'])
+        cr.paint()
+    else:
+        st['fill'](cr, t, P)
+    cr.restore()
+    if st['outline'] and st['outline'] != 'bg':
+        # a thin inner line in the outline color keeps the edge crisp
+        path(cr, t)
+        cr.set_line_width(0.45)
+        src(cr, oc, 0.9)
+        cr.stroke()
+    if st.get('extra'):
+        st['extra'](cr, t, P, shape, path)
+
+
+def draw_spinner(cr, st, P, cx, cy, r, t, bgdisc=True):
+    acc, acc2 = P[st['acc']], P[st['acc2']]
+    kind = st.get('spinner', 'arc')
+    if bgdisc:
+        cr.arc(cx, cy, r + r * 0.42, 0, TAU)
+        src(cr, (0, 0, 0), 0.25)
+        cr.fill()
+        cr.arc(cx, cy, r + r * 0.32, 0, TAU)
+        src(cr, P['bg'], 0.85)
+        cr.fill()
+    if kind == 'blocks':
+        n = 8
+        for i in range(n):
+            a = TAU * i / n
+            on = ((i - t * n) % n) / n
+            s = r * 0.42
+            src(cr, mix(acc2, acc, on), 0.25 + 0.75 * on)
+            cr.rectangle(round(cx + math.cos(a) * r * 0.85 - s / 2), round(cy + math.sin(a) * r * 0.85 - s / 2),
+                         s, s)
+            cr.fill()
+        return
+    if kind == 'ticks':
+        n = 12
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        cr.set_line_width(r * 0.2)
+        for i in range(n):
+            a = TAU * i / n
+            on = 1 - ((t * n - i) % n) / n
+            src(cr, mix(acc2, acc, on), 0.2 + 0.8 * on)
+            cr.move_to(cx + math.cos(a) * r * 0.5, cy + math.sin(a) * r * 0.5)
+            cr.line_to(cx + math.cos(a) * r, cy + math.sin(a) * r)
+            cr.stroke()
+        return
+    w = r * 0.32
+    cr.set_line_width(w)
+    cr.arc(cx, cy, r * 0.8, 0, TAU)
+    src(cr, acc2, 0.22)
+    cr.stroke()
+    a0 = TAU * t
+    span = math.pi * (0.9 + 0.5 * math.sin(TAU * t))
+    seg = 24
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    for i in range(seg):
+        f = i / seg
+        a = a0 - span * (1 - f)
+        cr.arc(cx, cy, r * 0.8, a, a + span / seg + 0.02)
+        src(cr, mix(acc2, acc, f), 0.15 + 0.85 * f)
+        cr.stroke()
+    cr.arc(cx + math.cos(a0) * r * 0.8, cy + math.sin(a0) * r * 0.8, w * 0.75, 0, TAU)
+    src(cr, mix(acc, (1, 1, 1), 0.5))
+    cr.fill()
+    cr.arc(cx, cy, r * 0.22 * (0.6 + 0.4 * pulse(t, 2)), 0, TAU)
+    src(cr, acc)
+    cr.fill()
+
+
+def draw_help(cr, st, P, t):
+    """A bouncing "?" badge next to the pointer."""
+    y = 23.5 - 2.0 * abs(math.sin(TAU * t))
+    cr.arc(24, y + 0.8, 5.4, 0, TAU)
+    src(cr, (0, 0, 0), 0.3)
+    cr.fill()
+    cr.arc(24, y, 5.2, 0, TAU)
+    src(cr, P['bg'])
+    cr.fill()
+    cr.arc(24, y, 4.3, 0, TAU)
+    acc = P[st['acc']]
+    src(cr, acc)
+    cr.fill()
+    cr.select_font_face('Sans', cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+    cr.set_font_size(7)
+    ext = cr.text_extents('?')
+    cr.move_to(24 - ext.x_advance / 2, y + ext.height / 2)
+    src(cr, P['bg'] if lum(acc) > 0.45 else (1, 1, 1))
+    cr.show_text('?')
+
+
+def render(kit, shape, size, t, P):
+    st = STYLES[kit]
+    pixel = st.get('pixel')
+    s = size // 2 if pixel else size
+    surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, s, s)
+    cr = cairo.Context(surf)
+    if pixel:
+        cr.set_antialias(cairo.ANTIALIAS_NONE)
+    cr.scale(s / 32, s / 32)
+    if shape == 'wait':
+        draw_spinner(cr, st, P, 16, 16, 9.5, t)
+    else:
+        draw_shape(cr, kit, st, P, shape, t)
+        if shape == 'progress':
+            draw_spinner(cr, st, P, 24.5, 24.5, 4.6, t)
+        elif shape == 'help':
+            draw_help(cr, st, P, t)
+    surf.flush()
+    if not pixel:
+        return surf
+    big = cairo.ImageSurface(cairo.FORMAT_ARGB32, size, size)
+    c2 = cairo.Context(big)
+    c2.scale(size / s, size / s)
+    c2.set_source_surface(surf, 0, 0)
+    c2.get_source().set_filter(cairo.FILTER_NEAREST)
+    c2.paint()
+    big.flush()
+    return big
+
+
+# ═══════════════════════════════════════════════════════════ xcursor
+def xcursor(frames):
+    """frames: [(nominal, surface, xhot, yhot, delay)] -> Xcursor file bytes."""
+    n = len(frames)
+    head = struct.pack('<4sIII', b'Xcur', 16, 0x10000, n)
+    toc, chunks = b'', b''
+    pos = 16 + n * 12
+    for nominal, surf, xh, yh, delay in frames:
+        w, h = surf.get_width(), surf.get_height()
+        stride = surf.get_stride()
+        data = bytes(surf.get_data())
+        if stride != w * 4:
+            data = b''.join(data[y * stride:y * stride + w * 4] for y in range(h))
+        if sys.byteorder != 'little':      # cairo is native endian, Xcursor little endian
+            data = b''.join(data[i:i + 4][::-1] for i in range(0, len(data), 4))
+        chunk = struct.pack('<IIIIIIIII', 36, 0xfffd0002, nominal, 1, w, h,
+                            min(xh, w - 1), min(yh, h - 1), delay) + data
+        toc += struct.pack('<III', 0xfffd0002, nominal, pos)
+        chunks += chunk
+        pos += len(chunk)
+    return head + toc + chunks
+
+
+def timing(st, shape, anim='full'):
+    """(frames, delay ms) of a cursor: calm is slower, off is still."""
+    n, d = st.get('frames', 32), st.get('delay', 55)
+    if shape == 'wait':
+        n, d = (12, 80) if st.get('spinner') == 'blocks' else (24, 40)
+    elif anim == 'off' and shape not in ALWAYS:
+        return 1, d
+    return n, int(d * 1.8) if anim == 'calm' else d
+
+
+def build(kit, P, dest, size=SIZE, anim='full'):
+    st = STYLES[kit]
+    cur = os.path.join(dest, 'cursors')
+    os.makedirs(cur, exist_ok=True)
+    for shape, names in NAMES.items():
+        hx, hy = HOT.get(shape, (16, 16))
+        n, d = timing(st, shape, anim)
+        frames = []
+        for i in range(n):
+            surf = render(kit, shape, size, i / n, P)
+            frames.append((size, surf, round(hx * size / 32), round(hy * size / 32), d))
+        with open(os.path.join(cur, names[0]), 'wb') as f:
+            f.write(xcursor(frames))
+        for alias in names[1:]:
+            os.symlink(names[0], os.path.join(cur, alias))
+    with open(os.path.join(dest, 'index.theme'), 'w') as f:
+        f.write(f'[Icon Theme]\nName={os.path.basename(dest)}\n'
+                f'Comment=Animated cursor of the {kit} rice theme (bin/ThemeCursor)\nInherits={FALLBACK}\n')
+
+
+def sheet(out):
+    """A preview of every theme (ThemeCursor --sheet out.png)."""
+    shapes = ['arrow', 'hand', 'text', 'help', 'wait', 'progress', 'cross', 'forbid', 'move', 'ew', 'nwse']
+    S = 64
+    kits = list(STYLES)
+    surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, S * len(shapes) + 110, S * len(kits) * 2)
+    cr = cairo.Context(surf)
+    cr.set_source_rgb(0.5, 0.5, 0.52)
+    cr.paint()
+    for r, kit in enumerate(kits):
+        pal = palette_of(kit)
+        for half, bgc in enumerate(((0.13, 0.13, 0.15), (0.92, 0.92, 0.94))):
+            y = (r * 2 + half) * S
+            cr.set_source_rgb(*bgc)
+            cr.rectangle(0, y, surf.get_width(), S)
+            cr.fill()
+            cr.set_source_rgb(*(1 - c for c in bgc))
+            cr.move_to(6, y + S / 2)
+            cr.show_text(kit)
+            for i, shape in enumerate(shapes):
+                img = render(kit, shape, S, 0.13 if half else 0.03, pal)
+                cr.set_source_surface(img, 110 + i * S, y)
+                cr.paint()
+    surf.write_to_png(out)
+
+
+def main():
+    args = sys.argv[1:]
+    if args[:1] == ['--sheet']:
+        sheet(args[1] if len(args) > 1 else 'cursor-sheet.png')
+        return
+    if not args:
+        sys.exit('usage: ThemeCursor <style> [--size N] [--anim full|calm|off] [key=#rrggbb ...]')
+    kit = args[0] if args[0] in STYLES else 'minimal'
+    P = palette_of(kit)   # the given colors (the palette in use) win
+    given = {}
+    size, anim = SIZE, 'full'
+    rest = iter(args[1:])
+    for a in rest:
+        if a == '--size':
+            try:
+                size = max(16, min(128, int(next(rest, SIZE))))
+            except ValueError:
+                pass
+            continue
+        if a == '--anim':
+            v = next(rest, 'full')
+            anim = v if v in ANIMS else 'full'
+            continue
+        k, _, v = a.partition('=')
+        if k in P and len(v.lstrip('#')) == 6:
+            given[k] = v
+            P[k] = rgb(v)
+    with open(os.path.abspath(__file__), 'rb') as f:
+        code = f.read()
+    tag = hashlib.md5(code + repr((kit, sorted(given.items()), size, anim)).encode()).hexdigest()[:8]
+    name = f'{PREFIX}{kit}-{tag}'
+    dest = os.path.join(ICONS, name)
+    if not os.path.exists(os.path.join(dest, 'index.theme')):
+        tmp = dest + '.tmp'
+        shutil.rmtree(tmp, ignore_errors=True)
+        build(kit, P, tmp, size, anim)
+        shutil.rmtree(dest, ignore_errors=True)
+        os.replace(tmp, dest)
+    os.utime(dest)
+    # keep only the newest few
+    old = sorted((d for d in glob.glob(os.path.join(ICONS, PREFIX + '*')) if d != dest),
+                 key=os.path.getmtime, reverse=True)
+    for d in old[KEEP - 1:]:
+        shutil.rmtree(d, ignore_errors=True)
+    print(name)
+
+
+if __name__ == '__main__':
+    main()

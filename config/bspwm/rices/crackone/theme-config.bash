@@ -7,18 +7,10 @@
 source "$HOME/.config/bspwm/rices/crackone/theme_colors.bash"
 #--Tokyo Night--
 cargar_tokyo_night
-#--Obsidian Deep--
-#cargar_obsidian_deep
-#--Cyber Sunset--
-#cargar_cyber_sunset
-#--Deep Ocean--
-#cargar_deep_ocean
 #--Minimal Gold --
 #cargar_minimal_gold
 #-- Cold Frost--
 #cargar_cold_frost
-
-#cargar_glassmorphism
 
 #cargar_neon_cyberpunk
 
@@ -30,13 +22,9 @@ cargar_tokyo_night
 
 #cargar_hud
 
-#cargar_fire
-
 #cargar_nature
 
 #cargar_pencil_graphite
-
-#cargar_crystal
 
 #cargar_lava
 
@@ -51,6 +39,30 @@ cargar_tokyo_night
 #cargar_butterflies
 
 #cargar_snakes
+
+#cargar_halloween
+
+#cargar_desert
+
+#cargar_neo_tokyo
+
+#cargar_abyss
+
+#cargar_enchanted_forest
+
+#cargar_cosmos
+
+#cargar_samurai
+
+#cargar_steampunk
+
+#cargar_glacier
+
+#cargar_witchcraft
+
+#cargar_golden_dragon
+
+#cargar_graffiti
 
 
 # Bspwm options
@@ -117,7 +129,7 @@ sl_ring="${black}"
 sl_wrong="${red}"
 sl_date="${fg}"
 sl_verify="${green}"
-LOCK_STYLE="card"		# Lock style (super+shift+l, power menu, auto-lock): card (login card) | hud (clock)
+LOCK_STYLE="card"		# Every lock uses the login card (BetterLock, RiceEditor -> Login Lock)
 LOCK_ACCENT="${blue}"	# Ring highlight + glass panel border
 LOCK_BLUR="0"			# Wallpaper blur on lockscreen (0-30)
 LOCK_DIM="20"			# Wallpaper darkening in % (0-80)
@@ -160,7 +172,10 @@ BL_SUSPEND="true"		# Lock before suspend (xss-lock)
 # Gtk theme
 gtk_theme="TechOGR"
 gtk_icons="Papirus-Dark"
-gtk_cursor="Bibata-Modern-Classic"
+gtk_cursor="Rice-Animated"	# Rice-Animated = the animated cursor of the theme (bin/ThemeCursor)
+CURSOR_KIT="theme"		# Animated cursor: theme (the one of the theme in use) | a theme (snake, lava...) | aurora | galaxy | rgb | frost | gold | matrix | sakura | plasma | comet | ocean | vortex | firefly | prism | love | circuit | synthwave
+CURSOR_SIZE="24"		# Cursor size: 24 - 96
+CURSOR_ANIM="full"		# Cursor animation: full | calm (slower) | off
 geany_theme="z0mbi3-TokyoNight"
 
 # Wallpaper engine

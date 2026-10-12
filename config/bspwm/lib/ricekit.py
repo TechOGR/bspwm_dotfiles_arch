@@ -3,9 +3,11 @@
 # Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
 #
 # ricekit - whole-rice themes built on the workspace styles of
-# lib/wspill.py (Glassmorphism, Neon Cyberpunk, Minimal Dark, Pixel,
-# Liquid, HUD, Fire, Nature, Pencil, Crystal, Lava, Solid Neon,
-# Holographic, Storm, Venom, Butterflies, Snakes). A theme is made of
+# lib/wspill.py (Neon Cyberpunk, Minimal Dark, Pixel, Liquid, HUD,
+# Nature, Pencil, Lava, Solid Neon, Holographic, Storm, Venom,
+# Butterflies, Snakes, and lib/wsfour.py: Halloween, Desert, Neo Tokyo,
+# Abyss, Enchanted Forest, Cosmos, Samurai, Steampunk, Glacier,
+# Witchcraft, Golden Dragon, Graffiti). A theme is made of
 # parts that can be applied together or one by one:
 #   colors      palette -> terminals, rofi, dunst, GTK, lockscreen, bar
 #               text, RiceEditor itself (theme_colors.bash cargar_*)
@@ -13,6 +15,7 @@
 #   workspaces  the workspace pill of the bar
 #   windows     borders, corners, gaps, opacity, glow shadow, blur,
 #               notification corners
+#   cursor      the theme's animated cursor (bin/ThemeCursor)
 # Used by RiceEditor -> Themes and bin/RiceKit.
 #
 # Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
@@ -30,6 +33,7 @@ PARTS = [
     ('bar', '󱔓', 'Bar', 'polybar drawn in the style'),
     ('workspaces', '󰮯', 'Workspaces', 'the pac-man pill of the bar'),
     ('windows', '󰖲', 'Windows', 'borders, corners, gaps, glow, blur, opacity'),
+    ('cursor', '󰇀', 'Cursor', "the theme's animated cursor, in its colors"),
     ('wallpaper', '󰸉', 'Wallpaper', "the theme's wallpaper (changeable in Themes)"),
 ]
 STYLE_PARTS = ('colors', 'bar', 'workspaces', 'windows')   # all of them = the whole theme (RICE_KIT)
@@ -37,16 +41,13 @@ STYLE_PARTS = ('colors', 'bar', 'workspaces', 'windows')   # all of them = the w
 # The wallpaper each theme brings (rices/<rice>/walls). RiceEditor -> Themes
 # changes it per theme; the choice is kept in config/theme-walls.json.
 THEME_WALLS = {
-    'glass': 'anime-girl-blue-hair-4k-wallpaper-uhdpaper.com-894@5@m.jpg',
     'cyber': 'neon-pink-sunset-scenery-digital-art-4k-wallpaper-uhdpaper.com-439@5@r.jpg',
     'minimal': 'anime-girl-sunrise-4k-wallpaper-uhdpaper.com-507@5@f.jpg',
     'pixel': 'spongebob-sponge-on-the-run-houses-uhdpaper.com-4K-7.355.jpg',
     'liquid': 'pirate-ship-island-digital-art-4k-wallpaper-uhdpaper.com-659@2@b.jpg',
     'hud': 'muichiro-tokito-demon-slayer-4k-wallpaper-uhdpaper.com-907@5@g.jpg',
-    'fire': 'kyojuro-rengoku-demon-slayer-4k-wallpaper-uhdpaper.com-844@5@h.jpg',
     'nature': 'anime-girl-alone-sunflower-4k-wallpaper-uhdpaper.com-462@5@r.jpg',
     'sketch': 'kenpachi-bleach-anime-4k-wallpaper-uhdpaper.com-143@5@q.jpg',
-    'crystal': 'rukia-bankai-bleach-tybw-art-4k-wallpaper-uhdpaper.com-280@5@r.jpg',
     'lava': 'itachi-uchiha-crow-akatsuki-4k-wallpaper-uhdpaper.com-760@5@r.jpg',
     'neon': 'super-saiyan-rose-dragon-ball-4k-wallpaper-uhdpaper.com-92@5@r.jpg',
     'holo': 'alone-anime-girl-starry-night-sky-stars-scenery-4k-wallpaper-uhdpaper.com-225@5@i.jpg',
@@ -54,6 +55,18 @@ THEME_WALLS = {
     'venom': 'muzan-demon-slayer-4k-wallpaper-uhdpaper.com-916@5@g.jpg',
     'butterfly': 'shinobu-kocho-demon-slayer-4k-wallpaper-uhdpaper.com-843@5@h.jpg',
     'snake': 'sukuna-jujutsu-kaisen-4k-wallpaper-uhdpaper.com-765@5@r.jpg',
+    'halloween': 'night-moon-reflection-scenery-digital-art-4k-wallpaper-uhdpaper.com-869@5@m.jpg',
+    'desert': 'anime-girl-sunrise-4k-wallpaper-uhdpaper.com-146@5@l.jpg',
+    'neotokyo': 'satoru-gojo-neon-jjk-4k-wallpaper-uhdpaper.com-338@5@i.jpg',
+    'abyss': 'anime-girl-silhoutte-moon-sea-night-moon-4k-wallpaper-uhdpaper.com-756@5@r.jpg',
+    'forest': 'broly-eyes-dragon-ball-4k-wallpaper-uhdpaper.com-85@5@o.jpg',
+    'cosmos': 'shooting-star-comet-anime-girl-night-sky-scenery-4k-wallpaper-uhdpaper.com-522@5@k.jpg',
+    'samurai': 'kyojuro-rengoku-demon-slayer-4k-wallpaper-uhdpaper.com-844@5@h.jpg',
+    'steampunk': 'kratos-axe-god-of-war-4k-wallpaper-uhdpaper.com-804@5@k.jpg',
+    'glacier': 'rukia-bankai-bleach-tybw-art-4k-wallpaper-uhdpaper.com-280@5@r.jpg',
+    'witch': 'orochimaru.jpg',
+    'dragon': 'hanzo-mlbb-soul-fire-splash-art-4k-wallpaper-uhdpaper.com-472@5@q.jpg',
+    'graffiti': 'toji-jjk-4k-wallpaper-uhdpaper.com-444@5@l.jpg',
 }
 WALLS_CONF = os.path.join(os.path.expanduser('~/.config/bspwm'), 'config/theme-walls.json')
 
@@ -109,11 +122,6 @@ def paint_wall(path):
 
 # id: name, tagline, palette function, windows settings, dunst radius
 KITS = {
-    'glass': dict(
-        name='Glassmorphism', tagline='modern and clean', palette='cargar_glassmorphism',
-        win=dict(BORDER_WIDTH=1, FOCUSED_BC='#8fb8ff', NORMAL_BC='#2a3558', P_CORNER_R=14, gap=10,
-                 SHADOW_C='#1d3fd6', P_BLUR='true', P_ACTIVE_OPACITY='0.94', P_INACTIVE_OPACITY='0.86'),
-        dunst_r=14),
     'cyber': dict(
         name='Neon Cyberpunk', tagline='futuristic and striking', palette='cargar_neon_cyberpunk',
         win=dict(BORDER_WIDTH=2, FOCUSED_BC='#ff2bd6', NORMAL_BC='#2a1850', P_CORNER_R=0, gap=10,
@@ -139,11 +147,6 @@ KITS = {
         win=dict(BORDER_WIDTH=1, FOCUSED_BC='#2d8cff', NORMAL_BC='#12294a', P_CORNER_R=0, gap=8,
                  SHADOW_C='#2d8cff', P_BLUR='false', P_ACTIVE_OPACITY='0.97', P_INACTIVE_OPACITY='0.90'),
         dunst_r=0),
-    'fire': dict(
-        name='Fire', tagline='intense and different', palette='cargar_fire',
-        win=dict(BORDER_WIDTH=2, FOCUSED_BC='#ff7a18', NORMAL_BC='#3a1a0a', P_CORNER_R=10, gap=10,
-                 SHADOW_C='#ff4a00', P_BLUR='false', P_ACTIVE_OPACITY='0.97', P_INACTIVE_OPACITY='0.90'),
-        dunst_r=12),
     'nature': dict(
         name='Nature', tagline='calm and fresh', palette='cargar_nature',
         win=dict(BORDER_WIDTH=2, FOCUSED_BC='#2ee06f', NORMAL_BC='#16402a', P_CORNER_R=14, gap=10,
@@ -156,11 +159,6 @@ KITS.update({
         win=dict(BORDER_WIDTH=2, FOCUSED_BC='#d6d6d6', NORMAL_BC='#333333', P_CORNER_R=8, gap=10,
                  SHADOW_C='#000000', P_BLUR='false', P_ACTIVE_OPACITY='0.98', P_INACTIVE_OPACITY='0.92'),
         dunst_r=8),
-    'crystal': dict(
-        name='Crystal', tagline='frosted glass and light', palette='cargar_crystal',
-        win=dict(BORDER_WIDTH=1, FOCUSED_BC='#bfe6ff', NORMAL_BC='#26406a', P_CORNER_R=16, gap=12,
-                 SHADOW_C='#1e6bff', P_BLUR='true', P_ACTIVE_OPACITY='0.92', P_INACTIVE_OPACITY='0.84'),
-        dunst_r=16),
     'lava': dict(
         name='Lava', tagline='cracked rock and fire', palette='cargar_lava',
         win=dict(BORDER_WIDTH=2, FOCUSED_BC='#ff5a00', NORMAL_BC='#2a1208', P_CORNER_R=6, gap=10,
@@ -197,8 +195,74 @@ KITS.update({
                  SHADOW_C='#3aff2e', P_BLUR='false', P_ACTIVE_OPACITY='0.97', P_INACTIVE_OPACITY='0.90'),
         dunst_r=12),
 })
-ORDER = ['glass', 'cyber', 'minimal', 'pixel', 'liquid', 'hud', 'fire', 'nature',
-         'sketch', 'crystal', 'lava', 'neon', 'holo', 'storm', 'venom', 'butterfly', 'snake']
+# the fourth set (lib/wsfour.py): twelve neon scenes
+KITS.update({
+    'halloween': dict(
+        name='Halloween', tagline='pumpkins, bats and a full moon', palette='cargar_halloween',
+        win=dict(BORDER_WIDTH=2, FOCUSED_BC='#ff7a1a', NORMAL_BC='#2a1430', P_CORNER_R=14, gap=10,
+                 SHADOW_C='#ff5a10', P_BLUR='false', P_ACTIVE_OPACITY='0.97', P_INACTIVE_OPACITY='0.90'),
+        dunst_r=14),
+    'desert': dict(
+        name='Desert', tagline='sunset, cacti and sand', palette='cargar_desert',
+        win=dict(BORDER_WIDTH=2, FOCUSED_BC='#ffb52e', NORMAL_BC='#3a1e0c', P_CORNER_R=10, gap=10,
+                 SHADOW_C='#ff8a1a', P_BLUR='false', P_ACTIVE_OPACITY='0.97', P_INACTIVE_OPACITY='0.90'),
+        dunst_r=10),
+    'neotokyo': dict(
+        name='Neo Tokyo', tagline='neon city, torii and sakura', palette='cargar_neo_tokyo',
+        win=dict(BORDER_WIDTH=2, FOCUSED_BC='#e03cff', NORMAL_BC='#22124a', P_CORNER_R=6, gap=10,
+                 SHADOW_C='#ff3ab4', P_BLUR='false', P_ACTIVE_OPACITY='0.96', P_INACTIVE_OPACITY='0.89'),
+        dunst_r=6),
+    'abyss': dict(
+        name='Abyss', tagline='jellyfish and deep sea light', palette='cargar_abyss',
+        win=dict(BORDER_WIDTH=2, FOCUSED_BC='#2ccfff', NORMAL_BC='#0c2a4a', P_CORNER_R=18, gap=12,
+                 SHADOW_C='#1a8aff', P_BLUR='true', P_ACTIVE_OPACITY='0.95', P_INACTIVE_OPACITY='0.87'),
+        dunst_r=18),
+    'forest': dict(
+        name='Enchanted Forest', tagline='mushrooms, fireflies and moss', palette='cargar_enchanted_forest',
+        win=dict(BORDER_WIDTH=2, FOCUSED_BC='#b8f02e', NORMAL_BC='#1e3410', P_CORNER_R=16, gap=10,
+                 SHADOW_C='#7ac81a', P_BLUR='false', P_ACTIVE_OPACITY='0.97', P_INACTIVE_OPACITY='0.90'),
+        dunst_r=16),
+    'cosmos': dict(
+        name='Cosmos', tagline='planets, nebulae and stardust', palette='cargar_cosmos',
+        win=dict(BORDER_WIDTH=2, FOCUSED_BC='#8a8cff', NORMAL_BC='#1c1e4a', P_CORNER_R=14, gap=12,
+                 SHADOW_C='#6a4dff', P_BLUR='true', P_ACTIVE_OPACITY='0.95', P_INACTIVE_OPACITY='0.88'),
+        dunst_r=14),
+    'samurai': dict(
+        name='Samurai', tagline='blood moon, katana and sakura', palette='cargar_samurai',
+        win=dict(BORDER_WIDTH=2, FOCUSED_BC='#ff3a3a', NORMAL_BC='#2e0c12', P_CORNER_R=8, gap=10,
+                 SHADOW_C='#ff1a1a', P_BLUR='false', P_ACTIVE_OPACITY='0.97', P_INACTIVE_OPACITY='0.90'),
+        dunst_r=8),
+    'steampunk': dict(
+        name='Steampunk', tagline='brass gears, steam and airships', palette='cargar_steampunk',
+        win=dict(BORDER_WIDTH=3, FOCUSED_BC='#f0a13a', NORMAL_BC='#3a2410', P_CORNER_R=10, gap=10,
+                 SHADOW_C='#c8622a', P_BLUR='false', P_ACTIVE_OPACITY='0.98', P_INACTIVE_OPACITY='0.92'),
+        dunst_r=10),
+    'glacier': dict(
+        name='Glacier', tagline='ice crystals and a frost wolf', palette='cargar_glacier',
+        win=dict(BORDER_WIDTH=2, FOCUSED_BC='#7ae0ff', NORMAL_BC='#14305a', P_CORNER_R=12, gap=12,
+                 SHADOW_C='#2a8aff', P_BLUR='true', P_ACTIVE_OPACITY='0.94', P_INACTIVE_OPACITY='0.86'),
+        dunst_r=12),
+    'witch': dict(
+        name='Witchcraft', tagline='spellbooks, ravens and candles', palette='cargar_witchcraft',
+        win=dict(BORDER_WIDTH=2, FOCUSED_BC='#c84cff', NORMAL_BC='#2a1448', P_CORNER_R=14, gap=10,
+                 SHADOW_C='#9a2cff', P_BLUR='false', P_ACTIVE_OPACITY='0.97', P_INACTIVE_OPACITY='0.90'),
+        dunst_r=14),
+    'dragon': dict(
+        name='Golden Dragon', tagline='imperial gold among the clouds', palette='cargar_golden_dragon',
+        win=dict(BORDER_WIDTH=2, FOCUSED_BC='#ffc42e', NORMAL_BC='#3a1408', P_CORNER_R=12, gap=10,
+                 SHADOW_C='#ff7a1a', P_BLUR='false', P_ACTIVE_OPACITY='0.97', P_INACTIVE_OPACITY='0.90'),
+        dunst_r=12),
+    'graffiti': dict(
+        name='Graffiti', tagline='spray paint and street crowns', palette='cargar_graffiti',
+        win=dict(BORDER_WIDTH=2, FOCUSED_BC='#25ebf5', NORMAL_BC='#2a1a44', P_CORNER_R=16, gap=12,
+                 SHADOW_C='#eb1fed', P_BLUR='false', P_ACTIVE_OPACITY='0.97', P_INACTIVE_OPACITY='0.90'),
+        dunst_r=16),
+})
+
+ORDER = ['cyber', 'minimal', 'pixel', 'liquid', 'hud', 'nature',
+         'sketch', 'lava', 'neon', 'holo', 'storm', 'venom', 'butterfly', 'snake',
+         'halloween', 'desert', 'neotokyo', 'abyss', 'forest', 'cosmos',
+         'samurai', 'steampunk', 'glacier', 'witch', 'dragon', 'graffiti']
 
 # Bar geometry per theme: the side margins come from the skin (what it
 # draws past the bar's ends must stay on screen)
@@ -212,8 +276,6 @@ BAR_GEOMETRY = _bar_geometry()
 # The palettes (also written to theme_colors.bash): bg fg black blackb red
 # green yellow blue magenta cyan white accent_color arch_icon
 PALETTES = {
-    'glass': ('#0f1530', '#e6ecff', '#141b3a', '#3a4670', '#ff6b9a', '#6ee7c8', '#ffd479', '#6fa8ff',
-              '#b18cff', '#7fdcff', '#c9d4f5', '#1b2450', '#7fdcff'),
     'cyber': ('#0a0614', '#f2e9ff', '#140c26', '#3a2466', '#ff2b6e', '#2bffb1', '#ffe14d', '#19b8ff',
               '#ff2bd6', '#19e6ff', '#c9b8ff', '#1a0f33', '#19e6ff'),
     'minimal': ('#0e1016', '#d8dce6', '#151821', '#3a4058', '#e27d8b', '#9cc9a0', '#e6d3a3', '#a9c2ff',
@@ -224,14 +286,10 @@ PALETTES = {
                '#b37cff', '#34dcff', '#c8d6ff', '#18225e', '#34dcff'),
     'hud': ('#050c18', '#d6ecff', '#08162a', '#16304f', '#ff5c7a', '#3fe0a8', '#ffd166', '#2d8cff',
             '#ffb3c7', '#39d0ff', '#9fc6e8', '#0a1c33', '#39d0ff'),
-    'fire': ('#120604', '#ffe9d6', '#1c0b06', '#4a1f10', '#ff3b1f', '#ffb300', '#ffc400', '#ff7a18',
-             '#ff5a36', '#ffa53a', '#f0c9a8', '#2a0f08', '#ff8a1f'),
     'nature': ('#06140c', '#e3ffe9', '#0b1f12', '#1f4a2c', '#ff7a6b', '#2ee06f', '#d9f26b', '#42d9c6',
                '#9be07a', '#7ff5d6', '#bfe8c8', '#0f2a18', '#b9ff66'),
     'sketch': ('#121212', '#e8e8e8', '#1a1a1a', '#4a4a4a', '#d98080', '#a8c8a0', '#e0d4a8', '#b8c4d8',
                '#c8b8d8', '#b0d0d0', '#bdbdbd', '#1f1f1f', '#e8e8e8'),
-    'crystal': ('#0a1228', '#eef6ff', '#0f1a38', '#34507a', '#ff7aa8', '#7ff0d0', '#ffe08a', '#4fb4ff',
-                '#c58cff', '#8fe6ff', '#cfe2ff', '#142448', '#bfe6ff'),
     'lava': ('#0e0605', '#ffe6d0', '#180a07', '#4a2014', '#ff3a10', '#ffb020', '#ffd040', '#ff6a10',
              '#ff4a2a', '#ff9a3a', '#e8c0a0', '#261008', '#ff8a1f'),
     'neon': ('#070a18', '#eef0ff', '#0c1024', '#2a2f5a', '#ff4f8a', '#3fffc0', '#ffe45c', '#1e90ff',
@@ -246,6 +304,30 @@ PALETTES = {
                   '#ff7ae0', '#9fb8ff', '#e8d6ff', '#22123f', '#ff9ae8'),
     'snake': ('#040f06', '#e8ffe0', '#08180a', '#1f4a22', '#ff6a4a', '#7dff2e', '#e8ff5a', '#5aff7a',
               '#b8ff3a', '#3affc8', '#c8f0c0', '#0a2410', '#9dff3a'),
+    'halloween': ('#0d0612', '#ffe8d6', '#170a1c', '#3e2346', '#ff3b2f', '#9cff57', '#ffc43d', '#ff7a1a',
+                  '#c04dff', '#ff9e4a', '#e8cfc0', '#1f0e26', '#ff7a1a'),
+    'desert': ('#140904', '#ffeccc', '#1f1007', '#5a3418', '#e8502a', '#7fbf4a', '#ffd25a', '#ffb52e',
+               '#e8763a', '#f2c27a', '#e8d2b0', '#2a160a', '#ffb52e'),
+    'neotokyo': ('#07041a', '#f4e8ff', '#0e0828', '#3a2466', '#ff3a7a', '#3affc8', '#ffd23a', '#e03cff',
+                 '#ff3ab4', '#3ad8ff', '#cdb8ff', '#160c3a', '#e03cff'),
+    'abyss': ('#010a1c', '#dff8ff', '#04142c', '#14406a', '#ff5a7a', '#2affc8', '#c8ff6a', '#2ccfff',
+              '#4a8cff', '#5af0ff', '#a8d8f0', '#06203e', '#2ccfff'),
+    'forest': ('#060f04', '#efffd8', '#0c1a08', '#2e4a18', '#ff5a3a', '#b8f02e', '#ffe066', '#9ce02e',
+               '#e8a03a', '#7af0a0', '#cfe8b0', '#13260a', '#b8f02e'),
+    'cosmos': ('#04051a', '#e8ecff', '#0a0c2a', '#2a2e6a', '#ff5a8a', '#5affd8', '#ffe08a', '#6a6cff',
+               '#c04dff', '#5ac8ff', '#c8ccff', '#12144a', '#8a8cff'),
+    'samurai': ('#0e0406', '#ffe8e8', '#1a080b', '#4a1a22', '#ff2a2a', '#ff8ab0', '#ffb84a', '#ff3a3a',
+                '#c04a8a', '#ff6a5a', '#e8c8c8', '#260a10', '#ff3a3a'),
+    'steampunk': ('#0f0804', '#ffe8c8', '#1a0f07', '#5a3a1a', '#d8502a', '#5ab89a', '#ffc85a', '#f0a13a',
+                  '#c8622a', '#e8b878', '#d8c0a0', '#24140a', '#f0a13a'),
+    'glacier': ('#030a18', '#e8f6ff', '#071428', '#24406a', '#ff6a8a', '#6affe0', '#ffe8a8', '#4fc8ff',
+                '#8aa8ff', '#8af0ff', '#b8d8f0', '#0c1e3a', '#4fc8ff'),
+    'witch': ('#0a0418', '#f4e8ff', '#130a26', '#3a2066', '#ff4a6a', '#7aff9a', '#ffb347', '#b43cff',
+              '#ef57f9', '#9a7aff', '#d0b8f0', '#1c0e36', '#b43cff'),
+    'dragon': ('#120503', '#fff0d0', '#1e0a05', '#5a2410', '#e8322a', '#f0b030', '#ffd84a', '#ffb22e',
+               '#ff5a3a', '#ffc87a', '#f0d0a8', '#2a0e06', '#ffc42e'),
+    'graffiti': ('#0a0614', '#f8f0ff', '#120c22', '#3a2a5a', '#ff2a5a', '#3aff6a', '#ffe014', '#25ebf5',
+                 '#eb1fed', '#3ab0ff', '#d8d0f0', '#1a1030', '#eb1fed'),
 }
 PAL_KEYS = ['bg', 'fg', 'black', 'blackb', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white',
             'accent_color', 'arch_icon']
@@ -373,7 +455,7 @@ def _apply(kit, parts, run):
     ensure_palettes()
     # a theme brings its own colors back to what it applies
     import wspill
-    wspill.set_tint([{'colors': 'locks'}.get(p, p) for p in parts if p != 'wallpaper'], None)
+    wspill.set_tint([{'colors': 'locks'}.get(p, p) for p in parts if p not in ('wallpaper', 'cursor')], None)
     if 'colors' in parts:
         set_palette(k['palette'])
         pal = palette(kit)
@@ -400,6 +482,10 @@ def _apply(kit, parts, run):
         if 'workspaces' in parts:
             conf['ws_style'] = kit
         bc.save(conf)
+    if 'cursor' in parts:
+        # the theme's own animated cursor (config/modules/03-gtk.sh draws it)
+        set_var('gtk_cursor', 'Rice-Animated')
+        set_var('CURSOR_KIT', kit)
     wall = theme_wall(kit) if 'wallpaper' in parts else ''
     if wall:
         set_var('ENGINE', 'Default')
@@ -409,7 +495,7 @@ def _apply(kit, parts, run):
     if not run:
         return
     theme = os.path.join(bc.BSPWM, 'bin/Theme.sh')
-    if 'colors' in parts or 'windows' in parts:
+    if 'colors' in parts or 'windows' in parts or 'cursor' in parts:
         cmd = [theme]   # its wallpaper module paints DEFAULT_WALL too
     elif 'bar' in parts or 'workspaces' in parts:
         cmd = [os.path.join(bc.BSPWM, 'bin/BarCtl'), 'apply']

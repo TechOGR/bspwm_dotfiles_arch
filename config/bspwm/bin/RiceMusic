@@ -12,7 +12,8 @@
 #   ✔ 10-band equalizer for ALL the sound, with presets (lib/riceeq.py)
 #   ✔ MPD library: search, queue, play, update · ncmpcpp one click away
 #   ✔ Keys: Space play · ←→ seek · ↑↓ volume · N / P next / previous ·
-#     Tab next source · 1-7 spectrum · E equalizer on/off · Esc close
+#     Tab next source · 1-7 spectrum · E equalizer on/off ·
+#     H hide/show the side panel · Esc close
 #
 # Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
 # Licensed under GPL-3.0 license
@@ -47,12 +48,15 @@ T = ra.translator({
     'The queue is empty': 'La cola está vacía', 'Updating the library…': 'Actualizando la biblioteca…',
     'For all the sound (browser, Spotify, MPD…)': 'Para todo el sonido (navegador, Spotify, MPD…)',
     'Equalizer on': 'Ecualizador encendido', 'Equalizer off': 'Ecualizador apagado',
-    'Space play · ←→ seek · ↑↓ volume · N/P next/prev · Tab source · 1-7 spectrum · E equalizer · Esc close':
+    'Space play · ←→ seek · ↑↓ volume · N/P next/prev · Tab source · 1-7 spectrum · E equalizer · H panel · '
+    'Esc close':
         'Espacio reproducir · ←→ avanzar · ↑↓ volumen · N/P sig./ant. · Tab fuente · 1-7 espectro · '
-        'E ecualizador · Esc cerrar',
+        'E ecualizador · H panel · Esc cerrar',
     'no sources: play something (YouTube, Spotify, MPD…)': 'sin fuentes: reproduce algo (YouTube, Spotify, MPD…)',
     'songs': 'canciones', 'Add': 'Añadir', 'Play': 'Reproducir', 'results': 'resultados',
     'Pinned: click again to follow the one playing': 'Fijada: pulsa otra vez para seguir la que suena',
+    'Hide the side panel (H)': 'Ocultar el panel lateral (H)',
+    'Show the side panel (H)': 'Mostrar el panel lateral (H)',
 })
 
 
@@ -270,9 +274,14 @@ class RiceMusic(ra.CenterWindow):
         self.eq_timer = None
         self.install_extra_css()
         self.subtitle.set_text(T('Space play · ←→ seek · ↑↓ volume · N/P next/prev · Tab source · 1-7 spectrum · '
-                                 'E equalizer · Esc close'))
+                                 'E equalizer · H panel · Esc close'))
         self.srcbox = Gtk.Box(spacing=8)
         self.head_right.pack_start(self.srcbox, False, False, 0)
+        self.b_side = Gtk.Button(label='\U000f013e')
+        for c in ('nbtn', 'src', 'side'):
+            self.b_side.get_style_context().add_class(c)
+        self.b_side.connect('clicked', lambda *_: self.set_side(not self.right.get_visible()))
+        self.head_right.pack_start(self.b_side, False, False, 0)
 
         # ── left: now playing + spectrum
         left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
@@ -294,7 +303,7 @@ class RiceMusic(ra.CenterWindow):
         vol.pack_start(ra.label('\U000f057e', 'sglyph'), False, False, 0)
         self.vol = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
         self.vol.set_draw_value(False)
-        self.vol.set_size_request(200, -1)
+        self.vol.set_size_request(120, -1)
         self.vol_lock = False
         self.vol.connect('value-changed', self.on_vol)
         vol.pack_start(self.vol, True, True, 0)
@@ -305,23 +314,27 @@ class RiceMusic(ra.CenterWindow):
 
         spec = ra.section(T('Spectrum'), '\U000f147d')
         self.style_btns = {}
-        chips = Gtk.Box(spacing=6)
-        chips.set_halign(Gtk.Align.END)
+        chips = Gtk.FlowBox()   # they wrap to a second row on a narrow window
+        chips.set_selection_mode(Gtk.SelectionMode.NONE)
+        chips.set_halign(Gtk.Align.START)
+        chips.set_column_spacing(6)
+        chips.set_row_spacing(6)
+        chips.set_max_children_per_line(10)
+        chips.set_min_children_per_line(2)
         for i, s in enumerate(['auto'] + rs.STYLES):
             name = T('automatic') if s == 'auto' else rs.STYLE_NAMES[s][1 if ES else 0]
             b = ra.button(name, lambda s=s: self.set_spec(s), 'nbtn chipbtn')
             b.set_tooltip_text(f'{i}' if i else '')
-            chips.pack_start(b, False, False, 0)
+            chips.add(b)
             self.style_btns[s] = b
-        spec.head.pack_start(Gtk.Box(), True, True, 0)
-        spec.head.pack_start(chips, False, False, 0)
+        spec.pack_start(chips, False, False, 0)   # their own row: room to wrap
         self.spec = Spectrum(self)
         spec.pack_start(self.spec, True, True, 0)
         left.pack_start(spec, True, True, 0)
         self.body.pack_start(left, True, True, 0)
 
         # ── right: equalizer / library
-        right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        self.right = right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         right.set_size_request(420, -1)
         tabs = Gtk.Box(spacing=8)
         self.stack = Gtk.Stack()
@@ -337,8 +350,22 @@ class RiceMusic(ra.CenterWindow):
         right.pack_start(self.stack, True, True, 0)
         self.body.pack_start(right, False, False, 0)
 
+        # responsive: on a narrow window the side panel goes under the player,
+        # and the whole body scrolls when the window is short
+        root = self.body.get_parent()
+        pos = root.child_get_property(self.body, 'position')
+        root.remove(self.body)
+        self.scroll_body = Gtk.ScrolledWindow()
+        self.scroll_body.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.scroll_body.add(self.body)
+        root.pack_start(self.scroll_body, True, True, 0)
+        root.reorder_child(self.scroll_body, pos)
+        self.wide = None
+        self.connect('size-allocate', self.on_resize)
+
         self.mark_spec()
         GLib.idle_add(lambda: (self.show_tab(load_conf().get('tab', 'eq')), False)[1])
+        GLib.idle_add(lambda: (self.set_side(load_conf().get('side', True), save=False), False)[1])
         threading.Thread(target=self.poll_loop, daemon=True).start()
         GLib.timeout_add(1000 // 30, self.animate)
         self.connect('destroy', lambda *_: self.an.stop())
@@ -361,6 +388,7 @@ button.chipbtn.sel, button.tab.sel { background-color: alpha(@acc, 0.25); border
 button.src { padding: 4px 12px; border-radius: 14px; }
 button.src.sel { background-color: alpha(@acc, 0.25); border-color: @acc; }
 button.src.pin { border-width: 2px; }
+button.side label { font-family: "Material Design Icons Desktop"; font-size: 13pt; }
 scale.eq trough { min-width: 6px; background-color: alpha(@fg, 0.12); border-radius: 3px; border: none; }
 scale.eq highlight { background-image: none; background-color: @acc; border-radius: 3px; }
 scale.eq slider { min-width: 18px; min-height: 18px; border-radius: 9px; background-image: none;
@@ -582,6 +610,26 @@ list { background: transparent; }
         c['tab'] = key
         save_conf(c)
 
+    WIDE = 1100   # px: from here on the side panel sits on the right
+
+    def on_resize(self, _w, alloc):
+        wide = alloc.width >= self.WIDE
+        if wide == self.wide:
+            return
+        self.wide = wide
+        self.body.set_orientation(Gtk.Orientation.HORIZONTAL if wide else Gtk.Orientation.VERTICAL)
+        self.right.set_size_request(420 if wide else -1, -1 if wide else 360)
+
+    def set_side(self, show, save=True):
+        """The right panel (equalizer / library): hidden, the left one takes the room."""
+        self.right.set_visible(show)
+        self.b_side.set_label('\U000f013e' if show else '\U000f013d')   # chevron-double right / left
+        self.b_side.set_tooltip_text(T('Hide the side panel (H)') if show else T('Show the side panel (H)'))
+        if save:
+            c = load_conf()
+            c['side'] = show
+            save_conf(c)
+
     def set_spec(self, s):
         c = load_conf()
         c['spectrum'] = s
@@ -733,6 +781,8 @@ list { background: transparent; }
             self.set_spec('auto')
         elif k in ('e', 'E'):
             self.eq_sw.set_active(not self.eq_sw.get_active())
+        elif k in ('h', 'H'):
+            self.set_side(not self.right.get_visible())
         else:
             return super().on_key(w, ev)
         return True

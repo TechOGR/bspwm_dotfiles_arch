@@ -5,7 +5,9 @@
 # wspill - the workspace "pill" of the bar, drawn with cairo in many
 # styles (Glassmorphism, Neon Cyberpunk, Minimal Dark, Pixel, Liquid,
 # HUD, Fire, Nature, ... and lib/wsthree.py: Storm, Venom, Butterflies,
-# Snakes, plus the themed icons of every style). Shared by bin/WorkspacePill
+# Snakes, plus the themed icons of every style; lib/wsfour.py: Halloween,
+# Desert, Neo Tokyo, Abyss, Enchanted Forest, Cosmos, Samurai,
+# Steampunk, Glacier, Witchcraft, Golden Dragon, Graffiti). Shared by bin/WorkspacePill
 # (the live widget over polybar) and RiceEditor (the style previews), so
 # a preview is exactly what the bar shows.
 #   focused desktop = pac-man · occupied = ghost · empty = dot
@@ -25,13 +27,11 @@ PI = math.pi
 # id, name, tagline -- 'classic' is polybar's own module (no widget)
 STYLES = [
     ('classic', 'Classic', 'polybar icons, palette colors'),
-    ('glass', 'Glassmorphism', 'modern and clean'),
     ('cyber', 'Neon Cyberpunk', 'futuristic and striking'),
     ('minimal', 'Minimal Dark', 'elegant and discreet'),
     ('pixel', 'Pixel', 'retro and classic'),
     ('liquid', 'Liquid', 'fluid and original'),
     ('hud', 'HUD', 'tech and professional'),
-    ('fire', 'Fire', 'intense and different'),
     ('nature', 'Nature', 'calm and fresh'),
 ]
 STYLE_IDS = [s[0] for s in STYLES]
@@ -1219,10 +1219,9 @@ BAR_SKINS = {'glass': bar_glass, 'cyber': bar_cyber, 'minimal': bar_minimal,
 
 
 # ═════════════════════════════════════════════════ styles, second set
-# Pencil / graphite, Crystal, Lava, Solid neon, Holographic
+# Pencil / graphite, Lava, Solid neon, Holographic
 STYLES += [
     ('sketch', 'Pencil', 'hand drawn in graphite'),
-    ('crystal', 'Crystal', 'frosted glass and light'),
     ('lava', 'Lava', 'cracked rock and fire'),
     ('neon', 'Solid Neon', 'clean neon outline'),
     ('holo', 'Holographic', 'space, orbits and particles'),
@@ -1986,3 +1985,4 @@ BAR_MARGIN = {
 
 # the third set of styles and the themed icons of all of them
 import wsthree  # noqa: E402,F401
+import wsfour  # noqa: E402,F401
