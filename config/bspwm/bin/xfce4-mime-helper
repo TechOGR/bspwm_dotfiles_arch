@@ -1,0 +1,40 @@
+#!/bin/sh
+# =============================================================
+# Author:  TechOGR
+# Repo:    https://github.com/TechOGR/bspwm_dotfiles_arch
+#
+# xfce4-mime-helper - the rice's preferred applications for exo.
+#
+# Since Xfce 4.20, exo (Thunar's "Open Terminal Here", exo-open
+# --launch ...) asks xfce4-mime-helper, a program of xfce4-settings,
+# which the rice doesn't install: Thunar then said no terminal was
+# chosen. This answers it with the rice's own choices:
+#   TerminalEmulator  the terminal picked in the rice (bin/Term)
+#   WebBrowser        the browser of OpenApps
+#   FileManager       the file manager of OpenApps
+# The working directory exo sets is kept (the terminal opens there).
+#
+# Copyright (C) 2021-2026 TechOGR <https://github.com/TechOGR>
+# Licensed under GPL-3.0 license
+# =============================================================
+
+BIN="$HOME/.config/bspwm/bin"
+
+[ "$1" = "--launch" ] || { echo "usage: xfce4-mime-helper --launch TYPE [PARAMETERS...]" >&2; exit 1; }
+type=$2
+shift 2
+
+# started on its own, the helper returns at once (exo waits for it)
+run() { setsid -f "$@" >/dev/null 2>&1 </dev/null; }
+
+case $type in
+    TerminalEmulator)
+        run "$BIN/Term" --exec "$@" ;;
+    WebBrowser)
+        if [ $# -gt 0 ]; then run xdg-open "$@"; else run "$BIN/OpenApps" --browser; fi ;;
+    FileManager)
+        if [ $# -gt 0 ]; then run thunar "$@"; else run "$BIN/OpenApps" --filemanager; fi ;;
+    *)
+        echo "xfce4-mime-helper: $type is not handled by the rice" >&2
+        exit 1 ;;
+esac

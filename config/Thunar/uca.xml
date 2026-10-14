@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<actions>
+<action>
+	<icon>utilities-terminal</icon>
+	<name>Open Terminal Here</name>
+	<submenu></submenu>
+	<unique-id>1790717941977748-1</unique-id>
+	<command>sh -c 'cd &quot;$1&quot; &amp;&amp; exec &quot;$HOME/.config/bspwm/bin/Term&quot; --terminal' _ %f</command>
+	<description>The rice's terminal (bin/Term) in this folder</description>
+	<range></range>
+	<patterns>*</patterns>
+	<startup-notify/>
+	<directories/>
+</action>
+</actions>

@@ -1339,7 +1339,7 @@ def rsync(src, dst, delete=False, keep=(), protect=(), excludes=()):
 
 MANAGED = ['bspwm', 'alacritty', 'cava', 'clipcat', 'dunst', 'geany', 'ghostty', 'gtk-3.0', 'gtk-4.0', 'jgmenu',
            'kitty', 'mpd', 'mpv', 'ncmpcpp', 'nvim', 'paru', 'st', 'yazi', 'zathura', 'zsh', 'sxhkd', 'polybar',
-           'rofi', 'picom']
+           'rofi', 'picom', 'Thunar']
 
 
 def step_backup():

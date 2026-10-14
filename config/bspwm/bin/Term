@@ -68,6 +68,15 @@ Ghostty"
 # Refresh main var (in case it changed)
 read -r MY_TERM < "$CFG_TERM"
 
+# --exec CMD...: the chosen terminal running a command (Thunar / exo:
+# "Open Terminal Here" and any app asking for the terminal emulator).
+# Without a command it opens a shell in the current directory.
+if [ "$1" = "--exec" ]; then
+    shift
+    [ $# -eq 0 ] && exec "$0" --terminal
+    exec "$MY_TERM" -e "$@"
+fi
+
 # Launch the terminal with appropriate options
 case $MY_TERM in
     "alacritty")

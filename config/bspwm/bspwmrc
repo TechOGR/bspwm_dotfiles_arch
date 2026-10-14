@@ -13,6 +13,9 @@
 
 # Set environment variables
 export PATH="$HOME/.config/bspwm/bin:$PATH"
+# apps started by D-Bus (Thunar's daemon...) find the rice's scripts too
+# (bin/xfce4-mime-helper: Thunar's "Open Terminal Here")
+dbus-update-activation-environment --systemd PATH DISPLAY XAUTHORITY >/dev/null 2>&1 &
 export XDG_CURRENT_DESKTOP='bspwm'
 export XCURSOR_THEME="default"	# ~/.icons/default follows the theme (03-gtk.sh)
 unset XCURSOR_SIZE	# Xcursor.size (03-gtk.sh, RiceEditor -> Appearance -> Cursor) sets it
